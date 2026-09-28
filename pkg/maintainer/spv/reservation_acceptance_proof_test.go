@@ -87,28 +87,17 @@ func TestSubmitReservationAcceptanceProof(t *testing.T) {
 		TargetWalletPublicKeyHash: walletPKH,
 	})
 
-	spvChain.submitReservationProofHook = func(
-		proofType uint8,
+	spvChain.submitReservationAcceptanceProofHook = func(
 		txInfo *tbtc.BitcoinTxInfo,
 		txProof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
 		rk *big.Int,
 		rn uint64,
 	) error {
-		if proofType != ProofTypeReservationAcceptance {
-			t.Errorf("unexpected proof type: got %d, want %d", proofType, ProofTypeReservationAcceptance)
-		}
 		if rk == nil || rk.Cmp(reservationKey) != 0 {
 			t.Errorf("unexpected reservation key: got %v, want %v", rk, reservationKey)
 		}
 		if rn != requestNonce {
 			t.Errorf("unexpected request nonce: got %d, want %d", rn, requestNonce)
-		}
-		if mainUtxo == nil {
-			t.Fatal("mainUtxo must not be nil")
-		}
-		if mainUtxo.TxOutputValue != 600000 {
-			t.Errorf("unexpected UTXO value: got %d, want %d", mainUtxo.TxOutputValue, 600000)
 		}
 		if txInfo == nil {
 			t.Fatal("txInfo must not be nil")

@@ -2,11 +2,14 @@ package spv
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
-	"math/big"
-	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -19,8 +22,15 @@ var reservationWiringLogger = log.Logger("keep-maintainer-spv-reservations")
 // by the stale-deposit watcher fallback loop. The Bridge does not expose a
 // live subscription for DepositRevealed in m1, so the wiring layer falls back
 // to PastDepositRevealedEvents on a coarse interval and dispatches each new
-// reveal to the watcher. The interval mirrors the action-timeout poll
-// cadence so a single tick covers both reservation timers.
+// reveal to the watcher.
+//
+// This value is chosen and tuned independently of
+// DefaultReservationActionTimeoutPollInterval below: the two watchers have
+// different load profiles (this one scans a user-driven, rate-limited event
+// stream; the action-timeout watcher re-reads a state-driven, potentially
+// bursty tracked-action set) and sharing one process-wide cadence is a
+// coincidence of today's values, not an invariant either watcher depends on.
+// Changing one does not require changing the other.
 const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 
 // DefaultReservationActionTimeoutPollInterval is the default, fixed poll
@@ -28,16 +38,48 @@ const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 // loop WireReservationWatchers starts and the only way the watcher is
 // driven in production. It is intentionally conservative (1 minute) to
 // limit the Bridge load from the per-tracked-action GetReservationAction
-// reads Run issues on every tick.
+// reads Run issues on every tick. Tuned independently of
+// DefaultReservationStaleDepositPollInterval above; see that constant's
+// doc comment for why the two are not coupled.
 const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
 
-// reservationStrandingStartupScanLookBackBlocks bounds the stranding
-// watcher's startup catch-up scan of past wallet registrations. 30 days at
-// 12s/block, mirroring the convention used across this package. Wallets
-// registered further back than this bound are not covered by the startup
-// scan; the live OnWalletClosed subscription plus the existing per-wallet
-// close re-check are relied on to eventually catch them.
-const reservationStrandingStartupScanLookBackBlocks = uint64(216000)
+// reservationActionTimeoutPollInterval is the poll interval
+// WireReservationWatchers passes to the action-timeout watcher's Run
+// loop. It defaults to DefaultReservationActionTimeoutPollInterval;
+// declared as a var, rather than referencing that constant directly at
+// the call site, solely so tests in this package can shrink it to
+// exercise the watcher's periodic re-poll - in particular the deferred
+// stranding recheck drained at the top of every pollPendingActions
+// tick (see ReservationActionTimeoutWatcher.strandingRecheckWallets) -
+// without waiting on the real one-minute interval.
+var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollInterval
+
+// reservationDefaultLookBackBlocks bounds every reservation watcher's
+// startup/first-pass catch-up scan window: 30 days at 12s/block. It is
+// the single source of truth for this bound, replacing what were
+// previously 4+ independently-defined constants (this file's own
+// reservationStrandingStartupScanLookBackBlocks and
+// reservationStaleDepositLookBackBlocks,
+// reservation_action_timeout_watch.go's
+// reservationActionTimeoutLookBackBlocks, and
+// reservation_proof_loop.go's reservationProofLookBackBlocks) all
+// independently set to the identical literal value with near-duplicate
+// doc comments. Every former duplicate, including the two thin aliases
+// that used to remain solely for test-file references
+// (reservationProofLookBackBlocks and
+// reservation_stale_deposit_watch.go's
+// staleDepositRevealScanLookBackBlocks), now references this constant
+// directly.
+const reservationDefaultLookBackBlocks = uint64(216000)
+
+// reservationStrandingStartupScanRetryDelay bounds how long the startup
+// catch-up scan's second-chance retry pass (see
+// retryReservationStrandingStartupScan) waits before re-attempting wallets
+// whose GetWallet call failed on every one of the first 3 attempts. It runs
+// once, after WireReservationWatchers has already returned, giving a
+// transient RPC hiccup time to clear without blocking client/maintainer
+// startup on it.
+const reservationStrandingStartupScanRetryDelay = 30 * time.Second
 
 // WalletClosedChain defines the chain interface required to subscribe to
 // wallet close events.
@@ -45,22 +87,100 @@ type WalletClosedChain interface {
 	OnWalletClosed(
 		handler func(event *tbtc.WalletClosedEvent),
 	) subscription.EventSubscription
+
+	// Signing exposes the operator's own chain signing identity. It lets
+	// WireReservationWatchers derive a deterministic per-operator delay
+	// offset (see reservationOperatorStaggerOffset) so that many
+	// reservation-enabled operators independently discovering the same
+	// overdue reservation/action/deposit do not all submit their first
+	// permissionless notify attempt in the same poll tick and collide
+	// on-chain - only one transaction per round can succeed; every
+	// other operator's simultaneous attempt reverts and burns gas for
+	// no benefit.
+	Signing() chain.Signing
 }
 
-// WireReservationWatchers is the integration entry point that cmd/start.go
-// calls directly when config.Reservations.LeaderDutiesEnabled is true. It constructs
-// the three reservation watchers (stranding, stale-deposit, action-timeout),
-// wires their Bridge-facing notifiers to the chain, and subscribes/starts
-// each watcher against its source.
+// reservationOperatorStaggerOffset derives a deterministic, per-operator
+// delay offset for uniqueKey, reduced modulo interval. It exists so that
+// when many reservation-enabled operators independently discover the
+// same overdue, not-yet-notified reservation/action/deposit at
+// essentially the same time, their FIRST permissionless notify attempts
+// do not all land in the same poll tick and collide on-chain - only one
+// operator's transaction can succeed per round; every other operator's
+// simultaneous attempt reverts and burns gas for no benefit. The offset
+// is derived from keccak256(operatorAddress || uniqueKey), so it is
+// stable across ticks and process restarts for the same operator/key
+// pair and is spread deterministically across [0, interval) over the
+// operator set. Callers apply it only to a generation's/deposit's FIRST
+// notify attempt; retries continue to use whatever renotify-interval
+// backoff the caller already has (see actionTimeoutRenotifyInterval and
+// its reuse in reservation_stale_deposit_watch.go's
+// CheckStaleReservedDeposit). A non-positive interval disables
+// staggering (returns zero).
+func reservationOperatorStaggerOffset(
+	operatorAddress common.Address,
+	uniqueKey string,
+	interval time.Duration,
+) uint32 {
+	intervalSeconds := uint64(interval / time.Second)
+	if intervalSeconds == 0 {
+		return 0
+	}
+
+	hash := crypto.Keccak256(append(operatorAddress.Bytes(), []byte(uniqueKey)...))
+	return uint32(binary.BigEndian.Uint64(hash[:8]) % intervalSeconds)
+}
+
+// WireReservationWatchers is the reservation watcher integration entry
+// point: it constructs the three reservation watchers (stranding,
+// stale-deposit, action-timeout), wires their Bridge-facing notifiers to
+// the chain, and subscribes/starts each watcher against its source. The
+// three watchers are mandatory, permissionless, network-wide duties, not
+// leader-election duties: every process capable of driving them - both
+// cmd/start.go's client process and this package's own spv.Initialize -
+// calls this once at startup, each gated on its own reservation-enabling
+// flag (Tbtc.ReservationsEnabled for cmd/start.go,
+// Maintainer.Spv.ReservationProofsEnabled for spv.Initialize).
+// Running it from both when both processes happen to share one
+// deployment is redundant but harmless: a Notify* call against an
+// already-notified or already-settled reservation is a no-op on the
+// Bridge.
 //
 // `walletClosedChain` supplies the OnWalletClosed event subscription;
 // `spvChain` supplies the reservation data reads, event queries, and
 // Notify* writes. `ctx` controls the goroutine lifetimes started by the
 // wiring function.
+//
+// `pairedFlagEnabled` reports whether the caller could reliably confirm
+// that the counterpart process's own reservation-enabling flag is also
+// enabled. Pass true when the caller has no reliable visibility into that
+// flag (e.g. spv.Initialize, which has no access to the client's
+// Tbtc.ReservationsEnabled flag) to skip the misconfiguration self-check below;
+// pass the caller's best-effort read otherwise (e.g. cmd/start.go, which
+// can read Maintainer.Spv.ReservationProofsEnabled even though the
+// start command doesn't require that config category - see its call site
+// for why that reading, alone, is only ever a warning signal).
+//
+// Self-check: once wiring completes, if pairedFlagEnabled is false AND all
+// three watchers' initial scans DEFINITIVELY SUCCEEDED AND found zero
+// reservation activity on-chain (no wallet registrations, no reserved
+// deposits, no pending reservation actions), an asynchronous goroutine
+// logs the misconfiguration prominently at Errorf severity once every
+// initial scan result has arrived - it does not return an error from
+// WireReservationWatchers and does not terminate the process. If any
+// scan encounters an error (making its zero result unreliable), the
+// self-check is skipped entirely - only warning logs are emitted. Either
+// signal alone is too weak to act on - a false paired-flag reading can be
+// a legitimate split deployment (see cmd/start.go), and zero activity
+// alone can be a genuinely quiet, freshly activated network - but
+// together they are a strong indicator that this process is misconfigured
+// (wrong flags, wrong network, or wrong contract address) rather than
+// simply idle.
 func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
 	spvChain Chain,
+	pairedFlagEnabled bool,
 ) error {
 	if walletClosedChain == nil {
 		return fmt.Errorf("wallet closed chain must not be nil")
@@ -69,8 +189,16 @@ func WireReservationWatchers(
 		return fmt.Errorf("spv chain must not be nil")
 	}
 
+	// operatorAddress identifies this process for
+	// reservationOperatorStaggerOffset (see WalletClosedChain.Signing's
+	// doc). walletClosedChain (not spvChain) supplies it because every
+	// production Chain implementation that satisfies WalletClosedChain
+	// is the same handle already used to submit transactions, so its
+	// own Signing().Address() is the operator's own address.
+	operatorAddress := common.HexToAddress(walletClosedChain.Signing().Address().String())
+
 	reservationWiringLogger.Infof(
-		"wiring reservation watchers; ensure Maintainer.Spv.Reservations.LeaderDutiesEnabled " +
+		"wiring reservation watchers; ensure Maintainer.Spv.ReservationProofsEnabled " +
 			"is also enabled in the SPV maintainer config for end-to-end operation",
 	)
 
@@ -80,10 +208,14 @@ func WireReservationWatchers(
 	// maintainer was down would otherwise never notify, since the live
 	// OnWalletClosed subscription only sees events from this point forward.
 	// We scan past wallet registrations bounded by
-	// reservationStrandingStartupScanLookBackBlocks and check the ones
-	// already Closed/Terminated now; older wallets are left to the live
-	// subscription plus the existing per-wallet close re-check. Transient
-	// per-wallet errors log warnings rather than failing client startup.
+	// reservationDefaultLookBackBlocks and check the ones already
+	// Closed/Terminated now. This is an accepted operational
+	// limitation, not a gap covered elsewhere: a wallet that closed or
+	// was terminated more than this bound before the process started
+	// has no path to stranding notification (see the warning logged
+	// below when the bound actually truncates the scan window).
+	// Transient per-wallet errors log warnings rather than failing
+	// client startup.
 	strandingStartupStartBlock := uint64(0)
 	if blockCounter, bcErr := spvChain.BlockCounter(); bcErr != nil {
 		reservationWiringLogger.Warnf(
@@ -97,8 +229,18 @@ func WireReservationWatchers(
 				"scanning full history: [%v]",
 			cbErr,
 		)
-	} else if currentBlock > reservationStrandingStartupScanLookBackBlocks {
-		strandingStartupStartBlock = currentBlock - reservationStrandingStartupScanLookBackBlocks
+	} else if currentBlock > reservationDefaultLookBackBlocks {
+		strandingStartupStartBlock = currentBlock - reservationDefaultLookBackBlocks
+		reservationWiringLogger.Warnf(
+			"stranding startup scan is bounded to wallets registered at "+
+				"block [%d] or later; a wallet registered and already "+
+				"closed/terminated before that block will not be caught "+
+				"by this scan, nor by the live OnWalletClosed "+
+				"subscription, which cannot replay an already-emitted "+
+				"close event - this is an accepted operational "+
+				"limitation, not a gap covered elsewhere",
+			strandingStartupStartBlock,
+		)
 	}
 
 	registeredEvents, err := spvChain.PastNewWalletRegisteredEvents(
@@ -109,11 +251,24 @@ func WireReservationWatchers(
 			"stranding startup scan failed to fetch wallet registration events: [%v]",
 			err,
 		)
-	} else {
+	}
+
+	// unresolvedWallets collects wallets whose GetWallet call failed on
+	// every one of the 3 startup-scan attempts below. They are retried
+	// once more, after a short delay, by retryReservationStrandingStartupScan
+	// once the rest of the wiring has completed, instead of being assumed
+	// Live and silently skipped: a wallet that is actually
+	// Closed/Terminated would otherwise have all of its reservations
+	// permanently omitted from stranding notification, since the live
+	// OnWalletClosed subscription cannot replay an already-emitted close
+	// event.
+	var unresolvedWallets [][20]byte
+
+	if err == nil {
 		for _, event := range registeredEvents {
 			var wallet *tbtc.WalletChainData
 			var walletErr error
-			for attempt := 0; attempt < 3; attempt++ {
+			for attempt := range 3 {
 				wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
 				if walletErr == nil {
 					break
@@ -128,12 +283,13 @@ func WireReservationWatchers(
 			if walletErr != nil {
 				reservationWiringLogger.Warnf(
 					"stranding startup scan giving up on wallet [0x%x] after "+
-						"3 fetch attempts; assuming Live so the wallet is "+
-						"skipped here and left to the live OnWalletClosed "+
-						"subscription: [%v]",
+						"3 fetch attempts; queuing it for a second-chance "+
+						"retry pass once wiring completes instead of "+
+						"assuming it is Live: [%v]",
 					event.WalletPublicKeyHash,
 					walletErr,
 				)
+				unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
 				continue
 			}
 			if wallet.State != tbtc.StateClosed &&
@@ -141,7 +297,7 @@ func WireReservationWatchers(
 				continue
 			}
 			var checkErr error
-			for attempt := 0; attempt < 3; attempt++ {
+			for attempt := range 3 {
 				checkErr = strandingWatcher.checkReservationStrandingForWallet(
 					event.WalletPublicKeyHash,
 				)
@@ -169,11 +325,18 @@ func WireReservationWatchers(
 		}
 	}
 
-	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain)
+	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain, operatorAddress)
 
+	// Pass the stranding watcher so a successful Reanchor timeout
+	// submission schedules the custodying wallet for a stranding
+	// recheck on the next poll tick. The notification is only
+	// submitted at that point, so the deferred read may still observe
+	// pre-mining state.
 	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
 		spvChain,
-		DefaultReservationActionTimeoutPollInterval,
+		reservationActionTimeoutPollInterval,
+		operatorAddress,
+		strandingWatcher,
 	)
 
 	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)
@@ -181,17 +344,268 @@ func WireReservationWatchers(
 		<-ctx.Done()
 		subscription.Unsubscribe()
 	}()
-	startStaleDepositPoll(ctx, spvChain, staleDepositWatcher)
+
+	if len(unresolvedWallets) > 0 {
+		go retryReservationStrandingStartupScan(
+			ctx,
+			spvChain,
+			strandingWatcher,
+			unresolvedWallets,
+			reservationStrandingStartupScanRetryDelay,
+		)
+	}
+
+	// scanResult carries one watcher's initial-pass tri-state signal
+	// (count found, and whether the scan that produced it definitively
+	// succeeded) to the self-check goroutine below. A scan that errored
+	// makes its zero-count result unreliable, so scanOK lets the
+	// self-check distinguish "definitely no activity" from "the scan
+	// itself failed and we don't actually know".
+	resultCh := make(chan scanResult, 3)
+
+	// Registration scan result: registrationScanOK reflects whether the
+	// PastNewWalletRegisteredEvents call above (err) succeeded. A nil
+	// err with zero events means "definitely no registrations"; a
+	// non-nil err means the zero-length registeredEvents slice is not a
+	// reliable activity signal (see the self-check goroutine below).
+	registrationScanOK := err == nil
+	resultCh <- scanResult{
+		name:   "registration",
+		count:  len(registeredEvents),
+		scanOK: registrationScanOK,
+	}
+
+	// Start the stale-deposit watcher's background poll loop. The
+	// initial pollTick runs first, inside this same goroutine, so
+	// WireReservationWatchers does not block on it and so it cannot
+	// race with Run's own ticker-driven polls (Run's first tick only
+	// fires after a full poll interval has elapsed). Its tri-state
+	// result is published to resultCh for the self-check goroutine
+	// below.
 	go func() {
-		if err := actionTimeoutWatcher.Run(ctx); err != nil {
+		result := scanResult{name: "stale-deposit"}
+		resultSent := false
+		defer func() {
+			if r := recover(); r != nil {
+				reservationWiringLogger.Errorf(
+					"reservation stale-deposit watcher crashed and is "+
+						"no longer running (recovered panic: [%v]); "+
+						"stale reserved deposit notifications are silently "+
+						"unmonitored until process restart",
+					r,
+				)
+			}
+			if !resultSent {
+				resultCh <- result
+			}
+		}()
+
+		initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
+		result = scanResult{
+			name:   "stale-deposit",
+			count:  initialCount,
+			scanOK: initialOK,
+		}
+		resultCh <- result
+		resultSent = true
+
+		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
+			// Run only returns non-nil on the interval misconfiguration
+			// guard at loop start (per-tick errors are logged and the loop
+			// continues), so reaching this branch means the watcher is
+			// not running at all. Log at distinct severity rather than
+			// Fatalf-ing: WireReservationWatchers is called from two
+			// callers (cmd/start.go's client process AND spv.go's maintainer
+			// process), and the caller decides process-level fatality, not
+			// this shared helper.
 			reservationWiringLogger.Errorf(
-				"failed to run reservation action-timeout watcher: [%v]",
+				"reservation stale-deposit watcher is not running: [%v]; "+
+					"stale reserved deposit notifications are silently "+
+					"unmonitored until process restart",
 				err,
 			)
 		}
 	}()
 
+	// Start the action-timeout watcher's background poll loop, using
+	// the same-goroutine initial-pass ordering rationale as the
+	// stale-deposit watcher's goroutine above.
+	go func() {
+		result := scanResult{name: "action-timeout"}
+		resultSent := false
+		defer func() {
+			if r := recover(); r != nil {
+				reservationWiringLogger.Errorf(
+					"reservation action-timeout watcher crashed and is "+
+						"no longer running (recovered panic: [%v]); "+
+						"reservation action timeouts are silently "+
+						"unmonitored until process restart",
+					r,
+				)
+			}
+			if !resultSent {
+				resultCh <- result
+			}
+		}()
+
+		initialErr := actionTimeoutWatcher.pollPendingActions()
+		if initialErr != nil {
+			reservationWiringLogger.Errorf(
+				"action-timeout watcher initial poll failed: [%v]",
+				initialErr,
+			)
+		}
+		result = scanResult{
+			name:   "action-timeout",
+			count:  len(actionTimeoutWatcher.pendingActions),
+			scanOK: initialErr == nil,
+		}
+		resultCh <- result
+		resultSent = true
+
+		if err := actionTimeoutWatcher.Run(ctx); err != nil {
+			// See the identical rationale on the stale-deposit watcher
+			// launch above.
+			reservationWiringLogger.Errorf(
+				"reservation action-timeout watcher is not running: [%v]; "+
+					"reservation action timeouts are silently unmonitored "+
+					"until process restart",
+				err,
+			)
+		}
+	}()
+
+	// The misconfiguration self-check (see the doc comment above) can no
+	// longer run synchronously now that the other two watchers' initial
+	// passes have moved into their background goroutines (see above):
+	// WireReservationWatchers must return before either of those passes
+	// has necessarily completed. This goroutine waits for all three
+	// tri-state results to arrive on resultCh, then evaluates the same
+	// condition the old synchronous check used, requiring every scan to
+	// have definitively succeeded before treating a zero count as a
+	// genuine activity signal. A confirmed misconfiguration is logged
+	// prominently at Errorf severity rather than treated as fatal: the
+	// caller decides process-level fatality (see the stale-deposit and
+	// action-timeout watcher launch goroutines above for the identical
+	// rationale), and a correctly-configured node on a quiet, freshly
+	// launched network can legitimately hit this same zero-activity
+	// condition, so this self-check must never exit the process.
+	go func() {
+		var regResult, sdResult, atResult scanResult
+		for range 3 {
+			r := <-resultCh
+			switch r.name {
+			case "registration":
+				regResult = r
+			case "stale-deposit":
+				sdResult = r
+			case "action-timeout":
+				atResult = r
+			}
+		}
+
+		if reservationSelfCheckMisconfigured(pairedFlagEnabled, regResult, sdResult, atResult) {
+			reservationWiringLogger.Errorf(
+				"reservation watchers wired but found zero reservation " +
+					"activity on-chain (no wallet registrations, no reserved " +
+					"deposits, no pending reservation actions) while the " +
+					"paired process's reservation-enabling flag could not be " +
+					"confirmed enabled; verify both " +
+					"Tbtc.ReservationsEnabled and " +
+					"Maintainer.Spv.ReservationProofsEnabled are " +
+					"enabled together and that this process is connected to " +
+					"the intended network and contract addresses",
+			)
+		}
+	}()
+
 	return nil
+}
+
+// scanResult carries one reservation watcher's initial-pass tri-state
+// signal: the activity count it found, and whether the scan that
+// produced that count definitively succeeded. A scan that errored
+// makes its zero-count result unreliable, so scanOK lets
+// reservationSelfCheckMisconfigured distinguish "definitely no
+// activity" from "the scan itself failed and we don't actually know".
+type scanResult struct {
+	name   string
+	count  int
+	scanOK bool
+}
+
+// reservationSelfCheckMisconfigured evaluates the misconfiguration
+// self-check condition described in WireReservationWatchers's doc
+// comment, given the three watchers' initial-pass tri-state results.
+// It is factored out as a pure function - rather than inlined in the
+// goroutine that calls it - so the decision logic is unit-testable in
+// isolation, independent of the goroutine's Errorf logging side effect.
+//
+// The check requires ALL THREE scans to have definitively succeeded
+// (scanOK) before a zero count is trusted as a genuine activity
+// signal; if any scan's own success is uncertain, the function
+// reports no misconfiguration regardless of the counts, deferring to
+// each scan's own per-tick warning logs.
+func reservationSelfCheckMisconfigured(
+	pairedFlagEnabled bool,
+	registration, staleDeposit, actionTimeout scanResult,
+) bool {
+	return !pairedFlagEnabled &&
+		registration.scanOK && staleDeposit.scanOK && actionTimeout.scanOK &&
+		registration.count == 0 && staleDeposit.count == 0 && actionTimeout.count == 0
+}
+
+// retryReservationStrandingStartupScan gives the startup catch-up scan's
+// unresolved wallets (see WireReservationWatchers) one more chance, after
+// waiting out delay, once the rest of the wiring has already completed.
+// delay is a parameter (rather than reading reservationStrandingStartupScanRetryDelay
+// directly) so tests can exercise this function without waiting on a real
+// timer.
+func retryReservationStrandingStartupScan(
+	ctx context.Context,
+	spvChain Chain,
+	strandingWatcher *reservationStrandingWatcher,
+	walletPublicKeyHashes [][20]byte,
+	delay time.Duration,
+) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+
+	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		wallet, err := spvChain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			reservationWiringLogger.Errorf(
+				"stranding startup scan second-chance retry still failed "+
+					"to fetch wallet [0x%x]; its stranded reservations, "+
+					"if any, will not be notified by the startup scan: [%v]",
+				walletPublicKeyHash,
+				err,
+			)
+			continue
+		}
+		if wallet.State != tbtc.StateClosed && wallet.State != tbtc.StateTerminated {
+			continue
+		}
+		if err := strandingWatcher.checkReservationStrandingForWallet(
+			walletPublicKeyHash,
+		); err != nil {
+			reservationWiringLogger.Errorf(
+				"stranding startup scan second-chance retry failed to "+
+					"check wallet [0x%x]: [%v]",
+				walletPublicKeyHash,
+				err,
+			)
+		}
+	}
 }
 
 // subscribeReservationWalletClosed registers the stranding watcher against
@@ -270,159 +684,4 @@ func resolveWalletPublicKeyHash(
 	// A wallet ID is registered at most once; take the latest match
 	// defensively in case of a duplicate log delivery.
 	return events[len(events)-1].WalletPublicKeyHash, nil
-}
-
-// reservationStaleDepositLookBackBlocks bounds the first stale-deposit poll
-// tick's DepositRevealed scan. 30 days at 12s/block, mirroring
-// ReservationAcceptanceLookBackBlocks in pkg/tbtcpg. Subsequent ticks scan
-// incrementally from the previous tick's block, so this bound only matters
-// once, at startup.
-const reservationStaleDepositLookBackBlocks = uint64(216000)
-
-// startStaleDepositPoll runs the stale-deposit watcher's live source as a
-// polling loop over PastDepositRevealedEvents: the Bridge does not expose a
-// live subscription for DepositRevealed in m1. Each tick fetches reveals
-// since the previously scanned block, adds every reserved deposit among
-// them to a tracked pending set, then re-runs CheckStaleReservedDeposit for
-// every deposit already in the set. A deposit is dropped from the set once
-// it is no longer reserved (released to the default sweep path, or swept)
-// or its acceptance action has advanced past pending - both mean it can
-// never go stale again, so re-checking it forever would be wasted RPCs. A
-// deposit whose wallet has gone Live is kept in the set instead of
-// dropped: the wallet may still transition away from Live (e.g.
-// MovingFunds/Closing/Terminated) before anchoring, and the scan cursor
-// only ever advances, so a dropped deposit could never re-enter tracking.
-//
-// The poller is intentionally tolerant of chain errors: a transient RPC
-// failure logs and continues rather than aborting the wiring.
-func startStaleDepositPoll(
-	ctx context.Context,
-	spvChain Chain,
-	watcher *ReservationStaleDepositWatcher,
-) {
-	go func() {
-		ticker := time.NewTicker(DefaultReservationStaleDepositPollInterval)
-		defer ticker.Stop()
-
-		var lastSeenBlock uint64
-		pending := make(map[string]*big.Int)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-
-			blockCounter, err := spvChain.BlockCounter()
-			if err != nil {
-				reservationWiringLogger.Errorf(
-					"stale-deposit poll failed to get block counter: [%v]",
-					err,
-				)
-				continue
-			}
-			currentBlock, err := blockCounter.CurrentBlock()
-			if err != nil {
-				reservationWiringLogger.Errorf(
-					"stale-deposit poll failed to get current block: [%v]",
-					err,
-				)
-				continue
-			}
-
-			startBlock := lastSeenBlock
-			if startBlock == 0 && currentBlock > reservationStaleDepositLookBackBlocks {
-				startBlock = currentBlock - reservationStaleDepositLookBackBlocks
-			}
-
-			events, err := spvChain.PastDepositRevealedEvents(
-				&tbtc.DepositRevealedEventFilter{
-					StartBlock: startBlock + 1,
-					EndBlock:   &currentBlock,
-				},
-			)
-			if err != nil {
-				reservationWiringLogger.Errorf(
-					"stale-deposit poll failed to fetch deposit revealed "+
-						"events: [%v]",
-					err,
-				)
-				continue
-			}
-
-			params, err := spvChain.ReservationParameters()
-			if err != nil {
-				reservationWiringLogger.Errorf(
-					"stale-deposit poll failed to fetch reservation "+
-						"parameters: [%v]",
-					err,
-				)
-				continue
-			}
-
-			for _, event := range events {
-				if event.Vault == nil || !strings.EqualFold(string(*event.Vault), string(params.ReservationVault)) {
-					continue
-				}
-
-				depositKey := spvChain.BuildDepositKey(
-					event.FundingTxHash,
-					event.FundingOutputIndex,
-				)
-
-				isReserved, err := spvChain.IsReservedDeposit(depositKey)
-				if err != nil {
-					reservationWiringLogger.Errorf(
-						"stale-deposit poll failed to check if deposit "+
-							"[%v] is reserved: [%v]",
-						depositKey,
-						err,
-					)
-					// Track it for retry instead of dropping it: this
-					// window's event won't be re-fetched once
-					// lastSeenBlock advances below, so silently skipping
-					// here would permanently orphan the deposit on one
-					// transient RPC flake. CheckStaleReservedDeposit
-					// performs its own independent IsReservedDeposit
-					// re-check on every tick (see
-					// reservation_stale_deposit_watch.go) and resolves to
-					// Drop if the deposit genuinely isn't reserved, so
-					// tracking it speculatively here is safe.
-					pending[depositKey.String()] = depositKey
-					continue
-				}
-				if !isReserved {
-					continue
-				}
-
-				pending[depositKey.String()] = depositKey
-			}
-
-			lastSeenBlock = currentBlock
-			now := uint32(time.Now().Unix())
-
-			for key, depositKey := range pending {
-				resolution, err := watcher.CheckStaleReservedDeposit(
-					depositKey,
-					now,
-				)
-				if err != nil {
-					reservationWiringLogger.Errorf(
-						"stale-deposit poll failed to check deposit "+
-							"[%v]: [%v]",
-						depositKey,
-						err,
-					)
-					continue
-				}
-
-				if resolution == StaleDepositResolutionDrop ||
-					resolution == StaleDepositResolutionNotified {
-					delete(pending, key)
-					watcher.forgetDeposit(depositKey)
-				}
-			}
-		}
-	}()
 }

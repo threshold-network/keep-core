@@ -46,12 +46,10 @@ HistoryDepth = 25000
 TransactionLimit = 80
 RestartBackoffTime = "2h"
 IdleBackoffTime = "15m"
+ReservationProofsEnabled = true
 
-[maintainer.Spv.Reservations]
-LeaderDutiesEnabled = true
-
-[tbtc.reservations]
-LeaderDutiesEnabled = true
+[tbtc]
+ReservationsEnabled = true
 
 [developer]
 RandomBeaconAddress = "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb"

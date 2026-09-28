@@ -51,15 +51,11 @@
             "TransactionLimit": 80,
             "RestartBackoffTime": "2h",
             "IdleBackoffTime": "15m",
-            "Reservations": {
-                "LeaderDutiesEnabled": true
-            }
+            "ReservationProofsEnabled": true
         }
     },
     "Tbtc": {
-        "Reservations": {
-            "LeaderDutiesEnabled": true
-        }
+        "ReservationsEnabled": true
     },
 
     "Developer": {

@@ -252,36 +252,6 @@ func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 			}),
 			expectedError: "cannot unmarshal proposal payload: [invalid re-anchor transaction fee byte length: [9]]",
 		},
-		"anchor zero fee marshaled through Marshal is rejected as missing": {
-			actionType: ActionReservationAnchor,
-			payload: marshalThroughProposal(t, &ReservationAnchorProposal{
-				DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02},
-				DepositFundingOutputIndex: 3,
-				RequestNonce:              1,
-				AnchorTxFee:               big.NewInt(0),
-			}),
-			expectedError: "cannot unmarshal proposal payload: [anchor transaction fee is required]",
-		},
-		"re-anchor zero reservation key marshaled through Marshal is rejected as missing": {
-			actionType: ActionReservationReanchor,
-			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
-				ReservationKey:            big.NewInt(0),
-				RequestNonce:              3,
-				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
-				ReanchorTxFee:             big.NewInt(1700),
-			}),
-			expectedError: "cannot unmarshal proposal payload: [reservation key is required]",
-		},
-		"re-anchor zero fee marshaled through Marshal is rejected as missing": {
-			actionType: ActionReservationReanchor,
-			payload: marshalThroughProposal(t, &ReservationReanchorProposal{
-				ReservationKey:            big.NewInt(54321),
-				RequestNonce:              3,
-				TargetWalletPublicKeyHash: [20]byte{0xaa, 0xbb},
-				ReanchorTxFee:             big.NewInt(0),
-			}),
-			expectedError: "cannot unmarshal proposal payload: [re-anchor transaction fee is required]",
-		},
 		"re-anchor zero-value target wallet hash": {
 			actionType: ActionReservationReanchor,
 			payload: marshalPb(&pb.ReservationReanchorProposal{
@@ -303,6 +273,64 @@ func TestReservationProposals_UnmarshalRejectsInvalidPayloads(t *testing.T) {
 			if err == nil || err.Error() != test.expectedError {
 				t.Errorf(
 					"unexpected error\nexpected: [%v]\nactual:   [%v]",
+					test.expectedError,
+					err,
+				)
+			}
+		})
+	}
+}
+
+// TestReservationProposals_MarshalRejectsZeroValues asserts that the
+// tightened Marshal validation rejects zero-value fees and reservation
+// keys directly, before any bytes are ever produced - closing the
+// producer-side gap where a zero-fee/zero-key proposal previously marshaled
+// successfully and was only rejected by every follower downstream.
+// (The UnmarshalRejects* tests above cannot cover this because the shared
+// marshalThroughProposal helper Fatalf's on any Marshal error.)
+func TestReservationProposals_MarshalRejectsZeroValues(t *testing.T) {
+	validHash := bitcoin.Hash{0x01, 0x02}
+	validWalletHash := [20]byte{0xaa, 0xbb}
+
+	tests := map[string]struct {
+		proposal      CoordinationProposal
+		expectedError string
+	}{
+		"anchor zero fee rejected by Marshal": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash:      validHash,
+				DepositFundingOutputIndex: 3,
+				RequestNonce:              1,
+				AnchorTxFee:               big.NewInt(0),
+			},
+			expectedError: "anchor transaction fee must be positive",
+		},
+		"re-anchor zero reservation key rejected by Marshal": {
+			proposal: &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(0),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: validWalletHash,
+				ReanchorTxFee:             big.NewInt(1700),
+			},
+			expectedError: "reservation key is required",
+		},
+		"re-anchor zero fee rejected by Marshal": {
+			proposal: &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(54321),
+				RequestNonce:              3,
+				TargetWalletPublicKeyHash: validWalletHash,
+				ReanchorTxFee:             big.NewInt(0),
+			},
+			expectedError: "re-anchor transaction fee must be positive",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			_, err := test.proposal.Marshal()
+			if err == nil || err.Error() != test.expectedError {
+				t.Errorf(
+					"unexpected Marshal error\nexpected: [%v]\nactual:   [%v]",
 					test.expectedError,
 					err,
 				)

@@ -157,11 +157,19 @@ type Config struct {
 	// TransactionMonitor controls confirmation polling and stuck-transaction
 	// alerts. Omitted settings retain the default monitoring policy.
 	TransactionMonitor TransactionMonitorConfig
-	// Reservations holds reservation-related config for the start process.
-	// See ReservationsConfig for field details. Operators running both the
-	// start and maintainer commands must also enable
-	// [Maintainer.Spv.Reservations] for end-to-end reservation operation.
-	Reservations ReservationsConfig
+	// ReservationsEnabled toggles reservation acceptance / re-anchor
+	// proposal generation, reservation watcher wiring, and reservation
+	// metrics registration in the start process only. It does NOT gate
+	// reservation action execution: once a network's reservation
+	// activation block is reached, every wallet signer validates,
+	// co-signs, and broadcasts reservation proposals regardless of this
+	// flag - execution dispatch gates only on wallet-signer membership,
+	// by design. Defaults to false so existing deployments opt in
+	// explicitly. Operators running both the start and maintainer
+	// commands must also enable [Maintainer.Spv.ReservationProofsEnabled]
+	// for end-to-end reservation operation (SPV proof submission is a
+	// separate concern, gated by its own flag on the maintainer's config).
+	ReservationsEnabled bool
 }
 
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
@@ -177,22 +185,6 @@ func applyWalletTxFeePolicy(config Config) {
 	}
 }
 
-// ReservationsConfig controls reservation-related behavior. The start and
-// maintainer processes load independent configuration categories; operators
-// running both must enable [Tbtc.Reservations] for proposal generation and
-// watchers, and [Maintainer.Spv.Reservations] for SPV proof submission.
-type ReservationsConfig struct {
-	// LeaderDutiesEnabled toggles reservation acceptance / re-anchor proposal
-	// generation, reservation watcher wiring, and reservation metrics
-	// registration only. It does NOT gate reservation action execution:
-	// once a network's reservation activation block is reached, every
-	// wallet signer validates, co-signs, and broadcasts reservation
-	// proposals regardless of this flag - execution dispatch gates only
-	// on wallet-signer membership, by design. Defaults to false so
-	// existing deployments opt in explicitly.
-	LeaderDutiesEnabled bool
-}
-
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
@@ -201,7 +193,7 @@ type ReservationsConfig struct {
 // see pkg/maintainer/spv.WireReservationWatchers) is not performed here:
 // it lives in cmd/start.go, called directly against the same tbtc.Chain
 // handle once Initialize returns successfully and gated on the same
-// config.Reservations.LeaderDutiesEnabled flag. Threading it through
+// config.ReservationsEnabled flag. Threading it through
 // Initialize via a callback type would only exist to dodge a tbtc -> spv
 // import cycle that cmd/start.go (which already imports both packages)
 // does not have.
@@ -284,7 +276,7 @@ func Initialize(
 			perfMetrics = clientinfo.NewPerformanceMetrics(
 				ctx,
 				clientInfo,
-				config.Reservations.LeaderDutiesEnabled,
+				config.ReservationsEnabled,
 			)
 		}
 		node.setPerformanceMetrics(perfMetrics)

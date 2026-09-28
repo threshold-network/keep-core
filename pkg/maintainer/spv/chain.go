@@ -86,28 +86,30 @@ type Chain interface {
 		mainUTXO bitcoin.UnspentTransactionOutput,
 	) error
 
-	// SubmitReservationProof submits an SPV proof for the given reservation
-	// action generation. proofType selects between Acceptance, Redemption,
-	// Reanchor, and Dissolution proofs; m1 invokes only Acceptance (1) and
-	// Reanchor (3). The call is restricted to the SPV maintainer registered
-	// against the Bridge.
-	SubmitReservationProof(
-		proofType uint8,
+	// SubmitReservationAcceptanceProof submits an SPV proof for the given
+	// reservation acceptance action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationAcceptanceProof(
 		txInfo *tbtc.BitcoinTxInfo,
 		proof *tbtc.BitcoinTxProof,
-		mainUtxo *tbtc.BitcoinTxUTXO,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+
+	// SubmitReservationReanchorProof submits an SPV proof for the given
+	// reservation re-anchor action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationReanchorProof(
+		txInfo *tbtc.BitcoinTxInfo,
+		proof *tbtc.BitcoinTxProof,
 		reservationKey *big.Int,
 		requestNonce uint64,
 	) error
 
 	// NotifyReservationActionTimeout notifies the Bridge that the timeout
-	// for the given reservation action generation has elapsed without the
-	// SPV proof being submitted. The walletMembersIDs carry the operator
-	// IDs of the wallet that was authorized for the action.
-	NotifyReservationActionTimeout(
-		reservationKey *big.Int,
-		walletMembersIDs []uint32,
-	) error
+	// for the given Reanchor-type reservation action generation has
+	// elapsed without the SPV proof being submitted.
+	NotifyReservationActionTimeout(reservationKey *big.Int) error
 
 	// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
 	// acceptance-type action timeout has elapsed for the given reservation
@@ -123,6 +125,14 @@ type Chain interface {
 	// custodying the given reservation has been closed or terminated and
 	// the anchor is therefore stranded.
 	NotifyReservationStranded(reservationKey *big.Int) error
+
+	// WalletTerminationCause returns the on-chain reason the given wallet
+	// was most recently terminated, inferred from the most recent of the
+	// three pre-termination timeout events (MovingFundsTimedOut,
+	// MovedFundsSweepTimedOut, FraudChallengeDefeatTimedOut) found for it.
+	// Returns tbtc.WalletTerminationCauseUnknown (with a nil error) if none
+	// of the three events can be found for the wallet.
+	WalletTerminationCause(walletPublicKeyHash [20]byte) (tbtc.WalletTerminationCause, error)
 
 	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
 	GetReservation(reservationKey *big.Int) (*tbtc.Reservation, error)

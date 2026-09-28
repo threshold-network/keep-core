@@ -121,6 +121,13 @@ func (mft *MovingFundsTask) Run(request *tbtc.CoordinationProposalRequest) (
 		1,
 		true,
 		true,
+		// Reserved deposits are excluded from sweeping (see
+		// findDeposits' reservationsActive doc comment), so once
+		// reservations are active they must also be excluded here:
+		// otherwise a reserved-but-unswept deposit would permanently
+		// block moving-funds proposal generation for this wallet even
+		// though the deposit-sweep path itself will never sweep it.
+		request.ReservationsActive,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(

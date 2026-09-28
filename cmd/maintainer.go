@@ -111,7 +111,7 @@ func initializeMaintainerMetrics(
 		return nil
 	}
 
-	perfMetrics := clientinfo.NewPerformanceMetrics(ctx, registry, clientConfig.Tbtc.Reservations.LeaderDutiesEnabled)
+	perfMetrics := clientinfo.NewPerformanceMetrics(ctx, registry, clientConfig.Tbtc.ReservationsEnabled)
 
 	registry.RegisterMetricClientInfo(build.Version)
 	registry.ObserveEthConnectivity(

@@ -110,6 +110,10 @@ var listDepositsCommand = cobra.Command{
 			head,
 			hideSwept,
 			false,
+			// Listing-only maintainer command with no reservations
+			// awareness need, so preserve legacy behavior of listing
+			// every matching deposit regardless of reservation status.
+			false,
 		)
 		if err != nil {
 			return fmt.Errorf(

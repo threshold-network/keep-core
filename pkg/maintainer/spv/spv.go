@@ -79,21 +79,51 @@ func Initialize(
 		metricsRecorder: metricsRecorder,
 	}
 
-	if config.Reservations.LeaderDutiesEnabled {
+	if config.ReservationProofsEnabled {
 		logger.Infof(
 			"SPV maintainer reservation proof submission is enabled; " +
-				"ensure the paired Tbtc.Reservations.LeaderDutiesEnabled flag is also " +
+				"ensure the paired Tbtc.ReservationsEnabled flag is also " +
 				"enabled in the client config for end-to-end operation",
 		)
 		// Reservation acceptance/re-anchor proofs run on a dedicated loop,
-		// not through the generic proofTypes map: SubmitReservationProof
-		// requires the (reservationKey, requestNonce) pair of the action
-		// generation being proven, which the generic
+		// not through the generic proofTypes map: SubmitReservationAcceptanceProof
+		// and SubmitReservationReanchorProof each require the
+		// (reservationKey, requestNonce) pair of the action generation
+		// being proven, which the generic
 		// unprovenTransactionsGetter/transactionProofSubmitter signatures
 		// (shared by deposit sweep, redemption, moving funds, and moved
 		// funds sweep, none of which need that pair) cannot carry. See
 		// reservation_proof_loop.go.
 		go maintainReservationProofs(ctx, config, spvChain, btcDiffChain, btcChain, metricsRecorder)
+
+		// Reservation watcher wiring (stranding / stale-deposit /
+		// action-timeout - see reservation_wiring.go) is a mandatory,
+		// permissionless, network-wide duty, not a leader-election duty,
+		// but it lives in this package and this is the process
+		// guaranteed to run whenever the reservation feature is enabled
+		// end-to-end. cmd/start.go's client process also wires the same
+		// watchers against its own tbtcChain handle (see its call site
+		// for why it is kept in addition to this one rather than instead
+		// of it). walletClosedChain requires a type assertion because
+		// spv.Chain does not declare OnWalletClosed; every production
+		// Chain implementation (ethereum's tbtc.Chain) satisfies it.
+		// This process has no visibility into the client's own
+		// Tbtc.ReservationsEnabled flag, so it passes true
+		// to skip WireReservationWatchers's paired-flag misconfiguration
+		// self-check, relying on the informational log above instead.
+		// The operator explicitly opted into reservation duties via this
+		// flag, so a failure to wire the watchers is treated as fatal,
+		// matching cmd/start.go's severity for the same failure.
+		walletClosedChain, ok := spvChain.(WalletClosedChain)
+		if !ok {
+			logger.Fatalf(
+				"cannot wire reservation watchers: chain implementation " +
+					"does not support wallet closed event subscription",
+			)
+		}
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true); err != nil {
+			logger.Fatalf("failed to wire reservation watchers: [%v]", err)
+		}
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
@@ -397,14 +427,25 @@ func isInputCurrentWalletsMainUTXO(
 	return bytes.Equal(mainUtxoHash[:], wallet.MainUtxoHash[:]), nil
 }
 
-// proofInfoCache holds proof-invariant data - the Bitcoin chain tip, the SPV
-// proof difficulty factor, and the relay's current/previous epoch
-// difficulties - loaded once per proof-loop pass and shared by getProofInfo
-// across every candidate transaction proved in that pass, together with a
-// pass-local cache of already-fetched Bitcoin block headers keyed by height.
-// A transaction's proof walk is still bounded by its own maxProofHeaders
-// argument; only the underlying chain reads are memoized and shared, never
-// the per-transaction walk logic itself.
+// proofInfoCache holds proof-invariant data - the SPV proof difficulty
+// factor and the relay's current/previous epoch difficulties - loaded once
+// per proof-loop pass and shared by getProofInfo across every candidate
+// transaction proved in that pass, together with a pass-local cache of
+// already-fetched Bitcoin block headers keyed by height. A transaction's
+// proof walk is still bounded by its own maxProofHeaders argument; only the
+// underlying chain reads are memoized and shared, never the per-transaction
+// walk logic itself.
+//
+// The Bitcoin chain tip is deliberately excluded from that once-per-pass
+// caching. txProofDifficultyFactor and the epoch difficulties are
+// governance-parameter-like values that cannot change within a single
+// pass's timeframe, but the tip advances whenever a real Bitcoin block is
+// mined - which can happen partway through a pass that proves many
+// transactions. Deriving a transaction's proof start block from a tip
+// cached at pass start while its confirmation count is read fresh would mix
+// two different observation windows and mis-locate the proof, so the tip is
+// re-fetched on every call via currentBlockHeight instead; see its doc
+// comment.
 //
 // Both getProofInfo callers - spvMaintainer.proveTransactions and the
 // reservation proof loop's proveReservationAcceptanceActions /
@@ -415,7 +456,6 @@ func isInputCurrentWalletsMainUTXO(
 // pass and drive it from a single goroutine.
 type proofInfoCache struct {
 	loaded                  bool
-	latestBlockHeight       uint
 	txProofDifficultyFactor *big.Int
 	currentEpochDifficulty  *big.Int
 	previousEpochDifficulty *big.Int
@@ -428,20 +468,17 @@ func newProofInfoCache() *proofInfoCache {
 	return &proofInfoCache{headers: make(map[uint64]*bitcoin.BlockHeader)}
 }
 
-// load populates the proof-invariant chain reads on first use and is a
-// no-op on every subsequent call for the lifetime of the cache.
+// load populates the proof-invariant chain reads - the SPV proof difficulty
+// factor and the relay's current/previous epoch difficulties - on first use
+// and is a no-op on every subsequent call for the lifetime of the cache.
+// The Bitcoin chain tip is not among them; it is re-fetched on every call by
+// currentBlockHeight instead. See proofInfoCache for why.
 func (c *proofInfoCache) load(
-	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 ) error {
 	if c.loaded {
 		return nil
-	}
-
-	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
-	if err != nil {
-		return fmt.Errorf("failed to get latest block height: [%v]", err)
 	}
 
 	txProofDifficultyFactor, err := spvChain.TxProofDifficultyFactor()
@@ -461,13 +498,29 @@ func (c *proofInfoCache) load(
 		)
 	}
 
-	c.latestBlockHeight = latestBlockHeight
 	c.txProofDifficultyFactor = txProofDifficultyFactor
 	c.currentEpochDifficulty = currentEpochDifficulty
 	c.previousEpochDifficulty = previousEpochDifficulty
 	c.loaded = true
 
 	return nil
+}
+
+// currentBlockHeight returns the current Bitcoin chain tip. Unlike every
+// other value on proofInfoCache, the tip is never cached for the lifetime of
+// a pass: a real Bitcoin block can be mined between two getProofInfo calls
+// in the same pass, and pairing a stale tip with a freshly-read transaction
+// confirmation count would derive the wrong proof start block.
+// currentBlockHeight is therefore re-fetched on every call.
+func currentBlockHeight(
+	btcChain bitcoin.Chain,
+) (uint, error) {
+	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get latest block height: [%v]", err)
+	}
+
+	return latestBlockHeight, nil
 }
 
 // blockHeader returns the block header at height, fetching and caching it on
@@ -503,8 +556,9 @@ func (c *proofInfoCache) blockHeader(
 // flag registration (which applies the 144 default; see cmd/flags.go)
 // behaves identically to one that was.
 //
-// cache holds the pass-invariant chain tip, proof difficulty factor, epoch
-// difficulties, and already-fetched block headers; see proofInfoCache.
+// cache holds the pass-invariant proof difficulty factor, epoch
+// difficulties, and already-fetched block headers, plus the Bitcoin chain
+// tip re-fetched fresh on every call; see proofInfoCache.
 func getProofInfo(
 	transactionHash bitcoin.Hash,
 	btcChain bitcoin.Chain,
@@ -519,10 +573,13 @@ func getProofInfo(
 		maxProofHeaders = DefaultMaxProofHeaders
 	}
 
-	if err := cache.load(btcChain, spvChain, btcDiffChain); err != nil {
+	if err := cache.load(spvChain, btcDiffChain); err != nil {
 		return 0, 0, proofSkipNone, err
 	}
-	latestBlockHeight := cache.latestBlockHeight
+	latestBlockHeight, err := currentBlockHeight(btcChain)
+	if err != nil {
+		return 0, 0, proofSkipNone, err
+	}
 	txProofDifficultyFactor := cache.txProofDifficultyFactor
 	currentEpochDifficulty := cache.currentEpochDifficulty
 	previousEpochDifficulty := cache.previousEpochDifficulty

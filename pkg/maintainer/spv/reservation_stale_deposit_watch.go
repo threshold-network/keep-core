@@ -1,16 +1,26 @@
 package spv
 
 import (
+	"context"
 	"fmt"
 	"math/big"
+	"strings"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// staleDepositRevealScanLookBackBlocks bounds the reveal-timestamp fallback
-// scan. 30 days at 12s/block, mirroring the convention used across this
-// package.
-const staleDepositRevealScanLookBackBlocks = uint64(216000)
+// reservationStaleDepositParkedReconcileInterval bounds how often the
+// stale-deposit poller re-checks deposits parked because their assigned
+// wallet was observed Live (see parkedReconcile). A Live wallet may
+// still transition away from Live before anchoring its deposit, so
+// parked deposits are not abandoned - they are just re-checked far less
+// often than the actively-polled set, since a Live wallet is
+// overwhelmingly expected to anchor its own deposit without further
+// intervention.
+const reservationStaleDepositParkedReconcileInterval = 30 * time.Minute
 
 // StaleDepositResolution indicates the outcome of a stale deposit check
 // to help callers (e.g. pollers) decide whether to keep or drop the deposit
@@ -18,13 +28,43 @@ const staleDepositRevealScanLookBackBlocks = uint64(216000)
 type StaleDepositResolution uint8
 
 const (
-	// StaleDepositResolutionUnknown is the zero value representing an unknown or errored resolution.
+	// StaleDepositResolutionUnknown is the zero value, returned alongside
+	// a non-nil error whenever the check could not be completed (a chain
+	// call failed or the deposit key was invalid). The deposit is never
+	// added to or evicted from the caller's pending/parked tracking set
+	// on this resolution - the caller must retain it and retry on the
+	// next tick - though per-tick caches (wallet state, reservation
+	// parameters, derived timeout memo) and the attempted-notify marker
+	// may already have been populated by the calls attempted before the
+	// failure that produced this resolution.
 	StaleDepositResolutionUnknown StaleDepositResolution = iota
-	// StaleDepositResolutionKeep indicates the deposit is still pending-stale and should be retained in the tracking set.
+	// StaleDepositResolutionKeep indicates the deposit is still
+	// pending-stale: the wallet has not gone live, the action timeout
+	// has not yet elapsed, or a stale-deposit notification was just
+	// submitted (or a prior submission is still awaiting on-chain
+	// confirmation). It must be retained in the caller's tracking set
+	// for the next tick - it is never evicted on this resolution - but
+	// per-tick caches (wallet state, reservation parameters, derived
+	// timeout memo), the attempted-notify marker, and notifiedAt (when a
+	// notification was just submitted or remains unconfirmed) may all be
+	// populated or updated before this resolution is returned.
 	StaleDepositResolutionKeep
-	// StaleDepositResolutionDrop indicates the deposit is no longer a candidate for staleness (e.g. not reserved, settled action) and can be dropped from tracking.
+	// StaleDepositResolutionDrop indicates the deposit is no longer a
+	// staleness candidate (not reserved, no wallet assigned, or its
+	// reservation action already advanced past pending) and must be
+	// removed from the caller's tracking set. The caller should also call
+	// forgetDeposit to release any per-deposit cache entries the watcher
+	// holds for this key.
 	StaleDepositResolutionDrop
-	// StaleDepositResolutionNotified indicates the deposit was confirmed stale and the notification was submitted.
+	// StaleDepositResolutionNotified indicates the deposit's stale-deposit
+	// release was CONFIRMED on-chain: a previously-submitted
+	// NotifyStaleReservedDeposit call has taken effect and the
+	// reservation now reports ReservationStateClosed (see notifiedAt and
+	// CheckStaleReservedDeposit's confirmation check). A submitted-but-
+	// not-yet-mined notification resolves Keep, not Notified, until this
+	// confirmation is observed. The caller must remove the deposit from
+	// its tracking set and call forgetDeposit so the watcher does not
+	// retain state for a deposit it will never check again.
 	StaleDepositResolutionNotified
 )
 
@@ -40,15 +80,29 @@ const (
 // because the anchor can never be produced. The watcher is the backstop that
 // flips the deposit's bookkeeping when the wallet never shows up.
 type ReservationStaleDepositWatcher struct {
-	spvChain        Chain
-	notified        map[string]struct{}
+	spvChain Chain
+	// notifiedAt is the UNIX timestamp of this watcher's last successful
+	// NotifyStaleReservedDeposit submission for a given deposit key, or
+	// absent if none has ever succeeded. It is NOT proof the
+	// notification took effect: NotifyStaleReservedDeposit's generated
+	// chain binding returns as soon as the transaction is submitted, not
+	// once it mines, so a submitted-but-dropped-or-reverted transaction
+	// still leaves the reservation open. CheckStaleReservedDeposit
+	// re-checks GetReservation on every call and only resolves
+	// Notified - letting the caller evict the deposit - once
+	// ReservationStateClosed is actually observed on-chain; until then
+	// it resolves Keep and, once actionTimeoutRenotifyInterval has
+	// elapsed since notifiedAt without confirmation, retries the
+	// notification.
+	notifiedAt      map[string]uint32
 	memoizedTimeout map[string]staleDepositTimeoutMemo
 
 	// walletTickCache memoizes GetWallet results within a single poll
-	// tick, keyed by wallet public key hash. The poller computes `now`
-	// once per tick and passes that identical value to every deposit
-	// check in the tick (see startStaleDepositPoll in
-	// reservation_wiring.go), so a `now` that differs from
+	// tick, keyed by wallet public key hash. `now` is an opaque
+	// tick-generation token: the caller computes it once per poll
+	// iteration and passes that identical value to every deposit checked
+	// in that iteration (CheckStaleReservedDeposit forwards its own `now`
+	// parameter here unchanged). A `now` that differs from
 	// walletTickCacheNow signals a new tick and invalidates the cache; a
 	// repeated `now` signals the same tick and reuses it. This lets
 	// deposits assigned to the same wallet share one GetWallet call per
@@ -56,6 +110,49 @@ type ReservationStaleDepositWatcher struct {
 	walletTickCacheValid bool
 	walletTickCacheNow   uint32
 	walletTickCache      map[[20]byte]walletFetchResult
+
+	// reservationParamsTickCache applies the identical
+	// tick-generation-token contract described above to the
+	// ReservationParameters fetch: a `now` that differs from
+	// reservationParamsTickCacheNow signals a new tick and triggers a
+	// fresh fetch; a repeated `now` reuses it. deriveTimeoutFromReveal
+	// relies on this so every deposit checked within one tick shares a
+	// single governance-parameter fetch instead of paying for one per
+	// deposit.
+	reservationParamsTickCacheValid bool
+	reservationParamsTickCacheNow   uint32
+	reservationParamsTickCache      reservationParamsFetchResult
+
+	// operatorAddress identifies this process for
+	// reservationOperatorStaggerOffset (see reservation_wiring.go), used
+	// to stagger a deposit's FIRST NotifyStaleReservedDeposit attempt.
+	// It is a required constructor parameter, not a post-construction
+	// setter, so a watcher can never be constructed in a partially-
+	// initialized state that would silently skip staggering.
+	operatorAddress common.Address
+
+	// attempted records every deposit key for which
+	// NotifyStaleReservedDeposit has already been attempted at least
+	// once (success or failure), so CheckStaleReservedDeposit knows to
+	// apply the stagger offset only to the FIRST attempt (see
+	// reservationOperatorStaggerOffset).
+	attempted map[string]struct{}
+
+	// pending and parked, together with lastSeenBlock, are this
+	// watcher's own poll-loop cross-tick state (see Run, pollTick, and
+	// parkedReconcile): the incremental DepositRevealed scan cursor and
+	// the two tracked-deposit sets. Folding this state into the watcher
+	// itself - rather than a separate type the wiring layer had to
+	// construct and thread through free functions - mirrors
+	// ReservationActionTimeoutWatcher's self-contained Run loop.
+	// pending holds deposits re-checked every tick: newly revealed
+	// reserved deposits, and deposits whose assigned wallet is not (or
+	// is no longer) Live. parked holds deposits assigned to a Live
+	// wallet, excluded from the per-tick re-check and only revisited by
+	// the slower parkedReconcile pass.
+	pending       map[string]*big.Int
+	parked        map[string]*big.Int
+	lastSeenBlock uint64
 }
 
 // walletFetchResult caches the outcome of a single GetWallet call,
@@ -63,6 +160,14 @@ type ReservationStaleDepositWatcher struct {
 // every deposit sharing that wallet within the same poll tick.
 type walletFetchResult struct {
 	wallet *tbtc.WalletChainData
+	err    error
+}
+
+// reservationParamsFetchResult caches the outcome of a single
+// ReservationParameters call, including an error, so a failed fetch is
+// not retried for every deposit sharing the same poll tick.
+type reservationParamsFetchResult struct {
+	params *tbtc.ReservationParameters
 	err    error
 }
 
@@ -77,15 +182,26 @@ type staleDepositTimeoutMemo struct {
 }
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
-// bound to the given chain.
+// bound to the given chain. operatorAddress is required: it is used by
+// CheckStaleReservedDeposit to derive a deterministic per-operator
+// stagger offset for a deposit's FIRST NotifyStaleReservedDeposit
+// attempt (see reservationOperatorStaggerOffset). It is a constructor
+// parameter, not a post-construction setter, so a watcher can never be
+// constructed in a partially-initialized state that would silently
+// skip staggering.
 func NewReservationStaleDepositWatcher(
 	spvChain Chain,
+	operatorAddress common.Address,
 ) *ReservationStaleDepositWatcher {
 	return &ReservationStaleDepositWatcher{
 		spvChain:        spvChain,
-		notified:        make(map[string]struct{}),
+		operatorAddress: operatorAddress,
+		notifiedAt:      make(map[string]uint32),
 		memoizedTimeout: make(map[string]staleDepositTimeoutMemo),
 		walletTickCache: make(map[[20]byte]walletFetchResult),
+		attempted:       make(map[string]struct{}),
+		pending:         make(map[string]*big.Int),
+		parked:          make(map[string]*big.Int),
 	}
 }
 
@@ -113,11 +229,22 @@ func NewReservationStaleDepositWatcher(
 //     (Settled/TimedOut/Superseded/Vetoed), the deposit is no longer in
 //     the pending-stale window and the watcher skips it without notifying.
 //
+// Submitting NotifyStaleReservedDeposit does NOT immediately resolve
+// Notified: the generated chain binding returns as soon as the
+// transaction is submitted, not once it mines (mining is handled
+// elsewhere by a background ForceMining goroutine), so a call that just
+// submitted the notification resolves Keep and records notifiedAt.
+// Only a LATER call that observes the reservation actually reporting
+// ReservationStateClosed treats the deposit as confirmed and resolves
+// Notified. If actionTimeoutRenotifyInterval elapses without that
+// confirmation, the notification is retried rather than the deposit
+// being silently abandoned or falsely declared resolved.
+//
 // Parameters:
 //   - depositKey: the deposit identifier reported by the Bridge.
-//   - now:        the UNIX timestamp against which the action timeout is
-//     compared. Tests pass an explicit value; production passes
-//     time.Now().Unix() cast to uint32.
+//   - now:        the UNIX timestamp against which the action timeout and
+//     the notifiedAt renotify backoff are compared. Tests pass an
+//     explicit value; production passes time.Now().Unix() cast to uint32.
 func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
 	now uint32,
@@ -125,9 +252,8 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	if depositKey == nil {
 		return StaleDepositResolutionUnknown, fmt.Errorf("deposit key must not be nil")
 	}
-	if _, ok := rsdw.notified[depositKey.String()]; ok {
-		return StaleDepositResolutionNotified, nil
-	}
+
+	depositKeyStr := depositKey.String()
 
 	isReserved, err := rsdw.spvChain.IsReservedDeposit(depositKey)
 	if err != nil {
@@ -204,6 +330,51 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		)
 	}
 
+	if notifiedAt, everNotified := rsdw.notifiedAt[depositKeyStr]; everNotified {
+		if reservation.State == tbtc.ReservationStateClosed {
+			// NotifyStaleReservedDeposit's effect is now visible
+			// on-chain - the reservation was actually released back to
+			// the default sweep path - which is the real evidence the
+			// notification took effect. Only now is it safe to treat
+			// the deposit as terminally resolved.
+			logger.Infof(
+				"confirmed on-chain release of stale reserved "+
+					"deposit [%v] following notification",
+				depositKey,
+			)
+			return StaleDepositResolutionNotified, nil
+		}
+
+		if now < notifiedAt || now-notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+			// now < notifiedAt is treated the same as "interval not yet
+			// elapsed" rather than falling through to retry: now is a
+			// caller-supplied, not-guaranteed-monotonic tick token (see
+			// getWalletForTick's doc comment), so without this guard a
+			// clock adjustment or an out-of-order now would underflow
+			// the subtraction below to a huge uint32 and fail OPEN -
+			// resubmitting immediately instead of waiting out the
+			// backoff. Staying in Keep is the safe direction for an
+			// ambiguous time comparison; a genuine elapsed interval will
+			// still be observed on a later tick with a larger now.
+			//
+			// NotifyStaleReservedDeposit's generated chain binding
+			// returns as soon as the transaction is submitted, not once
+			// it mines (mining is handled by a background ForceMining
+			// goroutine elsewhere), so give a recently-submitted
+			// notification time to land before resubmitting or evicting
+			// the deposit on the strength of the local send alone.
+			return StaleDepositResolutionKeep, nil
+		}
+
+		// actionTimeoutRenotifyInterval has elapsed without the
+		// reservation showing Closed: the prior transaction may have
+		// been dropped or reverted. Clear notifiedAt and fall through
+		// to retry the notification below rather than leaving the
+		// deposit stuck forever awaiting a confirmation that never
+		// comes.
+		delete(rsdw.notifiedAt, depositKeyStr)
+	}
+
 	var timeoutAt uint32
 	if reservation.RequestNonce == 0 {
 		// No acceptance action generation has ever been requested on-chain
@@ -214,6 +385,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		derivedTimeout, err := rsdw.deriveTimeoutFromReveal(
 			depositKey,
 			walletPublicKeyHash,
+			now,
 		)
 		if err != nil {
 			return StaleDepositResolutionUnknown, err
@@ -239,6 +411,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			derivedTimeout, err := rsdw.deriveTimeoutFromReveal(
 				depositKey,
 				walletPublicKeyHash,
+				now,
 			)
 			if err != nil {
 				return StaleDepositResolutionUnknown, err
@@ -269,6 +442,29 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		return StaleDepositResolutionKeep, nil
 	}
 
+	if _, alreadyAttempted := rsdw.attempted[depositKeyStr]; !alreadyAttempted {
+		// FIRST notify attempt for this deposit: stagger it by a
+		// deterministic per-operator offset (see
+		// reservationOperatorStaggerOffset in reservation_wiring.go) so
+		// that many reservation-enabled operators independently
+		// discovering the same overdue deposit do not all submit their
+		// first NotifyStaleReservedDeposit attempt in the same poll
+		// tick and collide on-chain. Unlike the renotify backoff below
+		// (applied once a submission has already been made), only the
+		// FIRST attempt is staggered; reusing actionTimeoutRenotifyInterval
+		// as the stagger window avoids introducing yet another
+		// near-duplicate interval constant.
+		offset := reservationOperatorStaggerOffset(
+			rsdw.operatorAddress,
+			depositKeyStr,
+			actionTimeoutRenotifyInterval,
+		)
+		if now < timeoutAt+offset {
+			return StaleDepositResolutionKeep, nil
+		}
+		rsdw.attempted[depositKeyStr] = struct{}{}
+	}
+
 	if err := rsdw.spvChain.NotifyStaleReservedDeposit(depositKey); err != nil {
 		return StaleDepositResolutionUnknown, fmt.Errorf(
 			"failed to notify stale reserved deposit [%v]: [%v]",
@@ -276,28 +472,31 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			err,
 		)
 	}
-	rsdw.notified[depositKey.String()] = struct{}{}
+	rsdw.notifiedAt[depositKeyStr] = now
 
 	logger.Infof(
-		"notified stale reserved deposit [%v] "+
-			"(wallet [0x%x] state=%s, action timeout %d)",
+		"submitted stale reserved deposit notification for [%v] "+
+			"(wallet [0x%x] state=%s, action timeout %d); awaiting "+
+			"on-chain confirmation before retiring from tracking",
 		depositKey,
 		walletPublicKeyHash,
 		wallet.State,
 		timeoutAt,
 	)
 
-	return StaleDepositResolutionNotified, nil
+	return StaleDepositResolutionKeep, nil
 }
 
 // getWalletForTick fetches the given wallet's on-chain state, memoizing
 // the result for the duration of one poll tick so every deposit assigned
 // to the same wallet reuses a single GetWallet call instead of issuing
-// one per deposit. `now` identifies the tick: the poller computes it once
-// and passes the identical value to every deposit checked in that tick
-// (see startStaleDepositPoll in reservation_wiring.go), so a `now` value
-// that differs from the cached one signals a new tick and the cache is
-// dropped and rebuilt from scratch.
+// one per deposit. `now` is an opaque tick-generation token, not a
+// literal timestamp used in comparisons: the caller computes it once per
+// poll iteration and passes that identical value to every deposit
+// checked in that iteration (CheckStaleReservedDeposit forwards its own
+// `now` parameter here unchanged). A `now` value that differs from the
+// cached one signals a new tick and the cache is dropped and rebuilt
+// from scratch; a repeated `now` signals the same tick and reuses it.
 func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
 	walletPublicKeyHash [20]byte,
 	now uint32,
@@ -320,6 +519,29 @@ func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
 	return wallet, err
 }
 
+// getReservationParametersForTick fetches the live ReservationParameters,
+// applying the identical tick-generation-token contract as
+// getWalletForTick above: a `now` that differs from the cached tick
+// token signals a new tick and triggers a fresh fetch, while a repeated
+// `now` reuses the cached result. deriveTimeoutFromReveal relies on this
+// so its per-deposit staleness comparison against the memoized deadline
+// (see staleDepositTimeoutMemo) pays for the governance-parameter fetch
+// at most once per tick rather than once per deposit.
+func (rsdw *ReservationStaleDepositWatcher) getReservationParametersForTick(
+	now uint32,
+) (*tbtc.ReservationParameters, error) {
+	if !rsdw.reservationParamsTickCacheValid || now != rsdw.reservationParamsTickCacheNow {
+		rsdw.reservationParamsTickCacheValid = true
+		rsdw.reservationParamsTickCacheNow = now
+		params, err := rsdw.spvChain.ReservationParameters()
+		rsdw.reservationParamsTickCache = reservationParamsFetchResult{
+			params: params,
+			err:    err,
+		}
+	}
+	return rsdw.reservationParamsTickCache.params, rsdw.reservationParamsTickCache.err
+}
+
 // forgetDeposit clears any cached notification state and memoized
 // staleness deadline held for the given deposit key. The poller invokes
 // this once a deposit resolves to Drop or Notified, so a resolved
@@ -327,15 +549,30 @@ func (rsdw *ReservationStaleDepositWatcher) getWalletForTick(
 // remaining life of the process.
 func (rsdw *ReservationStaleDepositWatcher) forgetDeposit(depositKey *big.Int) {
 	key := depositKey.String()
-	delete(rsdw.notified, key)
+	delete(rsdw.notifiedAt, key)
 	delete(rsdw.memoizedTimeout, key)
+	delete(rsdw.attempted, key)
 }
 
+// deriveTimeoutFromReveal computes the staleness deadline for a reserved
+// deposit that has no reservation action recorded yet, from the
+// deposit's own DepositRevealed timestamp plus the live
+// ReservationActionTimeout governance parameter. It checks its own memo
+// cache (memoizedTimeout) first: an existing memo whose
+// reservationActionTimeout still matches the live governance value
+// short-circuits the block scan and event/deposit-request lookups
+// entirely. `now` only identifies the poll tick so the
+// governance-parameter fetch itself is amortized across every deposit
+// checked in that tick (see getReservationParametersForTick); it plays
+// no role in the derivation or the staleness comparison.
 func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 	depositKey *big.Int,
 	walletPublicKeyHash [20]byte,
+	now uint32,
 ) (uint32, error) {
-	params, paramsErr := rsdw.spvChain.ReservationParameters()
+	memo, hasMemo := rsdw.memoizedTimeout[depositKey.String()]
+
+	params, paramsErr := rsdw.getReservationParametersForTick(now)
 	if paramsErr != nil {
 		return 0, fmt.Errorf(
 			"failed to load reservation parameters for staleness "+
@@ -344,8 +581,7 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 		)
 	}
 
-	if memo, ok := rsdw.memoizedTimeout[depositKey.String()]; ok &&
-		memo.reservationActionTimeout == params.ReservationActionTimeout {
+	if hasMemo && memo.reservationActionTimeout == params.ReservationActionTimeout {
 		return memo.timeoutAt, nil
 	}
 
@@ -370,8 +606,8 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 	}
 
 	startBlock := uint64(0)
-	if currentBlock > staleDepositRevealScanLookBackBlocks {
-		startBlock = currentBlock - staleDepositRevealScanLookBackBlocks
+	if currentBlock > reservationDefaultLookBackBlocks {
+		startBlock = currentBlock - reservationDefaultLookBackBlocks
 	}
 
 	events, eventsErr := rsdw.spvChain.PastDepositRevealedEvents(
@@ -430,4 +666,272 @@ func (rsdw *ReservationStaleDepositWatcher) deriveTimeoutFromReveal(
 		reservationActionTimeout: params.ReservationActionTimeout,
 	}
 	return result, nil
+}
+
+// trackedCount returns the total number of deposits currently tracked by
+// this watcher's poll loop, across both the actively-polled and parked
+// sets.
+func (rsdw *ReservationStaleDepositWatcher) trackedCount() int {
+	return len(rsdw.pending) + len(rsdw.parked)
+}
+
+// isWalletLive reports whether depositKey's currently assigned wallet is
+// in StateLive. It is only called for a deposit whose
+// CheckStaleReservedDeposit resolution was Keep (i.e. still reserved),
+// so ReservedDepositWallet is expected to resolve to a real assigned
+// wallet. now is the same tick-generation token the caller already
+// passed to CheckStaleReservedDeposit for this deposit in the same poll
+// pass, so this reuses getWalletForTick's per-tick memo instead of
+// issuing a second GetWallet call for a wallet already fetched this
+// tick.
+func (rsdw *ReservationStaleDepositWatcher) isWalletLive(
+	depositKey *big.Int,
+	now uint32,
+) (bool, error) {
+	walletPublicKeyHash, err := rsdw.spvChain.ReservedDepositWallet(depositKey)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to resolve assigned wallet: [%w]",
+			err,
+		)
+	}
+	wallet, err := rsdw.getWalletForTick(walletPublicKeyHash, now)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to fetch assigned wallet: [%w]",
+			err,
+		)
+	}
+	return wallet.State == tbtc.StateLive, nil
+}
+
+// pollTick runs one stale-deposit poll pass: it fetches deposit-revealed
+// events since rsdw.lastSeenBlock, adds every reserved deposit among
+// them to the actively-polled (pending) set, then re-runs
+// CheckStaleReservedDeposit for every deposit already in that set. A
+// deposit is removed once it resolves Drop (it is no longer a
+// staleness candidate) or Notified (a prior stale-deposit release was
+// confirmed on-chain); neither needs further polling. A deposit that
+// instead resolves Keep because its assigned
+// wallet has gone Live is moved to the parked set rather than
+// re-checked every tick going forward: the wallet may still transition
+// away from Live (e.g. MovingFunds/Closing/Terminated) before
+// anchoring, so it cannot be abandoned, but re-reading it every minute
+// for the rest of the process lifetime would make steady-state cost
+// grow without bound as more deposits anchor successfully. Parked
+// deposits are instead revisited by parkedReconcile, far less often.
+//
+// The poller is intentionally tolerant of chain errors: a transient RPC
+// failure logs and continues rather than aborting the poll pass, but
+// such a failure also makes the tick's activity count unreliable as a
+// zero-activity signal (the caller cannot distinguish "genuinely no
+// activity" from "the scan that would have found it failed"). Returns
+// the total tracked count (pending + parked) after the tick, and a
+// second bool that is true only when every chain read this tick
+// (block counter, current block, deposit-revealed event scan,
+// reservation parameters) definitively succeeded - false makes the
+// count untrustworthy. Callers that want a results signal (see
+// WireReservationWatchers's misconfiguration self-check) must check
+// both.
+func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
+	blockCounter, err := rsdw.spvChain.BlockCounter()
+	if err != nil {
+		reservationWiringLogger.Errorf(
+			"stale-deposit poll failed to get block counter: [%v]",
+			err,
+		)
+		return rsdw.trackedCount(), false
+	}
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		reservationWiringLogger.Errorf(
+			"stale-deposit poll failed to get current block: [%v]",
+			err,
+		)
+		return rsdw.trackedCount(), false
+	}
+
+	startBlock := rsdw.lastSeenBlock
+	if startBlock == 0 && currentBlock > reservationDefaultLookBackBlocks {
+		startBlock = currentBlock - reservationDefaultLookBackBlocks
+	}
+
+	events, err := rsdw.spvChain.PastDepositRevealedEvents(
+		&tbtc.DepositRevealedEventFilter{
+			StartBlock: startBlock + 1,
+			EndBlock:   &currentBlock,
+		},
+	)
+	if err != nil {
+		reservationWiringLogger.Errorf(
+			"stale-deposit poll failed to fetch deposit revealed "+
+				"events: [%v]",
+			err,
+		)
+		return rsdw.trackedCount(), false
+	}
+
+	params, err := rsdw.getReservationParametersForTick(now)
+	if err != nil {
+		reservationWiringLogger.Errorf(
+			"stale-deposit poll failed to fetch reservation "+
+				"parameters: [%v]",
+			err,
+		)
+		return rsdw.trackedCount(), false
+	}
+
+	for _, event := range events {
+		if event.Vault == nil || !strings.EqualFold(string(*event.Vault), string(params.ReservationVault)) {
+			continue
+		}
+
+		depositKey := rsdw.spvChain.BuildDepositKey(
+			event.FundingTxHash,
+			event.FundingOutputIndex,
+		)
+
+		isReserved, err := rsdw.spvChain.IsReservedDeposit(depositKey)
+		if err != nil {
+			reservationWiringLogger.Errorf(
+				"stale-deposit poll failed to check if deposit "+
+					"[%v] is reserved: [%v]",
+				depositKey,
+				err,
+			)
+			// Track it for retry instead of dropping it: this
+			// window's event won't be re-fetched once
+			// lastSeenBlock advances below, so silently skipping
+			// here would permanently orphan the deposit on one
+			// transient RPC flake. CheckStaleReservedDeposit
+			// performs its own independent IsReservedDeposit
+			// re-check on every tick and resolves to Drop if the
+			// deposit genuinely isn't reserved, so tracking it
+			// speculatively here is safe.
+			rsdw.pending[depositKey.String()] = depositKey
+			continue
+		}
+		if !isReserved {
+			continue
+		}
+
+		rsdw.pending[depositKey.String()] = depositKey
+	}
+
+	rsdw.lastSeenBlock = currentBlock
+
+	for key, depositKey := range rsdw.pending {
+		resolution, err := rsdw.CheckStaleReservedDeposit(depositKey, now)
+		if err != nil {
+			reservationWiringLogger.Errorf(
+				"stale-deposit poll failed to check deposit "+
+					"[%v]: [%v]",
+				depositKey,
+				err,
+			)
+			continue
+		}
+
+		switch resolution {
+		case StaleDepositResolutionDrop, StaleDepositResolutionNotified:
+			delete(rsdw.pending, key)
+			rsdw.forgetDeposit(depositKey)
+		case StaleDepositResolutionKeep:
+			live, err := rsdw.isWalletLive(depositKey, now)
+			if err != nil {
+				reservationWiringLogger.Warnf(
+					"stale-deposit poll failed to check whether "+
+						"deposit [%v]'s assigned wallet is live; "+
+						"keeping it in the actively-polled set: [%v]",
+					depositKey,
+					err,
+				)
+				continue
+			}
+			if live {
+				delete(rsdw.pending, key)
+				rsdw.parked[key] = depositKey
+			}
+		}
+	}
+
+	return rsdw.trackedCount(), true
+}
+
+// parkedReconcile re-checks every parked deposit (assigned to a Live
+// wallet at last check). A deposit resolving Drop or Notified is
+// evicted entirely; one resolving Keep whose assigned wallet is no
+// longer Live is reactivated into the actively-polled (pending) set so
+// it starts being re-checked every tick again.
+func (rsdw *ReservationStaleDepositWatcher) parkedReconcile(now uint32) {
+	for key, depositKey := range rsdw.parked {
+		resolution, err := rsdw.CheckStaleReservedDeposit(depositKey, now)
+		if err != nil {
+			reservationWiringLogger.Errorf(
+				"stale-deposit parked reconcile failed to check "+
+					"deposit [%v]: [%v]",
+				depositKey,
+				err,
+			)
+			continue
+		}
+
+		switch resolution {
+		case StaleDepositResolutionDrop, StaleDepositResolutionNotified:
+			delete(rsdw.parked, key)
+			rsdw.forgetDeposit(depositKey)
+		case StaleDepositResolutionKeep:
+			live, err := rsdw.isWalletLive(depositKey, now)
+			if err != nil {
+				reservationWiringLogger.Warnf(
+					"stale-deposit parked reconcile failed to check "+
+						"whether deposit [%v]'s assigned wallet is "+
+						"still live; leaving it parked until the next "+
+						"reconcile pass: [%v]",
+					depositKey,
+					err,
+				)
+				continue
+			}
+			if !live {
+				delete(rsdw.parked, key)
+				rsdw.pending[key] = depositKey
+			}
+		}
+	}
+}
+
+// Run starts the background poll loop, mirroring
+// ReservationActionTimeoutWatcher.Run. It returns when ctx is done or
+// when a non-positive interval is supplied. Every interval tick runs
+// one poll pass over the tracked deposit set (pollTick) and, every
+// reservationStaleDepositParkedReconcileInterval, additionally
+// reconciles the parked set (parkedReconcile).
+func (rsdw *ReservationStaleDepositWatcher) Run(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf(
+			"stale-deposit watcher requires a positive poll interval",
+		)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	lastParkedReconcile := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		now := uint32(time.Now().Unix())
+		rsdw.pollTick(now)
+
+		if time.Since(lastParkedReconcile) >= reservationStaleDepositParkedReconcileInterval {
+			lastParkedReconcile = time.Now()
+			rsdw.parkedReconcile(now)
+		}
+	}
 }

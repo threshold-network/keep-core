@@ -280,6 +280,7 @@ func processCoordinationResult(node *node, result *coordinationResult) {
 				proposal,
 				startBlock,
 				expiryBlock,
+				result.window.coordinationBlock,
 			)
 		}
 	case ActionRedemption:

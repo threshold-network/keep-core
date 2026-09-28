@@ -28,13 +28,6 @@ const DepositScriptByteSize = 126
 // 30 days assuming 12 seconds per block.
 const DepositSweepLookBackBlocks = uint64(216000)
 
-// reservationParametersFetchRetries bounds how many consecutive
-// ReservationParameters attempts findDeposits makes before concluding
-// reservations are not currently active. See the call site for the
-// reasoning behind treating repeated failure, not a single one, as that
-// signal.
-const reservationParametersFetchRetries = 3
-
 // DepositSweepTask is a task that may produce a deposit sweep proposal.
 type DepositSweepTask struct {
 	chain    Chain
@@ -75,6 +68,7 @@ func (dst *DepositSweepTask) Run(request *tbtc.CoordinationProposalRequest) (
 		taskLogger,
 		walletPublicKeyHash,
 		depositSweepMaxSize,
+		request.ReservationsActive,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -93,6 +87,7 @@ func (dst *DepositSweepTask) Run(request *tbtc.CoordinationProposalRequest) (
 		walletPublicKeyHash,
 		deposits,
 		0,
+		request.ReservationsActive,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -131,6 +126,15 @@ type Deposit struct {
 // FindDeposits finds deposits according to the given criteria. It always
 // performs a full-history scan (from block 0) to ensure all matching deposits
 // are returned regardless of age.
+//
+// reservationsActive controls whether reserved deposits are filtered out of
+// the result - see findDeposits' reservationsActive doc comment for the
+// mechanics. Callers no longer get a value baked in here: pass
+// tbtc.CoordinationProposalRequest.ReservationsActive (or an equivalent
+// activation-block comparison) when the result feeds a decision that must
+// respect reservations, such as moving_funds.go's unswept-deposit guard.
+// Listing-only callers with no reservations-awareness need (e.g.
+// cmd/maintainercli.go) should keep passing false explicitly.
 func FindDeposits(
 	chain Chain,
 	btcChain bitcoin.Chain,
@@ -138,6 +142,7 @@ func FindDeposits(
 	maxNumberOfDeposits int,
 	skipSwept bool,
 	skipUnconfirmed bool,
+	reservationsActive bool,
 ) ([]*Deposit, error) {
 	return findDeposits(
 		logger,
@@ -148,6 +153,7 @@ func FindDeposits(
 		skipSwept,
 		skipUnconfirmed,
 		0,
+		reservationsActive,
 	)
 }
 
@@ -163,6 +169,15 @@ func findDeposits(
 	skipSwept bool,
 	skipUnconfirmed bool,
 	filterStartBlock uint64,
+	// reservationsActive reports whether reservations were live at the
+	// coordination block for this proposal round, i.e.
+	// tbtc.ReservationsActivationBlock(network) <= coordinationBlock. It
+	// must be derived from that comparison, not from whether
+	// ReservationParameters below happens to succeed - see
+	// tbtc.ReservationsActivationBlock's doc comment. When false, the
+	// reserved-deposit filter below - including the ReservationParameters
+	// call it depends on - is skipped entirely.
+	reservationsActive bool,
 ) ([]*Deposit, error) {
 	taskLogger.Infof("reading revealed deposits from chain")
 
@@ -207,39 +222,22 @@ func findDeposits(
 	// Capture time now for computations.
 	timeNow := time.Now()
 
-	// Determine the reservation vault once, not per deposit. Retry a
-	// bounded number of times before concluding reservations are not
-	// currently active: a reservation-related Bridge call that doesn't
-	// exist yet on the deployed contract (pre-upgrade) fails
-	// deterministically on every attempt, while a transient RPC hiccup
-	// against an otherwise-live reservation system usually recovers
-	// within a few - and the consequence of guessing wrong the other way
-	// (sweeping a genuinely reserved deposit as a default one) is
-	// irreversible, so a single failed attempt is not enough evidence to
-	// draw that conclusion. Mirrors the bounded-retry convention already
-	// used for this class of RPC flake in reservation_wiring.go.
-	reservationsActive := true
+	// Determine the reservation vault once, not per deposit, and only
+	// when reservationsActive - see that parameter's doc comment for why
+	// gating on tbtc.ReservationsActivationBlock instead of this call's
+	// success/failure matters. A failure here is a hard error:
+	// reservationsActive already established the feature is live for
+	// this network and block, so a failing call at that point is a
+	// genuine chain problem, not evidence the feature is inactive.
 	var reservationParams *tbtc.ReservationParameters
-	for attempt := 1; attempt <= reservationParametersFetchRetries; attempt++ {
+	if reservationsActive {
 		reservationParams, err = chain.ReservationParameters()
-		if err == nil {
-			break
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get reservation parameters: [%w]",
+				err,
+			)
 		}
-		taskLogger.Debugf(
-			"failed to fetch reservation parameters (attempt %d/%d): [%v]",
-			attempt,
-			reservationParametersFetchRetries,
-			err,
-		)
-	}
-	if err != nil {
-		taskLogger.Infof(
-			"reservation parameters unavailable after %d attempts, "+
-				"skipping reserved deposit filter: [%v]",
-			reservationParametersFetchRetries,
-			err,
-		)
-		reservationsActive = false
 	}
 
 	result := make([]*Deposit, 0, resultSliceCapacity)
@@ -254,12 +252,11 @@ func findDeposits(
 		if reservationsActive && depositTargetsReservationVault(event.Vault, reservationParams.ReservationVault) {
 			isReserved, err := chain.IsReservedDeposit(depositKey)
 			if err != nil {
-				taskLogger.Errorf(
-					"failed to check if deposit [%s] is reserved: [%v]",
+				return nil, fmt.Errorf(
+					"failed to check if deposit [%s] is reserved: [%w]",
 					depositKeyStr,
 					err,
 				)
-				continue
 			}
 			if isReserved {
 				taskLogger.Infof("skipping reserved deposit [%s]", depositKeyStr)
@@ -354,6 +351,7 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
 	maxNumberOfDeposits uint16,
+	reservationsActive bool,
 ) ([]*DepositReference, error) {
 	if walletPublicKeyHash == [20]byte{} {
 		return nil, fmt.Errorf("wallet public key hash is required")
@@ -391,6 +389,7 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 		true,
 		true,
 		filterStartBlock,
+		reservationsActive,
 	)
 	if err != nil {
 		return nil, err
@@ -527,6 +526,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 	walletPublicKeyHash [20]byte,
 	deposits []*DepositReference,
 	fee int64,
+	reservationsActive bool,
 ) (*tbtc.DepositSweepProposal, error) {
 	if len(deposits) == 0 {
 		return nil, fmt.Errorf("deposits list is empty")
@@ -591,6 +591,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		walletPublicKeyHash,
 		proposal,
 		tbtc.DepositSweepRequiredFundingTxConfirmations,
+		reservationsActive,
 		dst.chain,
 		dst.btcChain,
 	); err != nil {

@@ -57,6 +57,16 @@ type ReservationAcceptanceTask struct {
 	// cursor and its cached candidate events (see
 	// reservationAcceptanceScanState).
 	scanState map[[20]byte]*reservationAcceptanceScanState
+
+	// fundingTxLookupTimeout bounds a single candidate's
+	// GetTransactionConfirmations call in
+	// fetchReservationAcceptanceFundingTxs. NewReservationAcceptanceTask
+	// defaults it to reservationAcceptanceFundingTxLookupTimeout; it is an
+	// instance field, rather than that constant being read directly,
+	// purely so a unit test can substitute a millisecond-scale value and
+	// observe a real per-candidate timeout firing without the test itself
+	// having to block for the production 30s default.
+	fundingTxLookupTimeout time.Duration
 }
 
 // NewReservationAcceptanceTask constructs a ReservationAcceptanceTask.
@@ -65,9 +75,10 @@ func NewReservationAcceptanceTask(
 	btcChain bitcoin.Chain,
 ) *ReservationAcceptanceTask {
 	return &ReservationAcceptanceTask{
-		chain:     chain,
-		btcChain:  btcChain,
-		scanState: make(map[[20]byte]*reservationAcceptanceScanState),
+		chain:                  chain,
+		btcChain:               btcChain,
+		scanState:              make(map[[20]byte]*reservationAcceptanceScanState),
+		fundingTxLookupTimeout: reservationAcceptanceFundingTxLookupTimeout,
 	}
 }
 
@@ -85,6 +96,55 @@ func (rat *ReservationAcceptanceTask) setMetricsRecorder(recorder interface {
 // reveal volume is not bounded by anything else; this cap keeps per-window
 // work bounded even if a wallet's reveal volume spikes.
 const maxReservationAcceptanceCandidatesPerRun = 50
+
+// reservationAcceptanceFundingTxLookupWorkers bounds the number of reserved
+// deposits whose funding-transaction lookups (GetTransaction and
+// GetTransactionConfirmations) run concurrently against the Bitcoin chain
+// adapter in fetchReservationAcceptanceFundingTxs. Fetching serially for up
+// to maxReservationAcceptanceCandidatesPerRun candidates, each bound only
+// by the chain adapter's own multi-minute retry budget, could turn one
+// unhealthy Bitcoin backend into hours of serial retries before a run
+// gives up; running a small bounded number of lookups concurrently instead
+// caps the number of sequential retry windows to roughly
+// maxReservationAcceptanceCandidatesPerRun /
+// reservationAcceptanceFundingTxLookupWorkers.
+const reservationAcceptanceFundingTxLookupWorkers = 8
+
+// reservationAcceptanceFundingTxLookupTimeout bounds a single candidate's
+// GetTransactionConfirmations call in fetchReservationAcceptanceFundingTxs.
+// It is set well below a Bitcoin chain adapter's own default per-request
+// retry budget (for the Electrum adapter, bitcoin/electrum.
+// DefaultRequestRetryTimeout is two minutes) so an unhealthy backend fails
+// a candidate's lookup fast instead of silently consuming the adapter's
+// full retry budget on every one of the bounded pipeline's concurrent
+// slots. GetTransaction itself takes no context (see bitcoin.Chain) and
+// remains bound only by the adapter's own retry policy. This is the
+// default assigned to ReservationAcceptanceTask.fundingTxLookupTimeout by
+// NewReservationAcceptanceTask; see that field for why it is not read
+// directly.
+const reservationAcceptanceFundingTxLookupTimeout = 30 * time.Second
+
+// reservationAcceptanceFundingTxCandidate is a phase-one-eligible reserved
+// deposit awaiting the concurrent funding-transaction lookup performed by
+// fetchReservationAcceptanceFundingTxs.
+type reservationAcceptanceFundingTxCandidate struct {
+	event          *tbtc.DepositRevealedEvent
+	depositKey     *big.Int
+	depositRequest *tbtc.DepositChainRequest
+}
+
+// reservationAcceptanceFundingTxLookup is the outcome of one candidate's
+// funding-transaction lookup. fundingTxErr and confirmationsErr are tracked
+// separately, instead of a single combined error, so the caller can
+// reproduce the exact log message a strictly serial GetTransaction ->
+// GetTransactionConfirmations call chain would have emitted for whichever
+// of the two calls failed.
+type reservationAcceptanceFundingTxLookup struct {
+	fundingTx        *bitcoin.Transaction
+	fundingTxErr     error
+	confirmations    uint
+	confirmationsErr error
+}
 
 // reservationAcceptanceScanState is the per-wallet incremental deposit-
 // reveal scan cursor and its in-memory candidate cache, mirroring the
@@ -428,9 +488,20 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	anchorFeeComputed := false
 	now := time.Now()
 
+	var pendingCandidates []*reservationAcceptanceFundingTxCandidate
+
 	candidatesExamined := 0
 	for _, event := range depositRevealedEvents {
 		if !depositTargetsReservationVault(event.Vault, reservationVault) {
+			continue
+		}
+
+		depositKey := rat.chain.BuildDepositKey(
+			event.FundingTxHash,
+			event.FundingOutputIndex,
+		)
+
+		if skipDepositKeys[depositKey.Text(16)] {
 			continue
 		}
 
@@ -444,15 +515,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			break
 		}
 		candidatesExamined++
-
-		depositKey := rat.chain.BuildDepositKey(
-			event.FundingTxHash,
-			event.FundingOutputIndex,
-		)
-
-		if skipDepositKeys[depositKey.Text(16)] {
-			continue
-		}
 
 		depositRequest, foundRequest, err := rat.chain.GetDepositRequest(
 			event.FundingTxHash,
@@ -517,33 +579,64 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		fundingTx, err := rat.btcChain.GetTransaction(event.FundingTxHash)
-		if err != nil {
+		pendingCandidates = append(
+			pendingCandidates,
+			&reservationAcceptanceFundingTxCandidate{
+				event:          event,
+				depositKey:     depositKey,
+				depositRequest: depositRequest,
+			},
+		)
+	}
+
+	// The two Electrum calls below (GetTransaction and
+	// GetTransactionConfirmations) are looked up through a bounded,
+	// lazily-scheduled pipeline (see fetchReservationAcceptanceFundingTxs)
+	// instead of eagerly for every phase-one-eligible candidate collected
+	// above, so an unhealthy Bitcoin backend cannot turn this bounded
+	// candidate set into a fully serial multi-hour retry chain, AND a
+	// caller that only needs the first fully eligible candidate -- the
+	// common case, since candidates are examined oldest-first -- does not
+	// pay for fetching every other pending candidate's funding
+	// transaction. fundingTxLookups.next(i) still hands back each
+	// candidate's result in the original oldest-first order, so the loop
+	// below still returns the first fully eligible one deterministically,
+	// exactly as the previous strictly serial implementation did;
+	// deferring stop() here ensures every exit from this loop -- a
+	// candidate found, or every candidate exhausted -- tells the pipeline
+	// to abandon any lookup it has not yet dispatched.
+	fundingTxLookups := rat.fetchReservationAcceptanceFundingTxs(pendingCandidates)
+	defer fundingTxLookups.stop()
+
+	for i, pendingCandidate := range pendingCandidates {
+		event := pendingCandidate.event
+		depositKey := pendingCandidate.depositKey
+		depositRequest := pendingCandidate.depositRequest
+		lookup := fundingTxLookups.next(i)
+
+		if lookup.fundingTxErr != nil {
 			taskLogger.Errorf(
 				"failed to get funding tx for reserved deposit [%v]: [%v]",
 				depositKey,
-				err,
+				lookup.fundingTxErr,
 			)
 			continue
 		}
+		fundingTx := lookup.fundingTx
 
-		confirmations, err := rat.btcChain.GetTransactionConfirmations(
-			context.Background(),
-			event.FundingTxHash,
-		)
-		if err != nil {
+		if lookup.confirmationsErr != nil {
 			taskLogger.Errorf(
 				"failed to get funding tx confirmations for [%v]: [%v]",
 				depositKey,
-				err,
+				lookup.confirmationsErr,
 			)
 			continue
 		}
-		if confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
+		if lookup.confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
 			taskLogger.Debugf(
 				"reserved deposit [%v] funding tx confirmations [%d/%d] below required",
 				depositKey,
-				confirmations,
+				lookup.confirmations,
 				tbtc.DepositSweepRequiredFundingTxConfirmations,
 			)
 			continue
@@ -677,6 +770,168 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 
 	return nil, nil
+}
+
+// reservationAcceptanceFundingTxPipeline is a lazily-scheduled, bounded,
+// oldest-first funding-transaction lookup pipeline returned by
+// fetchReservationAcceptanceFundingTxs. A naive worker pool launches every
+// candidate's GetTransaction/GetTransactionConfirmations call
+// unconditionally, so a caller that only needs the first fully eligible
+// candidate -- the common case, since candidates are examined oldest-first
+// -- still pays for fetching every other pending candidate's funding
+// transaction. This pipeline instead hands results back one index at a
+// time via next(), and stop() tells it to abandon every lookup it has not
+// yet dispatched, so a caller that stops asking for more results after an
+// early match never causes those later fetches to happen at all.
+type reservationAcceptanceFundingTxPipeline struct {
+	// results holds one buffered (capacity 1) channel per candidate index.
+	// Buffering lets a fetch that completes after stop() has already been
+	// called still deliver its result and exit, instead of blocking
+	// forever on a receiver that will never call next() for that index.
+	results []chan reservationAcceptanceFundingTxLookup
+
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+// next blocks until candidate index i's funding-transaction lookup
+// completes and returns its result. Callers MUST consume indexes in
+// increasing order (0, 1, 2, ...) -- the same oldest-first order
+// candidates was given to fetchReservationAcceptanceFundingTxs in. Because
+// each candidate's result is delivered on its own per-index channel, a
+// later candidate's fetch racing ahead and completing first can never be
+// mistaken for an earlier candidate's result.
+func (p *reservationAcceptanceFundingTxPipeline) next(
+	i int,
+) reservationAcceptanceFundingTxLookup {
+	return <-p.results[i]
+}
+
+// stop tells the pipeline to abandon every funding-transaction lookup not
+// already dispatched. It is idempotent and safe to call even after every
+// candidate has already been consumed via next(), or not at all. A lookup
+// already in flight when stop is called is not interrupted -- it still
+// runs to completion or hits its own
+// reservationAcceptanceFundingTxLookupTimeout. The dispatcher checks
+// stopCh before acquiring each new dispatch slot, giving stop() priority
+// over launching another lookup, so calling stop typically bounds the
+// number of "wasted" fetches past the caller's answer to roughly
+// reservationAcceptanceFundingTxLookupWorkers - 1 -- but because Go's
+// select can still occasionally choose an already-ready dispatch slot
+// over an already-closed stopCh, this is a best-effort reduction, not a
+// strict bound, no matter how many candidates remain unexamined.
+func (p *reservationAcceptanceFundingTxPipeline) stop() {
+	p.stopOnce.Do(func() { close(p.stopCh) })
+}
+
+// fetchReservationAcceptanceFundingTxs starts looking up the funding
+// transaction and its confirmation count for every candidate in
+// candidates, in oldest-first order, and returns a
+// reservationAcceptanceFundingTxPipeline the caller pulls results from one
+// index at a time via next(). At most
+// reservationAcceptanceFundingTxLookupWorkers lookups ever run
+// concurrently -- a strict cap, exactly as the previous eager
+// implementation enforced with its shared worker goroutines. This is a
+// bound on concurrency, not on the total number of Bitcoin RPCs issued
+// over the pipeline's lifetime: unlike that implementation, which
+// launched every candidate's fetch before the caller could inspect any
+// result, fetches here are dispatched lazily and the dispatcher only
+// stops handing out new candidates once the caller calls the returned
+// pipeline's stop() (see findReservationAcceptanceCandidate, which does
+// so via defer once it either finds a fully eligible candidate or
+// exhausts every candidate). Because the dispatcher waits on stop(), not
+// on the caller actually consuming each result via next(), a caller whose
+// own per-candidate work (e.g. Ethereum round-trips) is slower than the
+// Bitcoin lookups can still see up to every one of
+// maxReservationAcceptanceCandidatesPerRun (50) pending candidates
+// dispatched before stop() is observed; the early-stop savings this
+// affords on top of the strict concurrency cap are best-effort, not an
+// absolute bound on total RPCs issued (see
+// reservationAcceptanceFundingTxLookupTimeout for the per-candidate
+// timeout that still applies to each dispatched lookup).
+func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
+	candidates []*reservationAcceptanceFundingTxCandidate,
+) *reservationAcceptanceFundingTxPipeline {
+	pipeline := &reservationAcceptanceFundingTxPipeline{
+		results: make([]chan reservationAcceptanceFundingTxLookup, len(candidates)),
+		stopCh:  make(chan struct{}),
+	}
+	for i := range pipeline.results {
+		pipeline.results[i] = make(chan reservationAcceptanceFundingTxLookup, 1)
+	}
+	if len(candidates) == 0 {
+		return pipeline
+	}
+
+	workers := reservationAcceptanceFundingTxLookupWorkers
+	if workers > len(candidates) {
+		workers = len(candidates)
+	}
+	dispatchSlots := make(chan struct{}, workers)
+
+	// The dispatcher below walks candidates in their given (oldest-first)
+	// order, acquiring a dispatchSlots slot before starting each one's
+	// fetch, so at most `workers` fetches ever run concurrently -- a
+	// strict bound, the same one the previous eager implementation
+	// enforced with its shared worker goroutines. It gives stop()
+	// priority over dispatching another candidate: it checks
+	// pipeline.stopCh non-blockingly before attempting to acquire a slot,
+	// and returns immediately without acquiring or launching if stop has
+	// already been observed. This narrows, but -- because Go's select can
+	// still occasionally choose an already-ready dispatchSlots send over
+	// an already-closed stopCh in the slot-acquisition select below --
+	// does not strictly eliminate, the window in which one extra
+	// candidate's fetch can be launched after the caller calls stop().
+	go func() {
+		for i, candidate := range candidates {
+			select {
+			case <-pipeline.stopCh:
+				return
+			default:
+			}
+
+			select {
+			case dispatchSlots <- struct{}{}:
+			case <-pipeline.stopCh:
+				return
+			}
+
+			go func(i int, candidate *reservationAcceptanceFundingTxCandidate) {
+				defer func() { <-dispatchSlots }()
+
+				var lookup reservationAcceptanceFundingTxLookup
+				fundingTxHash := candidate.event.FundingTxHash
+
+				fundingTx, err := rat.btcChain.GetTransaction(fundingTxHash)
+				if err != nil {
+					lookup.fundingTxErr = err
+					pipeline.results[i] <- lookup
+					return
+				}
+				lookup.fundingTx = fundingTx
+
+				fetchCtx, cancelFetchCtx := context.WithTimeout(
+					context.Background(),
+					rat.fundingTxLookupTimeout,
+				)
+				confirmations, err := rat.btcChain.GetTransactionConfirmations(
+					fetchCtx,
+					fundingTxHash,
+				)
+				cancelFetchCtx()
+				if err != nil {
+					lookup.confirmationsErr = err
+					pipeline.results[i] <- lookup
+					return
+				}
+				lookup.confirmations = confirmations
+
+				pipeline.results[i] <- lookup
+			}(i, candidate)
+		}
+	}()
+
+	return pipeline
 }
 
 // hasPendingAction reports whether the on-chain reservation action

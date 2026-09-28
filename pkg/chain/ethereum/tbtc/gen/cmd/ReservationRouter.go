@@ -61,15 +61,17 @@ func init() {
 		rrReservationRouterCommand(),
 		rrReservationsCommand(),
 		rrReservedDepositWalletCommand(),
-		rrWalletReservationsCommand(),
 		rrWalletReservationsAmountCommand(),
 		rrWalletReservationsCountCommand(),
+		rrForceStaleReservedDepositCommand(),
 		rrNotifyReservationAcceptanceTimedOutCommand(),
+		rrNotifyReservationActionTimeoutCommand(),
 		rrNotifyReservationStrandedCommand(),
 		rrNotifyStaleReservedDepositCommand(),
 		rrRequestReservationAcceptanceCommand(),
 		rrRequestReservationReanchorCommand(),
-		rrSubmitReservationProofCommand(),
+		rrSubmitReservationAcceptanceProofCommand(),
+		rrSubmitReservationReanchorProofCommand(),
 		rrTransferGovernanceCommand(),
 		rrUpdateReservationCapsCommand(),
 		rrUpdateReservationParametersCommand(),
@@ -472,49 +474,6 @@ func rrReservedDepositWallet(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func rrWalletReservationsCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "wallet-reservations [arg_walletPubKeyHash]",
-		Short:                 "Calls the view method walletReservations on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(1),
-		RunE:                  rrWalletReservations,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	cmd.InitConstFlags(c)
-
-	return c
-}
-
-func rrWalletReservations(c *cobra.Command, args []string) error {
-	contract, err := initializeReservationRouter(c)
-	if err != nil {
-		return err
-	}
-
-	arg_walletPubKeyHash, err := decode.ParseBytes20(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_walletPubKeyHash, a bytes20, from passed value %v",
-			args[0],
-		)
-	}
-
-	result, err := contract.WalletReservationsAtBlock(
-		arg_walletPubKeyHash,
-		cmd.BlockFlagValue.Int,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	cmd.PrintOutput(result)
-
-	return nil
-}
-
 func rrWalletReservationsAmountCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "wallet-reservations-amount [arg_walletPubKeyHash]",
@@ -603,6 +562,71 @@ func rrWalletReservationsCount(c *cobra.Command, args []string) error {
 
 /// ------------------- Non-const methods -------------------
 
+func rrForceStaleReservedDepositCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "force-stale-reserved-deposit [arg_depositKey]",
+		Short:                 "Calls the nonpayable method forceStaleReservedDeposit on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  rrForceStaleReservedDeposit,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func rrForceStaleReservedDeposit(c *cobra.Command, args []string) error {
+	contract, err := initializeReservationRouter(c)
+	if err != nil {
+		return err
+	}
+
+	arg_depositKey, err := hexutil.DecodeBig(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_depositKey, a uint256, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.ForceStaleReservedDeposit(
+			arg_depositKey,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallForceStaleReservedDeposit(
+			arg_depositKey,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
 func rrNotifyReservationAcceptanceTimedOutCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "notify-reservation-acceptance-timed-out [arg_reservationKey]",
@@ -650,6 +674,71 @@ func rrNotifyReservationAcceptanceTimedOut(c *cobra.Command, args []string) erro
 	} else {
 		// Do a call.
 		err = contract.CallNotifyReservationAcceptanceTimedOut(
+			arg_reservationKey,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func rrNotifyReservationActionTimeoutCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "notify-reservation-action-timeout [arg_reservationKey]",
+		Short:                 "Calls the nonpayable method notifyReservationActionTimeout on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  rrNotifyReservationActionTimeout,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func rrNotifyReservationActionTimeout(c *cobra.Command, args []string) error {
+	contract, err := initializeReservationRouter(c)
+	if err != nil {
+		return err
+	}
+
+	arg_reservationKey, err := hexutil.DecodeBig(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_reservationKey, a uint256, from passed value %v",
+			args[0],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.NotifyReservationActionTimeout(
+			arg_reservationKey,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallNotifyReservationActionTimeout(
 			arg_reservationKey,
 			cmd.BlockFlagValue.Int,
 		)
@@ -946,12 +1035,12 @@ func rrRequestReservationReanchor(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func rrSubmitReservationProofCommand() *cobra.Command {
+func rrSubmitReservationAcceptanceProofCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "submit-reservation-proof [arg_proofType] [arg_txInfo_json] [arg_proof_json] [arg_mainUtxo_json] [arg_reservationKey] [arg_requestNonce]",
-		Short:                 "Calls the nonpayable method submitReservationProof on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(6),
-		RunE:                  rrSubmitReservationProof,
+		Use:                   "submit-reservation-acceptance-proof [arg_txInfo_json] [arg_proof_json] [arg_reservationKey] [arg_requestNonce]",
+		Short:                 "Calls the nonpayable method submitReservationAcceptanceProof on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(4),
+		RunE:                  rrSubmitReservationAcceptanceProof,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
 	}
@@ -962,46 +1051,33 @@ func rrSubmitReservationProofCommand() *cobra.Command {
 	return c
 }
 
-func rrSubmitReservationProof(c *cobra.Command, args []string) error {
+func rrSubmitReservationAcceptanceProof(c *cobra.Command, args []string) error {
 	contract, err := initializeReservationRouter(c)
 	if err != nil {
 		return err
 	}
 
-	arg_proofType, err := decode.ParseUint[uint8](args[0], 8)
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_proofType, a uint8, from passed value %v",
-			args[0],
-		)
-	}
-
 	arg_txInfo_json := abi.BitcoinTxInfo4{}
-	if err := json.Unmarshal([]byte(args[1]), &arg_txInfo_json); err != nil {
+	if err := json.Unmarshal([]byte(args[0]), &arg_txInfo_json); err != nil {
 		return fmt.Errorf("failed to unmarshal arg_txInfo_json to abi.BitcoinTxInfo4: %w", err)
 	}
 
 	arg_proof_json := abi.BitcoinTxProof3{}
-	if err := json.Unmarshal([]byte(args[2]), &arg_proof_json); err != nil {
+	if err := json.Unmarshal([]byte(args[1]), &arg_proof_json); err != nil {
 		return fmt.Errorf("failed to unmarshal arg_proof_json to abi.BitcoinTxProof3: %w", err)
 	}
-
-	arg_mainUtxo_json := abi.BitcoinTxUTXO4{}
-	if err := json.Unmarshal([]byte(args[3]), &arg_mainUtxo_json); err != nil {
-		return fmt.Errorf("failed to unmarshal arg_mainUtxo_json to abi.BitcoinTxUTXO4: %w", err)
-	}
-	arg_reservationKey, err := hexutil.DecodeBig(args[4])
+	arg_reservationKey, err := hexutil.DecodeBig(args[2])
 	if err != nil {
 		return fmt.Errorf(
 			"couldn't parse parameter arg_reservationKey, a uint256, from passed value %v",
-			args[4],
+			args[2],
 		)
 	}
-	arg_requestNonce, err := decode.ParseUint[uint64](args[5], 64)
+	arg_requestNonce, err := decode.ParseUint[uint64](args[3], 64)
 	if err != nil {
 		return fmt.Errorf(
 			"couldn't parse parameter arg_requestNonce, a uint64, from passed value %v",
-			args[5],
+			args[3],
 		)
 	}
 
@@ -1011,11 +1087,9 @@ func rrSubmitReservationProof(c *cobra.Command, args []string) error {
 
 	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
 		// Do a regular submission. Take payable into account.
-		transaction, err = contract.SubmitReservationProof(
-			arg_proofType,
+		transaction, err = contract.SubmitReservationAcceptanceProof(
 			arg_txInfo_json,
 			arg_proof_json,
-			arg_mainUtxo_json,
 			arg_reservationKey,
 			arg_requestNonce,
 		)
@@ -1026,11 +1100,96 @@ func rrSubmitReservationProof(c *cobra.Command, args []string) error {
 		cmd.PrintOutput(transaction.Hash())
 	} else {
 		// Do a call.
-		err = contract.CallSubmitReservationProof(
-			arg_proofType,
+		err = contract.CallSubmitReservationAcceptanceProof(
 			arg_txInfo_json,
 			arg_proof_json,
-			arg_mainUtxo_json,
+			arg_reservationKey,
+			arg_requestNonce,
+			cmd.BlockFlagValue.Int,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput("success")
+
+		cmd.PrintOutput(
+			"the transaction was not submitted to the chain; " +
+				"please add the `--submit` flag",
+		)
+	}
+
+	return nil
+}
+
+func rrSubmitReservationReanchorProofCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "submit-reservation-reanchor-proof [arg_txInfo_json] [arg_proof_json] [arg_reservationKey] [arg_requestNonce]",
+		Short:                 "Calls the nonpayable method submitReservationReanchorProof on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(4),
+		RunE:                  rrSubmitReservationReanchorProof,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	c.PreRunE = cmd.NonConstArgsChecker
+	cmd.InitNonConstFlags(c)
+
+	return c
+}
+
+func rrSubmitReservationReanchorProof(c *cobra.Command, args []string) error {
+	contract, err := initializeReservationRouter(c)
+	if err != nil {
+		return err
+	}
+
+	arg_txInfo_json := abi.BitcoinTxInfo4{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_txInfo_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_txInfo_json to abi.BitcoinTxInfo4: %w", err)
+	}
+
+	arg_proof_json := abi.BitcoinTxProof3{}
+	if err := json.Unmarshal([]byte(args[1]), &arg_proof_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_proof_json to abi.BitcoinTxProof3: %w", err)
+	}
+	arg_reservationKey, err := hexutil.DecodeBig(args[2])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_reservationKey, a uint256, from passed value %v",
+			args[2],
+		)
+	}
+	arg_requestNonce, err := decode.ParseUint[uint64](args[3], 64)
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_requestNonce, a uint64, from passed value %v",
+			args[3],
+		)
+	}
+
+	var (
+		transaction *types.Transaction
+	)
+
+	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
+		// Do a regular submission. Take payable into account.
+		transaction, err = contract.SubmitReservationReanchorProof(
+			arg_txInfo_json,
+			arg_proof_json,
+			arg_reservationKey,
+			arg_requestNonce,
+		)
+		if err != nil {
+			return err
+		}
+
+		cmd.PrintOutput(transaction.Hash())
+	} else {
+		// Do a call.
+		err = contract.CallSubmitReservationReanchorProof(
+			arg_txInfo_json,
+			arg_proof_json,
 			arg_reservationKey,
 			arg_requestNonce,
 			cmd.BlockFlagValue.Int,

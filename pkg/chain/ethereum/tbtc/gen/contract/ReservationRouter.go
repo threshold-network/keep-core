@@ -105,18 +105,16 @@ func NewReservationRouter(
 // ----- Non-const Methods ------
 
 // Transaction submission.
-func (rr *ReservationRouter) NotifyReservationActionTimeout(
-	arg_reservationKey *big.Int,
-	arg_walletMembersIDs []uint32,
+func (rr *ReservationRouter) ForceStaleReservedDeposit(
+	arg_depositKey *big.Int,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
 	rrLogger.Debug(
-		"submitting transaction notifyReservationActionTimeout",
+		"submitting transaction forceStaleReservedDeposit",
 		" params: ",
 		fmt.Sprint(
-			arg_reservationKey,
-			arg_walletMembersIDs,
+			arg_depositKey,
 		),
 	)
 
@@ -142,24 +140,22 @@ func (rr *ReservationRouter) NotifyReservationActionTimeout(
 
 	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
 
-	transaction, err := rr.contract.NotifyReservationActionTimeout(
+	transaction, err := rr.contract.ForceStaleReservedDeposit(
 		transactorOptions,
-		arg_reservationKey,
-		arg_walletMembersIDs,
+		arg_depositKey,
 	)
 	if err != nil {
 		return transaction, rr.errorResolver.ResolveError(
 			err,
 			rr.transactorOptions.From,
 			nil,
-			"notifyReservationActionTimeout",
-			arg_reservationKey,
-			arg_walletMembersIDs,
+			"forceStaleReservedDeposit",
+			arg_depositKey,
 		)
 	}
 
 	rrLogger.Infof(
-		"submitted transaction notifyReservationActionTimeout with id: [%s] and nonce [%v]",
+		"submitted transaction forceStaleReservedDeposit with id: [%s] and nonce [%v]",
 		transaction.Hash(),
 		transaction.Nonce(),
 	)
@@ -178,24 +174,22 @@ func (rr *ReservationRouter) NotifyReservationActionTimeout(
 				newTransactorOptions.GasLimit = transactorOptions.GasLimit
 			}
 
-			transaction, err := rr.contract.NotifyReservationActionTimeout(
+			transaction, err := rr.contract.ForceStaleReservedDeposit(
 				newTransactorOptions,
-				arg_reservationKey,
-				arg_walletMembersIDs,
+				arg_depositKey,
 			)
 			if err != nil {
 				return nil, rr.errorResolver.ResolveError(
 					err,
 					rr.transactorOptions.From,
 					nil,
-					"notifyReservationActionTimeout",
-					arg_reservationKey,
-					arg_walletMembersIDs,
+					"forceStaleReservedDeposit",
+					arg_depositKey,
 				)
 			}
 
 			rrLogger.Infof(
-				"submitted transaction notifyReservationActionTimeout with id: [%s] and nonce [%v]",
+				"submitted transaction forceStaleReservedDeposit with id: [%s] and nonce [%v]",
 				transaction.Hash(),
 				transaction.Nonce(),
 			)
@@ -210,9 +204,8 @@ func (rr *ReservationRouter) NotifyReservationActionTimeout(
 }
 
 // Non-mutating call, not a transaction submission.
-func (rr *ReservationRouter) CallNotifyReservationActionTimeout(
-	arg_reservationKey *big.Int,
-	arg_walletMembersIDs []uint32,
+func (rr *ReservationRouter) CallForceStaleReservedDeposit(
+	arg_depositKey *big.Int,
 	blockNumber *big.Int,
 ) error {
 	var result interface{} = nil
@@ -224,167 +217,26 @@ func (rr *ReservationRouter) CallNotifyReservationActionTimeout(
 		rr.caller,
 		rr.errorResolver,
 		rr.contractAddress,
-		"notifyReservationActionTimeout",
+		"forceStaleReservedDeposit",
 		&result,
-		arg_reservationKey,
-		arg_walletMembersIDs,
+		arg_depositKey,
 	)
 
 	return err
 }
 
-func (rr *ReservationRouter) NotifyReservationActionTimeoutGasEstimate(
-	arg_reservationKey *big.Int,
-	arg_walletMembersIDs []uint32,
+func (rr *ReservationRouter) ForceStaleReservedDepositGasEstimate(
+	arg_depositKey *big.Int,
 ) (uint64, error) {
 	var result uint64
 
 	result, err := chainutil.EstimateGas(
 		rr.callerOptions.From,
 		rr.contractAddress,
-		"notifyReservationActionTimeout",
+		"forceStaleReservedDeposit",
 		rr.contractABI,
 		rr.transactor,
-		arg_reservationKey,
-		arg_walletMembersIDs,
-	)
-
-	return result, err
-}
-
-// Transaction submission.
-func (rr *ReservationRouter) NotifyReservationStranded(
-	arg_reservationKey *big.Int,
-
-	transactionOptions ...chainutil.TransactionOptions,
-) (*types.Transaction, error) {
-	rrLogger.Debug(
-		"submitting transaction notifyReservationStranded",
-		" params: ",
-		fmt.Sprint(
-			arg_reservationKey,
-		),
-	)
-
-	rr.transactionMutex.Lock()
-	defer rr.transactionMutex.Unlock()
-
-	// create a copy
-	transactorOptions := new(bind.TransactOpts)
-	*transactorOptions = *rr.transactorOptions
-
-	if len(transactionOptions) > 1 {
-		return nil, fmt.Errorf(
-			"could not process multiple transaction options sets",
-		)
-	} else if len(transactionOptions) > 0 {
-		transactionOptions[0].Apply(transactorOptions)
-	}
-
-	nonce, err := rr.nonceManager.CurrentNonce()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
-	}
-
-	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
-
-	transaction, err := rr.contract.NotifyReservationStranded(
-		transactorOptions,
-		arg_reservationKey,
-	)
-	if err != nil {
-		return transaction, rr.errorResolver.ResolveError(
-			err,
-			rr.transactorOptions.From,
-			nil,
-			"notifyReservationStranded",
-			arg_reservationKey,
-		)
-	}
-
-	rrLogger.Infof(
-		"submitted transaction notifyReservationStranded with id: [%s] and nonce [%v]",
-		transaction.Hash(),
-		transaction.Nonce(),
-	)
-
-	go rr.miningWaiter.ForceMining(
-		transaction,
-		transactorOptions,
-		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
-			// If original transactor options has a non-zero gas limit, that
-			// means the client code set it on their own. In that case, we
-			// should rewrite the gas limit from the original transaction
-			// for each resubmission. If the gas limit is not set by the client
-			// code, let the the submitter re-estimate the gas limit on each
-			// resubmission.
-			if transactorOptions.GasLimit != 0 {
-				newTransactorOptions.GasLimit = transactorOptions.GasLimit
-			}
-
-			transaction, err := rr.contract.NotifyReservationStranded(
-				newTransactorOptions,
-				arg_reservationKey,
-			)
-			if err != nil {
-				return nil, rr.errorResolver.ResolveError(
-					err,
-					rr.transactorOptions.From,
-					nil,
-					"notifyReservationStranded",
-					arg_reservationKey,
-				)
-			}
-
-			rrLogger.Infof(
-				"submitted transaction notifyReservationStranded with id: [%s] and nonce [%v]",
-				transaction.Hash(),
-				transaction.Nonce(),
-			)
-
-			return transaction, nil
-		},
-	)
-
-	rr.nonceManager.IncrementNonce()
-
-	return transaction, err
-}
-
-// Non-mutating call, not a transaction submission.
-func (rr *ReservationRouter) CallNotifyReservationStranded(
-	arg_reservationKey *big.Int,
-	blockNumber *big.Int,
-) error {
-	var result interface{} = nil
-
-	err := chainutil.CallAtBlock(
-		rr.transactorOptions.From,
-		blockNumber, nil,
-		rr.contractABI,
-		rr.caller,
-		rr.errorResolver,
-		rr.contractAddress,
-		"notifyReservationStranded",
-		&result,
-		arg_reservationKey,
-	)
-
-	return err
-}
-
-func (rr *ReservationRouter) NotifyReservationStrandedGasEstimate(
-	arg_reservationKey *big.Int,
-) (uint64, error) {
-	var result uint64
-
-	result, err := chainutil.EstimateGas(
-		rr.callerOptions.From,
-		rr.contractAddress,
-		"notifyReservationStranded",
-		rr.contractABI,
-		rr.transactor,
-		arg_reservationKey,
+		arg_depositKey,
 	)
 
 	return result, err
@@ -520,6 +372,282 @@ func (rr *ReservationRouter) NotifyReservationAcceptanceTimedOutGasEstimate(
 		rr.callerOptions.From,
 		rr.contractAddress,
 		"notifyReservationAcceptanceTimedOut",
+		rr.contractABI,
+		rr.transactor,
+		arg_reservationKey,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (rr *ReservationRouter) NotifyReservationActionTimeout(
+	arg_reservationKey *big.Int,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	rrLogger.Debug(
+		"submitting transaction notifyReservationActionTimeout",
+		" params: ",
+		fmt.Sprint(
+			arg_reservationKey,
+		),
+	)
+
+	rr.transactionMutex.Lock()
+	defer rr.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *rr.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := rr.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := rr.contract.NotifyReservationActionTimeout(
+		transactorOptions,
+		arg_reservationKey,
+	)
+	if err != nil {
+		return transaction, rr.errorResolver.ResolveError(
+			err,
+			rr.transactorOptions.From,
+			nil,
+			"notifyReservationActionTimeout",
+			arg_reservationKey,
+		)
+	}
+
+	rrLogger.Infof(
+		"submitted transaction notifyReservationActionTimeout with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go rr.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := rr.contract.NotifyReservationActionTimeout(
+				newTransactorOptions,
+				arg_reservationKey,
+			)
+			if err != nil {
+				return nil, rr.errorResolver.ResolveError(
+					err,
+					rr.transactorOptions.From,
+					nil,
+					"notifyReservationActionTimeout",
+					arg_reservationKey,
+				)
+			}
+
+			rrLogger.Infof(
+				"submitted transaction notifyReservationActionTimeout with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	rr.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (rr *ReservationRouter) CallNotifyReservationActionTimeout(
+	arg_reservationKey *big.Int,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		rr.transactorOptions.From,
+		blockNumber, nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"notifyReservationActionTimeout",
+		&result,
+		arg_reservationKey,
+	)
+
+	return err
+}
+
+func (rr *ReservationRouter) NotifyReservationActionTimeoutGasEstimate(
+	arg_reservationKey *big.Int,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		rr.callerOptions.From,
+		rr.contractAddress,
+		"notifyReservationActionTimeout",
+		rr.contractABI,
+		rr.transactor,
+		arg_reservationKey,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (rr *ReservationRouter) NotifyReservationStranded(
+	arg_reservationKey *big.Int,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	rrLogger.Debug(
+		"submitting transaction notifyReservationStranded",
+		" params: ",
+		fmt.Sprint(
+			arg_reservationKey,
+		),
+	)
+
+	rr.transactionMutex.Lock()
+	defer rr.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *rr.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := rr.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := rr.contract.NotifyReservationStranded(
+		transactorOptions,
+		arg_reservationKey,
+	)
+	if err != nil {
+		return transaction, rr.errorResolver.ResolveError(
+			err,
+			rr.transactorOptions.From,
+			nil,
+			"notifyReservationStranded",
+			arg_reservationKey,
+		)
+	}
+
+	rrLogger.Infof(
+		"submitted transaction notifyReservationStranded with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go rr.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := rr.contract.NotifyReservationStranded(
+				newTransactorOptions,
+				arg_reservationKey,
+			)
+			if err != nil {
+				return nil, rr.errorResolver.ResolveError(
+					err,
+					rr.transactorOptions.From,
+					nil,
+					"notifyReservationStranded",
+					arg_reservationKey,
+				)
+			}
+
+			rrLogger.Infof(
+				"submitted transaction notifyReservationStranded with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	rr.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (rr *ReservationRouter) CallNotifyReservationStranded(
+	arg_reservationKey *big.Int,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		rr.transactorOptions.From,
+		blockNumber, nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"notifyReservationStranded",
+		&result,
+		arg_reservationKey,
+	)
+
+	return err
+}
+
+func (rr *ReservationRouter) NotifyReservationStrandedGasEstimate(
+	arg_reservationKey *big.Int,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		rr.callerOptions.From,
+		rr.contractAddress,
+		"notifyReservationStranded",
 		rr.contractABI,
 		rr.transactor,
 		arg_reservationKey,
@@ -963,24 +1091,20 @@ func (rr *ReservationRouter) RequestReservationReanchorGasEstimate(
 }
 
 // Transaction submission.
-func (rr *ReservationRouter) SubmitReservationProof(
-	arg_proofType uint8,
+func (rr *ReservationRouter) SubmitReservationAcceptanceProof(
 	arg_txInfo abi.BitcoinTxInfo4,
 	arg_proof abi.BitcoinTxProof3,
-	arg_mainUtxo abi.BitcoinTxUTXO4,
 	arg_reservationKey *big.Int,
 	arg_requestNonce uint64,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
 	rrLogger.Debug(
-		"submitting transaction submitReservationProof",
+		"submitting transaction submitReservationAcceptanceProof",
 		" params: ",
 		fmt.Sprint(
-			arg_proofType,
 			arg_txInfo,
 			arg_proof,
-			arg_mainUtxo,
 			arg_reservationKey,
 			arg_requestNonce,
 		),
@@ -1008,12 +1132,10 @@ func (rr *ReservationRouter) SubmitReservationProof(
 
 	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
 
-	transaction, err := rr.contract.SubmitReservationProof(
+	transaction, err := rr.contract.SubmitReservationAcceptanceProof(
 		transactorOptions,
-		arg_proofType,
 		arg_txInfo,
 		arg_proof,
-		arg_mainUtxo,
 		arg_reservationKey,
 		arg_requestNonce,
 	)
@@ -1022,18 +1144,16 @@ func (rr *ReservationRouter) SubmitReservationProof(
 			err,
 			rr.transactorOptions.From,
 			nil,
-			"submitReservationProof",
-			arg_proofType,
+			"submitReservationAcceptanceProof",
 			arg_txInfo,
 			arg_proof,
-			arg_mainUtxo,
 			arg_reservationKey,
 			arg_requestNonce,
 		)
 	}
 
 	rrLogger.Infof(
-		"submitted transaction submitReservationProof with id: [%s] and nonce [%v]",
+		"submitted transaction submitReservationAcceptanceProof with id: [%s] and nonce [%v]",
 		transaction.Hash(),
 		transaction.Nonce(),
 	)
@@ -1052,12 +1172,10 @@ func (rr *ReservationRouter) SubmitReservationProof(
 				newTransactorOptions.GasLimit = transactorOptions.GasLimit
 			}
 
-			transaction, err := rr.contract.SubmitReservationProof(
+			transaction, err := rr.contract.SubmitReservationAcceptanceProof(
 				newTransactorOptions,
-				arg_proofType,
 				arg_txInfo,
 				arg_proof,
-				arg_mainUtxo,
 				arg_reservationKey,
 				arg_requestNonce,
 			)
@@ -1066,18 +1184,16 @@ func (rr *ReservationRouter) SubmitReservationProof(
 					err,
 					rr.transactorOptions.From,
 					nil,
-					"submitReservationProof",
-					arg_proofType,
+					"submitReservationAcceptanceProof",
 					arg_txInfo,
 					arg_proof,
-					arg_mainUtxo,
 					arg_reservationKey,
 					arg_requestNonce,
 				)
 			}
 
 			rrLogger.Infof(
-				"submitted transaction submitReservationProof with id: [%s] and nonce [%v]",
+				"submitted transaction submitReservationAcceptanceProof with id: [%s] and nonce [%v]",
 				transaction.Hash(),
 				transaction.Nonce(),
 			)
@@ -1092,11 +1208,9 @@ func (rr *ReservationRouter) SubmitReservationProof(
 }
 
 // Non-mutating call, not a transaction submission.
-func (rr *ReservationRouter) CallSubmitReservationProof(
-	arg_proofType uint8,
+func (rr *ReservationRouter) CallSubmitReservationAcceptanceProof(
 	arg_txInfo abi.BitcoinTxInfo4,
 	arg_proof abi.BitcoinTxProof3,
-	arg_mainUtxo abi.BitcoinTxUTXO4,
 	arg_reservationKey *big.Int,
 	arg_requestNonce uint64,
 	blockNumber *big.Int,
@@ -1110,12 +1224,10 @@ func (rr *ReservationRouter) CallSubmitReservationProof(
 		rr.caller,
 		rr.errorResolver,
 		rr.contractAddress,
-		"submitReservationProof",
+		"submitReservationAcceptanceProof",
 		&result,
-		arg_proofType,
 		arg_txInfo,
 		arg_proof,
-		arg_mainUtxo,
 		arg_reservationKey,
 		arg_requestNonce,
 	)
@@ -1123,11 +1235,9 @@ func (rr *ReservationRouter) CallSubmitReservationProof(
 	return err
 }
 
-func (rr *ReservationRouter) SubmitReservationProofGasEstimate(
-	arg_proofType uint8,
+func (rr *ReservationRouter) SubmitReservationAcceptanceProofGasEstimate(
 	arg_txInfo abi.BitcoinTxInfo4,
 	arg_proof abi.BitcoinTxProof3,
-	arg_mainUtxo abi.BitcoinTxUTXO4,
 	arg_reservationKey *big.Int,
 	arg_requestNonce uint64,
 ) (uint64, error) {
@@ -1136,13 +1246,179 @@ func (rr *ReservationRouter) SubmitReservationProofGasEstimate(
 	result, err := chainutil.EstimateGas(
 		rr.callerOptions.From,
 		rr.contractAddress,
-		"submitReservationProof",
+		"submitReservationAcceptanceProof",
 		rr.contractABI,
 		rr.transactor,
-		arg_proofType,
 		arg_txInfo,
 		arg_proof,
-		arg_mainUtxo,
+		arg_reservationKey,
+		arg_requestNonce,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (rr *ReservationRouter) SubmitReservationReanchorProof(
+	arg_txInfo abi.BitcoinTxInfo4,
+	arg_proof abi.BitcoinTxProof3,
+	arg_reservationKey *big.Int,
+	arg_requestNonce uint64,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	rrLogger.Debug(
+		"submitting transaction submitReservationReanchorProof",
+		" params: ",
+		fmt.Sprint(
+			arg_txInfo,
+			arg_proof,
+			arg_reservationKey,
+			arg_requestNonce,
+		),
+	)
+
+	rr.transactionMutex.Lock()
+	defer rr.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *rr.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := rr.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := rr.contract.SubmitReservationReanchorProof(
+		transactorOptions,
+		arg_txInfo,
+		arg_proof,
+		arg_reservationKey,
+		arg_requestNonce,
+	)
+	if err != nil {
+		return transaction, rr.errorResolver.ResolveError(
+			err,
+			rr.transactorOptions.From,
+			nil,
+			"submitReservationReanchorProof",
+			arg_txInfo,
+			arg_proof,
+			arg_reservationKey,
+			arg_requestNonce,
+		)
+	}
+
+	rrLogger.Infof(
+		"submitted transaction submitReservationReanchorProof with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go rr.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := rr.contract.SubmitReservationReanchorProof(
+				newTransactorOptions,
+				arg_txInfo,
+				arg_proof,
+				arg_reservationKey,
+				arg_requestNonce,
+			)
+			if err != nil {
+				return nil, rr.errorResolver.ResolveError(
+					err,
+					rr.transactorOptions.From,
+					nil,
+					"submitReservationReanchorProof",
+					arg_txInfo,
+					arg_proof,
+					arg_reservationKey,
+					arg_requestNonce,
+				)
+			}
+
+			rrLogger.Infof(
+				"submitted transaction submitReservationReanchorProof with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	rr.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (rr *ReservationRouter) CallSubmitReservationReanchorProof(
+	arg_txInfo abi.BitcoinTxInfo4,
+	arg_proof abi.BitcoinTxProof3,
+	arg_reservationKey *big.Int,
+	arg_requestNonce uint64,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		rr.transactorOptions.From,
+		blockNumber, nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"submitReservationReanchorProof",
+		&result,
+		arg_txInfo,
+		arg_proof,
+		arg_reservationKey,
+		arg_requestNonce,
+	)
+
+	return err
+}
+
+func (rr *ReservationRouter) SubmitReservationReanchorProofGasEstimate(
+	arg_txInfo abi.BitcoinTxInfo4,
+	arg_proof abi.BitcoinTxProof3,
+	arg_reservationKey *big.Int,
+	arg_requestNonce uint64,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		rr.callerOptions.From,
+		rr.contractAddress,
+		"submitReservationReanchorProof",
+		rr.contractABI,
+		rr.transactor,
+		arg_txInfo,
+		arg_proof,
 		arg_reservationKey,
 		arg_requestNonce,
 	)
@@ -1881,6 +2157,7 @@ func (rr *ReservationRouter) ReservationByAnchorUtxoAtBlock(
 type reservationCaps struct {
 	MaxReservationsAmountPerWallet uint64
 	ReservationMaxSingleAmount     uint64
+	MaxActiveReservations          uint32
 }
 
 func (rr *ReservationRouter) ReservationCaps() (reservationCaps, error) {
@@ -2088,49 +2365,6 @@ func (rr *ReservationRouter) ReservedDepositWalletAtBlock(
 		"reservedDepositWallet",
 		&result,
 		arg_depositKey,
-	)
-
-	return result, err
-}
-
-func (rr *ReservationRouter) WalletReservations(
-	arg_walletPubKeyHash [20]byte,
-) ([]*big.Int, error) {
-	result, err := rr.contract.WalletReservations(
-		rr.callerOptions,
-		arg_walletPubKeyHash,
-	)
-
-	if err != nil {
-		return result, rr.errorResolver.ResolveError(
-			err,
-			rr.callerOptions.From,
-			nil,
-			"walletReservations",
-			arg_walletPubKeyHash,
-		)
-	}
-
-	return result, err
-}
-
-func (rr *ReservationRouter) WalletReservationsAtBlock(
-	arg_walletPubKeyHash [20]byte,
-	blockNumber *big.Int,
-) ([]*big.Int, error) {
-	var result []*big.Int
-
-	err := chainutil.CallAtBlock(
-		rr.callerOptions.From,
-		blockNumber,
-		nil,
-		rr.contractABI,
-		rr.caller,
-		rr.errorResolver,
-		rr.contractAddress,
-		"walletReservations",
-		&result,
-		arg_walletPubKeyHash,
 	)
 
 	return result, err
@@ -2791,6 +3025,196 @@ func (rr *ReservationRouter) PastReservationAcceptanceRequestedEvents(
 	return events, nil
 }
 
+func (rr *ReservationRouter) ReservationAcceptanceTimedOutEvent(
+	opts *ethereum.SubscribeOpts,
+	reservationKeyFilter []*big.Int,
+) *RrReservationAcceptanceTimedOutSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &RrReservationAcceptanceTimedOutSubscription{
+		rr,
+		opts,
+		reservationKeyFilter,
+	}
+}
+
+type RrReservationAcceptanceTimedOutSubscription struct {
+	contract             *ReservationRouter
+	opts                 *ethereum.SubscribeOpts
+	reservationKeyFilter []*big.Int
+}
+
+type reservationRouterReservationAcceptanceTimedOutFunc func(
+	ReservationKey *big.Int,
+	RequestNonce uint64,
+	blockNumber uint64,
+)
+
+func (ratos *RrReservationAcceptanceTimedOutSubscription) OnEvent(
+	handler reservationRouterReservationAcceptanceTimedOutFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.ReservationRouterReservationAcceptanceTimedOut)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.ReservationKey,
+					event.RequestNonce,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := ratos.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (ratos *RrReservationAcceptanceTimedOutSubscription) Pipe(
+	sink chan *abi.ReservationRouterReservationAcceptanceTimedOut,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(ratos.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := ratos.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - ratos.opts.PastBlocks
+
+				rrLogger.Infof(
+					"subscription monitoring fetching past ReservationAcceptanceTimedOut events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := ratos.contract.PastReservationAcceptanceTimedOutEvents(
+					fromBlock,
+					nil,
+					ratos.reservationKeyFilter,
+				)
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				rrLogger.Infof(
+					"subscription monitoring fetched [%v] past ReservationAcceptanceTimedOut events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := ratos.contract.watchReservationAcceptanceTimedOut(
+		sink,
+		ratos.reservationKeyFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rr *ReservationRouter) watchReservationAcceptanceTimedOut(
+	sink chan *abi.ReservationRouterReservationAcceptanceTimedOut,
+	reservationKeyFilter []*big.Int,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return rr.contract.WatchReservationAcceptanceTimedOut(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			reservationKeyFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		rrLogger.Warnf(
+			"subscription to event ReservationAcceptanceTimedOut had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		rrLogger.Errorf(
+			"subscription to event ReservationAcceptanceTimedOut failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (rr *ReservationRouter) PastReservationAcceptanceTimedOutEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	reservationKeyFilter []*big.Int,
+) ([]*abi.ReservationRouterReservationAcceptanceTimedOut, error) {
+	iterator, err := rr.contract.FilterReservationAcceptanceTimedOut(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		reservationKeyFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past ReservationAcceptanceTimedOut events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.ReservationRouterReservationAcceptanceTimedOut, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
 func (rr *ReservationRouter) ReservationAcceptedEvent(
 	opts *ethereum.SubscribeOpts,
 	reservationKeyFilter []*big.Int,
@@ -3199,198 +3623,6 @@ func (rr *ReservationRouter) PastReservationActionSupersededEvents(
 	return events, nil
 }
 
-func (rr *ReservationRouter) ReservationActionTimedOutEvent(
-	opts *ethereum.SubscribeOpts,
-	reservationKeyFilter []*big.Int,
-) *RrReservationActionTimedOutSubscription {
-	if opts == nil {
-		opts = new(ethereum.SubscribeOpts)
-	}
-	if opts.Tick == 0 {
-		opts.Tick = chainutil.DefaultSubscribeOptsTick
-	}
-	if opts.PastBlocks == 0 {
-		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
-	}
-
-	return &RrReservationActionTimedOutSubscription{
-		rr,
-		opts,
-		reservationKeyFilter,
-	}
-}
-
-type RrReservationActionTimedOutSubscription struct {
-	contract             *ReservationRouter
-	opts                 *ethereum.SubscribeOpts
-	reservationKeyFilter []*big.Int
-}
-
-type reservationRouterReservationActionTimedOutFunc func(
-	ReservationKey *big.Int,
-	RequestNonce uint64,
-	ActionType uint8,
-	blockNumber uint64,
-)
-
-func (ratos *RrReservationActionTimedOutSubscription) OnEvent(
-	handler reservationRouterReservationActionTimedOutFunc,
-) subscription.EventSubscription {
-	eventChan := make(chan *abi.ReservationRouterReservationActionTimedOut)
-	ctx, cancelCtx := context.WithCancel(context.Background())
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event := <-eventChan:
-				handler(
-					event.ReservationKey,
-					event.RequestNonce,
-					event.ActionType,
-					event.Raw.BlockNumber,
-				)
-			}
-		}
-	}()
-
-	sub := ratos.Pipe(eventChan)
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (ratos *RrReservationActionTimedOutSubscription) Pipe(
-	sink chan *abi.ReservationRouterReservationActionTimedOut,
-) subscription.EventSubscription {
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	go func() {
-		ticker := time.NewTicker(ratos.opts.Tick)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				lastBlock, err := ratos.contract.blockCounter.CurrentBlock()
-				if err != nil {
-					rrLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-				}
-				fromBlock := lastBlock - ratos.opts.PastBlocks
-
-				rrLogger.Infof(
-					"subscription monitoring fetching past ReservationActionTimedOut events "+
-						"starting from block [%v]",
-					fromBlock,
-				)
-				events, err := ratos.contract.PastReservationActionTimedOutEvents(
-					fromBlock,
-					nil,
-					ratos.reservationKeyFilter,
-				)
-				if err != nil {
-					rrLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-					continue
-				}
-				rrLogger.Infof(
-					"subscription monitoring fetched [%v] past ReservationActionTimedOut events",
-					len(events),
-				)
-
-				for _, event := range events {
-					sink <- event
-				}
-			}
-		}
-	}()
-
-	sub := ratos.contract.watchReservationActionTimedOut(
-		sink,
-		ratos.reservationKeyFilter,
-	)
-
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (rr *ReservationRouter) watchReservationActionTimedOut(
-	sink chan *abi.ReservationRouterReservationActionTimedOut,
-	reservationKeyFilter []*big.Int,
-) event.Subscription {
-	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
-		return rr.contract.WatchReservationActionTimedOut(
-			&bind.WatchOpts{Context: ctx},
-			sink,
-			reservationKeyFilter,
-		)
-	}
-
-	thresholdViolatedFn := func(elapsed time.Duration) {
-		rrLogger.Warnf(
-			"subscription to event ReservationActionTimedOut had to be "+
-				"retried [%s] since the last attempt; please inspect "+
-				"host chain connectivity",
-			elapsed,
-		)
-	}
-
-	subscriptionFailedFn := func(err error) {
-		rrLogger.Errorf(
-			"subscription to event ReservationActionTimedOut failed "+
-				"with error: [%v]; resubscription attempt will be "+
-				"performed",
-			err,
-		)
-	}
-
-	return chainutil.WithResubscription(
-		chainutil.SubscriptionBackoffMax,
-		subscribeFn,
-		chainutil.SubscriptionAlertThreshold,
-		thresholdViolatedFn,
-		subscriptionFailedFn,
-	)
-}
-
-func (rr *ReservationRouter) PastReservationActionTimedOutEvents(
-	startBlock uint64,
-	endBlock *uint64,
-	reservationKeyFilter []*big.Int,
-) ([]*abi.ReservationRouterReservationActionTimedOut, error) {
-	iterator, err := rr.contract.FilterReservationActionTimedOut(
-		&bind.FilterOpts{
-			Start: startBlock,
-			End:   endBlock,
-		},
-		reservationKeyFilter,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"error retrieving past ReservationActionTimedOut events: [%v]",
-			err,
-		)
-	}
-
-	events := make([]*abi.ReservationRouterReservationActionTimedOut, 0)
-
-	for iterator.Next() {
-		event := iterator.Event
-		events = append(events, event)
-	}
-
-	return events, nil
-}
-
 func (rr *ReservationRouter) ReservationCapsUpdatedEvent(
 	opts *ethereum.SubscribeOpts,
 ) *RrReservationCapsUpdatedSubscription {
@@ -3757,6 +3989,185 @@ func (rr *ReservationRouter) PastReservationLateSettledEvents(
 	}
 
 	events := make([]*abi.ReservationRouterReservationLateSettled, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (rr *ReservationRouter) ReservationOccupancyChangedEvent(
+	opts *ethereum.SubscribeOpts,
+) *RrReservationOccupancyChangedSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &RrReservationOccupancyChangedSubscription{
+		rr,
+		opts,
+	}
+}
+
+type RrReservationOccupancyChangedSubscription struct {
+	contract *ReservationRouter
+	opts     *ethereum.SubscribeOpts
+}
+
+type reservationRouterReservationOccupancyChangedFunc func(
+	ActiveReservationsCount uint32,
+	blockNumber uint64,
+)
+
+func (rocs *RrReservationOccupancyChangedSubscription) OnEvent(
+	handler reservationRouterReservationOccupancyChangedFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.ReservationRouterReservationOccupancyChanged)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.ActiveReservationsCount,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := rocs.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rocs *RrReservationOccupancyChangedSubscription) Pipe(
+	sink chan *abi.ReservationRouterReservationOccupancyChanged,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(rocs.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := rocs.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - rocs.opts.PastBlocks
+
+				rrLogger.Infof(
+					"subscription monitoring fetching past ReservationOccupancyChanged events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := rocs.contract.PastReservationOccupancyChangedEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				rrLogger.Infof(
+					"subscription monitoring fetched [%v] past ReservationOccupancyChanged events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := rocs.contract.watchReservationOccupancyChanged(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rr *ReservationRouter) watchReservationOccupancyChanged(
+	sink chan *abi.ReservationRouterReservationOccupancyChanged,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return rr.contract.WatchReservationOccupancyChanged(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		rrLogger.Warnf(
+			"subscription to event ReservationOccupancyChanged had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		rrLogger.Errorf(
+			"subscription to event ReservationOccupancyChanged failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (rr *ReservationRouter) PastReservationOccupancyChangedEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.ReservationRouterReservationOccupancyChanged, error) {
+	iterator, err := rr.contract.FilterReservationOccupancyChanged(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past ReservationOccupancyChanged events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.ReservationRouterReservationOccupancyChanged, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -4173,6 +4584,196 @@ func (rr *ReservationRouter) PastReservationReanchorRequestedEvents(
 	return events, nil
 }
 
+func (rr *ReservationRouter) ReservationReanchorTimedOutEvent(
+	opts *ethereum.SubscribeOpts,
+	reservationKeyFilter []*big.Int,
+) *RrReservationReanchorTimedOutSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &RrReservationReanchorTimedOutSubscription{
+		rr,
+		opts,
+		reservationKeyFilter,
+	}
+}
+
+type RrReservationReanchorTimedOutSubscription struct {
+	contract             *ReservationRouter
+	opts                 *ethereum.SubscribeOpts
+	reservationKeyFilter []*big.Int
+}
+
+type reservationRouterReservationReanchorTimedOutFunc func(
+	ReservationKey *big.Int,
+	RequestNonce uint64,
+	blockNumber uint64,
+)
+
+func (rrtos *RrReservationReanchorTimedOutSubscription) OnEvent(
+	handler reservationRouterReservationReanchorTimedOutFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.ReservationRouterReservationReanchorTimedOut)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.ReservationKey,
+					event.RequestNonce,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := rrtos.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rrtos *RrReservationReanchorTimedOutSubscription) Pipe(
+	sink chan *abi.ReservationRouterReservationReanchorTimedOut,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(rrtos.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := rrtos.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - rrtos.opts.PastBlocks
+
+				rrLogger.Infof(
+					"subscription monitoring fetching past ReservationReanchorTimedOut events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := rrtos.contract.PastReservationReanchorTimedOutEvents(
+					fromBlock,
+					nil,
+					rrtos.reservationKeyFilter,
+				)
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				rrLogger.Infof(
+					"subscription monitoring fetched [%v] past ReservationReanchorTimedOut events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := rrtos.contract.watchReservationReanchorTimedOut(
+		sink,
+		rrtos.reservationKeyFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rr *ReservationRouter) watchReservationReanchorTimedOut(
+	sink chan *abi.ReservationRouterReservationReanchorTimedOut,
+	reservationKeyFilter []*big.Int,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return rr.contract.WatchReservationReanchorTimedOut(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			reservationKeyFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		rrLogger.Warnf(
+			"subscription to event ReservationReanchorTimedOut had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		rrLogger.Errorf(
+			"subscription to event ReservationReanchorTimedOut failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (rr *ReservationRouter) PastReservationReanchorTimedOutEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	reservationKeyFilter []*big.Int,
+) ([]*abi.ReservationRouterReservationReanchorTimedOut, error) {
+	iterator, err := rr.contract.FilterReservationReanchorTimedOut(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		reservationKeyFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past ReservationReanchorTimedOut events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.ReservationRouterReservationReanchorTimedOut, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
 func (rr *ReservationRouter) ReservationReanchoredEvent(
 	opts *ethereum.SubscribeOpts,
 	reservationKeyFilter []*big.Int,
@@ -4209,6 +4810,7 @@ type reservationRouterReservationReanchoredFunc func(
 	NewWalletPubKeyHash [20]byte,
 	NewAnchorTxHash [32]byte,
 	NewAnchorAmount uint64,
+	MinerFee uint64,
 	blockNumber uint64,
 )
 
@@ -4230,6 +4832,7 @@ func (rrs *RrReservationReanchoredSubscription) OnEvent(
 					event.NewWalletPubKeyHash,
 					event.NewAnchorTxHash,
 					event.NewAnchorAmount,
+					event.MinerFee,
 					event.Raw.BlockNumber,
 				)
 			}
@@ -4557,185 +5160,6 @@ func (rr *ReservationRouter) PastReservationRetryCreditMintedEvents(
 	}
 
 	events := make([]*abi.ReservationRouterReservationRetryCreditMinted, 0)
-
-	for iterator.Next() {
-		event := iterator.Event
-		events = append(events, event)
-	}
-
-	return events, nil
-}
-
-func (rr *ReservationRouter) ReservationRouterSetEvent(
-	opts *ethereum.SubscribeOpts,
-) *RrReservationRouterSetSubscription {
-	if opts == nil {
-		opts = new(ethereum.SubscribeOpts)
-	}
-	if opts.Tick == 0 {
-		opts.Tick = chainutil.DefaultSubscribeOptsTick
-	}
-	if opts.PastBlocks == 0 {
-		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
-	}
-
-	return &RrReservationRouterSetSubscription{
-		rr,
-		opts,
-	}
-}
-
-type RrReservationRouterSetSubscription struct {
-	contract *ReservationRouter
-	opts     *ethereum.SubscribeOpts
-}
-
-type reservationRouterReservationRouterSetFunc func(
-	ReservationRouter common.Address,
-	blockNumber uint64,
-)
-
-func (rrss *RrReservationRouterSetSubscription) OnEvent(
-	handler reservationRouterReservationRouterSetFunc,
-) subscription.EventSubscription {
-	eventChan := make(chan *abi.ReservationRouterReservationRouterSet)
-	ctx, cancelCtx := context.WithCancel(context.Background())
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event := <-eventChan:
-				handler(
-					event.ReservationRouter,
-					event.Raw.BlockNumber,
-				)
-			}
-		}
-	}()
-
-	sub := rrss.Pipe(eventChan)
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (rrss *RrReservationRouterSetSubscription) Pipe(
-	sink chan *abi.ReservationRouterReservationRouterSet,
-) subscription.EventSubscription {
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	go func() {
-		ticker := time.NewTicker(rrss.opts.Tick)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				lastBlock, err := rrss.contract.blockCounter.CurrentBlock()
-				if err != nil {
-					rrLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-				}
-				fromBlock := lastBlock - rrss.opts.PastBlocks
-
-				rrLogger.Infof(
-					"subscription monitoring fetching past ReservationRouterSet events "+
-						"starting from block [%v]",
-					fromBlock,
-				)
-				events, err := rrss.contract.PastReservationRouterSetEvents(
-					fromBlock,
-					nil,
-				)
-				if err != nil {
-					rrLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-					continue
-				}
-				rrLogger.Infof(
-					"subscription monitoring fetched [%v] past ReservationRouterSet events",
-					len(events),
-				)
-
-				for _, event := range events {
-					sink <- event
-				}
-			}
-		}
-	}()
-
-	sub := rrss.contract.watchReservationRouterSet(
-		sink,
-	)
-
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (rr *ReservationRouter) watchReservationRouterSet(
-	sink chan *abi.ReservationRouterReservationRouterSet,
-) event.Subscription {
-	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
-		return rr.contract.WatchReservationRouterSet(
-			&bind.WatchOpts{Context: ctx},
-			sink,
-		)
-	}
-
-	thresholdViolatedFn := func(elapsed time.Duration) {
-		rrLogger.Warnf(
-			"subscription to event ReservationRouterSet had to be "+
-				"retried [%s] since the last attempt; please inspect "+
-				"host chain connectivity",
-			elapsed,
-		)
-	}
-
-	subscriptionFailedFn := func(err error) {
-		rrLogger.Errorf(
-			"subscription to event ReservationRouterSet failed "+
-				"with error: [%v]; resubscription attempt will be "+
-				"performed",
-			err,
-		)
-	}
-
-	return chainutil.WithResubscription(
-		chainutil.SubscriptionBackoffMax,
-		subscribeFn,
-		chainutil.SubscriptionAlertThreshold,
-		thresholdViolatedFn,
-		subscriptionFailedFn,
-	)
-}
-
-func (rr *ReservationRouter) PastReservationRouterSetEvents(
-	startBlock uint64,
-	endBlock *uint64,
-) ([]*abi.ReservationRouterReservationRouterSet, error) {
-	iterator, err := rr.contract.FilterReservationRouterSet(
-		&bind.FilterOpts{
-			Start: startBlock,
-			End:   endBlock,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"error retrieving past ReservationRouterSet events: [%v]",
-			err,
-		)
-	}
-
-	events := make([]*abi.ReservationRouterReservationRouterSet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event

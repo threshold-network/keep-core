@@ -645,7 +645,7 @@ func TestWalletActionMetricsRegistered(t *testing.T) {
 
 // TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag verifies
 // wallet_action_reservation_* counters and histograms are registered even
-// when Tbtc.Reservations.LeaderDutiesEnabled is false. Reservation action
+// when Tbtc.ReservationsEnabled is false. Reservation action
 // execution (anchor/re-anchor co-signing) is not itself gated on that flag -
 // only proposal generation, watcher wiring, and the reservation gauges are -
 // so gating this registration would silently drop observability for the

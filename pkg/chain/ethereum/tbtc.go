@@ -16,11 +16,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/keep-network/keep-common/pkg/cache"
+	"math"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
-
-	"github.com/keep-network/keep-common/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -54,6 +55,31 @@ const (
 
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
+
+	// reservationRegistrationLookBackBlocks sizes the initial window of
+	// the NewWalletRegistered event lookup performed by
+	// earliestWalletRegistrationBlock: the last ~30 days (216000 blocks
+	// at Ethereum's ~12s block time). That method walks the window
+	// backwards, doubling it each time nothing is found, until it finds
+	// the wallet's actual registration block or reaches genesis, then
+	// memoizes the result - so this constant only controls how many
+	// round trips the common case (a wallet closed shortly after
+	// registering) needs, not the correctness of the final bound. This
+	// mirrors the identical 30-day convention already used elsewhere in
+	// the reservation feature for startup/catch-up scan bounds (see
+	// pkg/maintainer/spv/reservation_wiring.go's
+	// reservationDefaultLookBackBlocks) - it is duplicated here, with
+	// its own doc comment, rather than imported, because
+	// pkg/maintainer/spv already imports pkg/chain/ethereum and the
+	// reverse import would create a cycle.
+	reservationRegistrationLookBackBlocks = uint64(216000)
+
+	// reservationRegistrationReorgSafetyBlocks is subtracted on top of
+	// reservationRegistrationLookBackBlocks when bounding the
+	// registration-event lookup, so a shallow reorg near the chain tip
+	// cannot shift a wallet's actual registration block just past the
+	// scan window's lower edge and silently drop it from the bound.
+	reservationRegistrationReorgSafetyBlocks = uint64(12)
 )
 
 // TbtcChain represents a TBTC-specific chain handle.
@@ -70,6 +96,13 @@ type TbtcChain struct {
 	// constructed against the Bridge address (see reservationRouterBinding for
 	// the address invariant explanation).
 	reservationRouter *tbtccontract.ReservationRouter
+	// walletRegistrationBlockCache memoizes the result of
+	// earliestWalletRegistrationBlock per wallet public key hash for the
+	// lifetime of this chain adapter. NewWalletRegistered fires once per
+	// wallet registration and a past registration is immutable, so a
+	// resolved block never goes stale and repeat lookups for the same
+	// wallet cost nothing beyond the first.
+	walletRegistrationBlockCache sync.Map
 	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
 	ecdsaDkgValidatorAddress common.Address
 
@@ -436,7 +469,12 @@ func (tc *TbtcChain) ReservationParameters() (
 // test coverage. It requires go-ethereum simulated-backend infrastructure
 // that does not exist anywhere in pkg/chain/ethereum today. PR #4280
 // explicitly deferred this pending that infra (see 01-gap-analysis.md's
-// Minor row); the infra itself is not yet built and has no owning PR.
+// Minor row); the infra itself is not yet built and has no owning PR. This
+// is a package-wide gap, not specific to reservations: the analogous
+// ValidateDepositSweepProposal has never had a direct test either for the
+// same reason. A follow-up should build the minimal simulated-backend
+// infrastructure once, covering every proposal validator in this package,
+// rather than deferring it again per future PR.
 // ValidateReservationAnchorProposal asks the WalletProposalValidator
 // whether the given anchor proposal is valid for the given wallet and
 // reserved deposit. The validator is a separate contract reached at its
@@ -477,12 +515,10 @@ func (tc *TbtcChain) ValidateReservationAnchorProposal(
 // for WalletProposalValidator.ValidateReservationAnchorProposal from their
 // application-level representations. Extracted as a pure function from
 // ValidateReservationAnchorProposal so the field mapping can be unit
-// tested directly, mirroring the reverse-direction converters below
-// (convertReservationFromAbiType et al.).
-//
-// TODO(test-coverage): like ValidateReservationAnchorProposal above, this
-// has no direct unit test coverage - same missing go-ethereum
-// simulated-backend infrastructure, same deferral (see the TODO above).
+// tested directly (TestBuildReservationAnchorProposalAbi), mirroring the
+// reverse-direction converters below (convertReservationFromAbiType et
+// al.). Unlike the wrapper above, this builder makes no chain call and
+// so needs no simulated-backend infrastructure to test.
 func buildReservationAnchorProposalAbi(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -523,6 +559,7 @@ func buildReservationAnchorProposalAbi(
 	abiProposal := tbtcabi.WalletProposalValidatorReservationAnchorProposal{
 		WalletPubKeyHash: walletPublicKeyHash,
 		DepositKey:       depositKey,
+		RequestNonce:     proposal.RequestNonce,
 		AnchorTxFee:      proposal.AnchorTxFee,
 	}
 
@@ -571,6 +608,7 @@ func buildReservationReanchorProposalAbi(
 	return tbtcabi.WalletProposalValidatorReservationReanchorProposal{
 		SourceWalletPubKeyHash: sourceWalletPublicKeyHash,
 		ReservationKey:         proposal.ReservationKey,
+		RequestNonce:           proposal.RequestNonce,
 		TargetWalletPubKeyHash: proposal.TargetWalletPublicKeyHash,
 		ReanchorTxFee:          proposal.ReanchorTxFee,
 	}
@@ -836,16 +874,14 @@ func (tc *TbtcChain) RequestReservationReanchor(
 	return err
 }
 
-// SubmitReservationProof submits an SPV proof for the given reservation
-// action generation to the Bridge. The proof path is onlySpvMaintainer on
-// the router; the call goes through Bridge.fallback's delegatecall so the
-// router code reads the Bridge's isSpvMaintainer mapping at the Bridge's
-// address.
-func (tc *TbtcChain) SubmitReservationProof(
-	proofType uint8,
+// SubmitReservationAcceptanceProof submits an SPV proof for the given
+// reservation acceptance action generation to the Bridge. The proof path
+// is onlySpvMaintainer on the router; the call goes through
+// Bridge.fallback's delegatecall so the router code reads the Bridge's
+// isSpvMaintainer mapping at the Bridge's address.
+func (tc *TbtcChain) SubmitReservationAcceptanceProof(
 	txInfo *tbtc.BitcoinTxInfo,
 	proof *tbtc.BitcoinTxProof,
-	mainUtxo *tbtc.BitcoinTxUTXO,
 	reservationKey *big.Int,
 	requestNonce uint64,
 ) error {
@@ -862,17 +898,10 @@ func (tc *TbtcChain) SubmitReservationProof(
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
 	}
-	abiUtxo := tbtcabi.BitcoinTxUTXO4{
-		TxHash:        mainUtxo.TxHash,
-		TxOutputIndex: mainUtxo.TxOutputIndex,
-		TxOutputValue: mainUtxo.TxOutputValue,
-	}
 
-	gasEstimate, err := tc.reservationRouter.SubmitReservationProofGasEstimate(
-		proofType,
+	gasEstimate, err := tc.reservationRouter.SubmitReservationAcceptanceProofGasEstimate(
 		abiTxInfo,
 		abiProof,
-		abiUtxo,
 		reservationKey,
 		requestNonce,
 	)
@@ -887,11 +916,60 @@ func (tc *TbtcChain) SubmitReservationProof(
 	// SubmitRedemptionProofWithReimbursement (tbtc_redemption.go).
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
-	_, err = tc.reservationRouter.SubmitReservationProof(
-		proofType,
+	_, err = tc.reservationRouter.SubmitReservationAcceptanceProof(
 		abiTxInfo,
 		abiProof,
-		abiUtxo,
+		reservationKey,
+		requestNonce,
+		ethutil.TransactionOptions{
+			GasLimit: uint64(gasEstimateWithMargin),
+		},
+	)
+
+	return err
+}
+
+// SubmitReservationReanchorProof submits an SPV proof for the given
+// reservation re-anchor action generation to the Bridge. The proof path
+// is onlySpvMaintainer on the router; the call goes through
+// Bridge.fallback's delegatecall so the router code reads the Bridge's
+// isSpvMaintainer mapping at the Bridge's address.
+func (tc *TbtcChain) SubmitReservationReanchorProof(
+	txInfo *tbtc.BitcoinTxInfo,
+	proof *tbtc.BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	abiTxInfo := tbtcabi.BitcoinTxInfo4{
+		Version:      txInfo.Version,
+		InputVector:  txInfo.InputVector,
+		OutputVector: txInfo.OutputVector,
+		Locktime:     txInfo.Locktime,
+	}
+	abiProof := tbtcabi.BitcoinTxProof3{
+		MerkleProof:      proof.MerkleProof,
+		TxIndexInBlock:   proof.TxIndexInBlock,
+		BitcoinHeaders:   proof.BitcoinHeaders,
+		CoinbasePreimage: proof.CoinbasePreimage,
+		CoinbaseProof:    proof.CoinbaseProof,
+	}
+
+	gasEstimate, err := tc.reservationRouter.SubmitReservationReanchorProofGasEstimate(
+		abiTxInfo,
+		abiProof,
+		reservationKey,
+		requestNonce,
+	)
+	if err != nil {
+		return err
+	}
+
+	// See the margin rationale on SubmitReservationAcceptanceProof above.
+	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+
+	_, err = tc.reservationRouter.SubmitReservationReanchorProof(
+		abiTxInfo,
+		abiProof,
 		reservationKey,
 		requestNonce,
 		ethutil.TransactionOptions{
@@ -903,14 +981,12 @@ func (tc *TbtcChain) SubmitReservationProof(
 }
 
 // NotifyReservationActionTimeout notifies the Bridge that the timeout for
-// the given reservation action generation has elapsed.
+// the given Reanchor-type reservation action generation has elapsed.
 func (tc *TbtcChain) NotifyReservationActionTimeout(
 	reservationKey *big.Int,
-	walletMembersIDs []uint32,
 ) error {
 	gasEstimate, err := tc.reservationRouter.NotifyReservationActionTimeoutGasEstimate(
 		reservationKey,
-		walletMembersIDs,
 	)
 	if err != nil {
 		return err
@@ -921,7 +997,6 @@ func (tc *TbtcChain) NotifyReservationActionTimeout(
 
 	_, err = tc.reservationRouter.NotifyReservationActionTimeout(
 		reservationKey,
-		walletMembersIDs,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},
@@ -978,6 +1053,117 @@ func (tc *TbtcChain) NotifyReservationStranded(
 	)
 
 	return err
+}
+
+// WalletTerminationCause returns the on-chain reason the given wallet was
+// most recently terminated. The Bridge's WalletTerminated event itself
+// carries no cause field; the cause is instead inferred from which of the
+// three pre-termination timeout events was emitted for the wallet -
+// MovingFundsTimedOut, MovedFundsSweepTimedOut, or
+// FraudChallengeDefeatTimedOut, each of which unconditionally leads to
+// termination. If more than one of these events were ever emitted for
+// the same wallet (not expected in normal Bridge operation, but not
+// verified impossible by this method), this method returns the first
+// found, in MovingFundsTimedOut -> MovedFundsSweepTimedOut ->
+// FraudChallengeDefeatTimedOut priority order - not necessarily the most
+// recently emitted one.
+//
+// The three event queries are bounded by earliestWalletRegistrationBlock
+// (the same registration-block resolution WalletReservations uses,
+// memoized per wallet - see that method's doc comment) instead of
+// scanning from genesis: a wallet cannot have been terminated before it
+// registered. This is not a single cold-path call made once per wallet
+// close: pkg/maintainer/spv calls it from the stranding startup
+// catch-up scan (up to 3 attempts per Closed/Terminated wallet found
+// by that scan), that scan's second-chance retry pass for wallets it
+// could not resolve the first time, the live OnWalletClosed
+// subscription handler (immediately before a stranding notification,
+// as originally documented), and - conditionally - from the 1-minute
+// action-timeout poll loop's recheck path whenever a Reanchor-type
+// reservation action times out against a wallet that is already
+// Closed/Terminated. A failure to resolve the registration bound
+// falls back to genesis (StartBlock 0), matching WalletReservations'
+// own fallback, so a transient RPC error degrades to the previous
+// unbounded behavior rather than skipping a real termination event.
+func (tc *TbtcChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (tbtc.WalletTerminationCause, error) {
+	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	if err != nil {
+		startBlock = 0
+	}
+
+	filter := [][20]byte{walletPublicKeyHash}
+
+	movingFundsEvents, err := tc.bridge.PastMovingFundsTimedOutEvents(startBlock, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past MovingFundsTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if cause := resolveWalletTerminationCause(len(movingFundsEvents), 0, 0); cause != tbtc.WalletTerminationCauseUnknown {
+		return cause, nil
+	}
+
+	movedFundsSweepEvents, err := tc.bridge.PastMovedFundsSweepTimedOutEvents(startBlock, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past MovedFundsSweepTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if cause := resolveWalletTerminationCause(0, len(movedFundsSweepEvents), 0); cause != tbtc.WalletTerminationCauseUnknown {
+		return cause, nil
+	}
+
+	fraudChallengeEvents, err := tc.bridge.PastFraudChallengeDefeatTimedOutEvents(startBlock, nil, filter)
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get past FraudChallengeDefeatTimedOut events for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	return resolveWalletTerminationCause(0, 0, len(fraudChallengeEvents)), nil
+}
+
+// resolveWalletTerminationCause is the pure-logic core of
+// TbtcChain.WalletTerminationCause: given how many of each
+// pre-termination timeout event have been found for a wallet so far, it
+// decides which termination cause to report, honoring the
+// MovingFundsTimedOut -> MovedFundsSweepTimedOut ->
+// FraudChallengeDefeatTimedOut priority order documented on
+// WalletTerminationCause. Extracted as a standalone function - mirroring
+// the existing pattern in this file (e.g. resolveCustodiedReservationKeys,
+// buildReservationAnchorProposalAbi) - so that priority order can be unit
+// tested directly, including the case where more than one count is
+// non-zero at once, since the surrounding TbtcChain method depends on
+// real go-ethereum simulated-backend infrastructure that does not exist
+// anywhere in pkg/chain/ethereum today (a package-wide gap, explicitly
+// deferred). WalletTerminationCause itself calls this at each of its
+// three early-return points with only the count it has fetched so far
+// (the other two passed as 0), so in production at most one argument is
+// ever non-zero at a time; the multi-non-zero case exercised in tests
+// exists to pin the documented priority contract independently of that
+// short-circuiting.
+func resolveWalletTerminationCause(
+	movingFundsEventCount int,
+	movedFundsSweepEventCount int,
+	fraudChallengeEventCount int,
+) tbtc.WalletTerminationCause {
+	if movingFundsEventCount > 0 {
+		return tbtc.WalletTerminationCauseMovingFundsTimeout
+	}
+	if movedFundsSweepEventCount > 0 {
+		return tbtc.WalletTerminationCauseMovedFundsSweepTimeout
+	}
+	if fraudChallengeEventCount > 0 {
+		return tbtc.WalletTerminationCauseFraudChallengeDefeat
+	}
+	return tbtc.WalletTerminationCauseUnknown
 }
 
 // NotifyReservationAcceptanceTimedOut notifies the Bridge that the
@@ -1103,19 +1289,295 @@ func (tc *TbtcChain) WalletReservationsCount(
 
 // WalletReservations returns the reservation keys for all reservations
 // currently custodied by the given wallet.
+//
+// The real ReservationRouter has no walletReservations(bytes20) view -
+// only walletReservationsAmount/walletReservationsCount, which return
+// aggregates, not the key set. The key set is instead derived from the
+// PastReservationAcceptanceRequestedEvents (initial custody) and
+// PastReservationReanchorRequestedEvents (custody transferred TO this
+// wallet) event logs, deduplicated, and filtered down to reservations
+// this wallet CURRENTLY custodies via GetReservation - a reservation may
+// have since re-anchored away to a different wallet.
+//
+// WalletReservationsCount is checked first as a cheap short-circuit: the
+// vast majority of wallets never custody a reservation, and skipping the
+// full-history event scan for them avoids an unbounded eth_getLogs query
+// (genesis to tip) on every wallet-close notification for the common
+// case. Wallets that do have reservations pay a reservation-event scan
+// bounded by earliestWalletRegistrationBlock, which resolves the
+// wallet's actual earliest registration block by walking
+// NewWalletRegistered events backwards in doubling windows from the
+// chain tip until one is found or genesis is reached, then memoizes
+// the result for the lifetime of this chain adapter - see that
+// method's doc comment. This correctly bounds the dominant case (a
+// wallet closed long after it registered) instead of degenerating
+// into the genesis-to-tip scan the bound exists to avoid.
+// Governance-capped reservation volume keeps the reservation-having
+// case rare in absolute terms, and correctness (never missing a real
+// reservation) takes priority over narrowing the block range further
+// here.
 func (tc *TbtcChain) WalletReservations(
 	walletPublicKeyHash [20]byte,
 ) ([]*big.Int, error) {
-	keys, err := tc.reservationRouter.WalletReservations(walletPublicKeyHash)
+	count, err := tc.reservationRouter.WalletReservationsCount(walletPublicKeyHash)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"cannot get wallet reservations for [0x%x]: [%v]",
+			"cannot get wallet reservations count for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+
+	// Bound the two event queries to the wallet's own registration block
+	// (earliest if it registered multiple times - recovery, re-activation):
+	// a wallet cannot have reservation events before it existed. Falls
+	// back to a full-history scan only when the registration lookup
+	// itself fails, so a transient RPC error degrades to the previous
+	// behavior rather than skipping real reservations.
+	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	if err != nil {
+		startBlock = 0
+	}
+
+	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
+		&tbtc.ReservationAcceptanceRequestedEventFilter{
+			StartBlock:          startBlock,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get past reservation acceptance events for [0x%x]: [%v]",
 			walletPublicKeyHash,
 			err,
 		)
 	}
 
-	return keys, nil
+	reanchorEvents, err := tc.PastReservationReanchorRequestedEvents(
+		&tbtc.ReservationReanchorRequestedEventFilter{
+			StartBlock:                startBlock,
+			TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get past reservation reanchor events for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return resolveCustodiedReservationKeys(
+		walletPublicKeyHash,
+		acceptanceEvents,
+		reanchorEvents,
+		tc.GetReservation,
+	)
+}
+
+// earliestWalletRegistrationBlock returns the actual earliest block at
+// which the given wallet was registered. NewWalletRegistered events are
+// walked backwards from the current chain tip - see
+// resolveEarliestWalletRegistrationBlock for the doubling-window walk
+// itself - until a registration event is found or genesis is reached.
+// NewWalletRegistered fires once per wallet registration and a past
+// registration is immutable, so the resolved block is memoized in
+// tc.walletRegistrationBlockCache for the lifetime of this chain
+// adapter instance: repeat lookups for the same wallet cost nothing
+// beyond the first. Returns 0 (unmemoized) if the current block cannot
+// be determined, or if no registration event is found anywhere back to
+// genesis (caller falls back to a full-history scan of the reservation
+// events themselves, which is always correct, just potentially
+// slower). A wallet can register multiple times across its lifetime,
+// so the earliest registration found by the walk is the safe lower
+// bound for any reservation event for that wallet.
+func (tc *TbtcChain) earliestWalletRegistrationBlock(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	if cached, ok := tc.walletRegistrationBlockCache.Load(walletPublicKeyHash); ok {
+		return cached.(uint64), nil
+	}
+
+	currentBlock, err := tc.blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get current block to resolve registration block for wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	registrationBlock, err := resolveEarliestWalletRegistrationBlock(
+		currentBlock,
+		func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			return tc.PastNewWalletRegisteredEvents(
+				&tbtc.NewWalletRegisteredEventFilter{
+					StartBlock:          startBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get past NewWalletRegistered events for [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	if registrationBlock != 0 {
+		tc.walletRegistrationBlockCache.Store(walletPublicKeyHash, registrationBlock)
+	}
+
+	return registrationBlock, nil
+}
+
+// resolveEarliestWalletRegistrationBlock is the pure-logic core of
+// earliestWalletRegistrationBlock: given the current chain tip and a
+// callback that fetches NewWalletRegistered events for one wallet from a
+// given start block through the tip, it walks the start block backwards
+// - beginning at the last reservationRegistrationLookBackBlocks blocks
+// (plus a reservationRegistrationReorgSafetyBlocks reorg-safety margin),
+// doubling the window and shifting further back each time nothing is
+// found - until a registration event turns up or the walk reaches
+// genesis (start block 0). Extracted as a standalone function -
+// mirroring the existing pattern in this file (e.g.
+// resolveCustodiedReservationKeys, resolveWalletTerminationCause) - so
+// the walk/doubling logic can be unit tested directly with a fake
+// fetchEvents callback, since the surrounding TbtcChain method depends
+// on real go-ethereum simulated-backend infrastructure that does not
+// exist anywhere in pkg/chain/ethereum today (a package-wide gap,
+// explicitly deferred). Returns 0 if genesis is reached without finding
+// a registration event.
+func resolveEarliestWalletRegistrationBlock(
+	currentBlock uint64,
+	fetchEvents func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error),
+) (uint64, error) {
+	windowSize := reservationRegistrationLookBackBlocks + reservationRegistrationReorgSafetyBlocks
+
+	var startBlock uint64
+	if currentBlock > windowSize {
+		startBlock = currentBlock - windowSize
+	}
+
+	for {
+		events, err := fetchEvents(startBlock)
+		if err != nil {
+			return 0, err
+		}
+
+		if registrationBlock := earliestRegistrationEventBlock(events); registrationBlock != 0 {
+			return registrationBlock, nil
+		}
+
+		if startBlock == 0 {
+			return 0, nil
+		}
+
+		if startBlock > windowSize {
+			startBlock -= windowSize
+		} else {
+			startBlock = 0
+		}
+		windowSize *= 2
+	}
+}
+
+// earliestRegistrationEventBlock is the pure-logic core of
+// earliestWalletRegistrationBlock: given a set of NewWalletRegistered
+// events already scoped to one wallet, it resolves the block number of
+// the earliest one, ignoring nil entries and zero-value block numbers
+// defensively. Extracted as a standalone function - mirroring the
+// existing pattern in this file (e.g. resolveCustodiedReservationKeys) -
+// so it can be unit tested directly with fake event slices, since the
+// surrounding TbtcChain method depends on real go-ethereum
+// simulated-backend infrastructure that does not exist anywhere in
+// pkg/chain/ethereum today (a package-wide gap, explicitly deferred).
+// Returns 0 if events is empty or every entry's BlockNumber is 0.
+func earliestRegistrationEventBlock(events []*tbtc.NewWalletRegisteredEvent) uint64 {
+	var earliest uint64 = math.MaxUint64
+	for _, event := range events {
+		if event != nil && event.BlockNumber > 0 && event.BlockNumber < earliest {
+			earliest = event.BlockNumber
+		}
+	}
+	if earliest == math.MaxUint64 {
+		return 0
+	}
+	return earliest
+}
+
+// resolveCustodiedReservationKeys is the pure-logic core of
+// TbtcChain.WalletReservations: deduplicate the union of acceptance
+// and reanchor-REQUESTED events for the wallet down to one entry per
+// reservation key, confirm each candidate still custodies the wallet
+// via the lookup callback, and return the surviving keys sorted in
+// deterministic order. Extracted as a standalone function so it can be
+// unit-tested with fake event slices and a fake reservation lookup -
+// mirroring the existing pattern in this file (e.g.
+// buildReservationAnchorProposalAbi) - since the surrounding
+// TbtcChain methods depend on real go-ethereum simulated-backend
+// infrastructure that does not exist anywhere in pkg/chain/ethereum
+// today (a package-wide gap, explicitly deferred).
+func resolveCustodiedReservationKeys(
+	walletPublicKeyHash [20]byte,
+	acceptanceEvents []*tbtc.ReservationAcceptanceRequestedEvent,
+	reanchorEvents []*tbtc.ReservationReanchorRequestedEvent,
+	reservationLookup func(key *big.Int) (*tbtc.Reservation, error),
+) ([]*big.Int, error) {
+	candidateKeys := make(map[string]*big.Int)
+	for _, event := range acceptanceEvents {
+		if event == nil || event.ReservationKey == nil {
+			continue
+		}
+		candidateKeys[event.ReservationKey.String()] = event.ReservationKey
+	}
+	for _, event := range reanchorEvents {
+		if event == nil || event.ReservationKey == nil {
+			continue
+		}
+		candidateKeys[event.ReservationKey.String()] = event.ReservationKey
+	}
+
+	// Sort the candidate keys BEFORE the per-key lookup loop so the
+	// order in which GetReservation is called is deterministic. This
+	// matters for the partial-failure case: if the loop returns on
+	// the first lookup error, that error must reproduce against the
+	// same input rather than depending on Go map iteration order.
+	keys := make([]*big.Int, 0, len(candidateKeys))
+	for _, key := range candidateKeys {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		return keys[i].Cmp(keys[j]) < 0
+	})
+
+	filteredKeys := make([]*big.Int, 0, len(keys))
+	for _, key := range keys {
+		reservation, err := reservationLookup(key)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get reservation [%v]: [%v]",
+				key,
+				err,
+			)
+		}
+
+		if reservation.WalletPublicKeyHash != walletPublicKeyHash {
+			// The reservation was once tied to this wallet (accepted here,
+			// or re-anchored here) but has since re-anchored away; it is no
+			// longer custodied by this wallet.
+			continue
+		}
+
+		filteredKeys = append(filteredKeys, key)
+	}
+
+	return filteredKeys, nil
 }
 
 // ReservationByAnchorUtxo returns the reservation key whose anchor outpoint

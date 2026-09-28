@@ -516,6 +516,50 @@ func TestReservationAnchorProposal_Marshal_NilPanic(t *testing.T) {
 	}
 }
 
+// TestReservationAnchorProposal_Marshal_RejectsInvalidFields proves Marshal
+// itself validates RequestNonce, DepositFundingTxHash, and a negative
+// AnchorTxFee directly - previously only Unmarshal caught these, meaning a
+// producer bug marshaled successfully and was only rejected by every other
+// follower downstream, turning a local bug into an unattributable
+// network-wide rejection.
+func TestReservationAnchorProposal_Marshal_RejectsInvalidFields(t *testing.T) {
+	validHash := [32]byte{1}
+
+	tests := map[string]struct {
+		proposal *ReservationAnchorProposal
+	}{
+		"zero request nonce": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				RequestNonce:         0,
+				AnchorTxFee:          big.NewInt(1000),
+			},
+		},
+		"zero deposit funding tx hash": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: [32]byte{},
+				RequestNonce:         1,
+				AnchorTxFee:          big.NewInt(1000),
+			},
+		},
+		"negative anchor tx fee": {
+			proposal: &ReservationAnchorProposal{
+				DepositFundingTxHash: validHash,
+				RequestNonce:         1,
+				AnchorTxFee:          big.NewInt(-1),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := test.proposal.Marshal(); err == nil {
+				t.Fatal("expected Marshal to reject the invalid proposal directly")
+			}
+		})
+	}
+}
+
 func TestReservationAnchorProposal_Unmarshal_ZeroHash(t *testing.T) {
 	proposal := &ReservationAnchorProposal{
 		DepositFundingTxHash: [32]byte{},
@@ -567,6 +611,92 @@ func TestReservationReanchorProposal_Unmarshal_OversizedReservationKey(t *testin
 		t.Fatal("expected error when unmarshaling proposal with oversized reservation key")
 	}
 	if !strings.Contains(err.Error(), "invalid reservation key byte length") {
+		t.Errorf("unexpected error message: [%v]", err)
+	}
+}
+
+// TestReservationAnchorProposal_Unmarshal_ZeroAnchorTxFee proves Unmarshal
+// rejects a peer-supplied AnchorTxFee that decodes to big.Int(0). Marshal
+// already refuses to produce a proposal with a non-positive AnchorTxFee, but
+// a hand-crafted protobuf carrying a single zero byte round-trips through
+// SetBytes to big.Int(0) unnoticed unless Unmarshal enforces the same
+// invariant on the receiving side.
+func TestReservationAnchorProposal_Unmarshal_ZeroAnchorTxFee(t *testing.T) {
+	pbMsg := &pb.ReservationAnchorProposal{
+		DepositFundingTxHash:      make([]byte, 32),
+		DepositFundingOutputIndex: 0,
+		RequestNonce:              1,
+		AnchorTxFee:               []byte{0x00},
+	}
+	pbMsg.DepositFundingTxHash[0] = 0x01
+
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &ReservationAnchorProposal{}
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with zero anchor tx fee")
+	}
+	if !strings.Contains(err.Error(), "invalid anchor transaction fee value") {
+		t.Errorf("unexpected error message: [%v]", err)
+	}
+}
+
+// TestReservationReanchorProposal_Unmarshal_ZeroReservationKey proves
+// Unmarshal rejects a peer-supplied ReservationKey that decodes to
+// big.Int(0), mirroring the invariant Marshal already enforces on the
+// producer side.
+func TestReservationReanchorProposal_Unmarshal_ZeroReservationKey(t *testing.T) {
+	pbMsg := &pb.ReservationReanchorProposal{
+		ReservationKey:            []byte{0x00},
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: make([]byte, 20),
+		ReanchorTxFee:             big.NewInt(1200).Bytes(),
+	}
+	pbMsg.TargetWalletPublicKeyHash[0] = 0x01
+
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &ReservationReanchorProposal{}
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with zero reservation key")
+	}
+	if !strings.Contains(err.Error(), "invalid reservation key value") {
+		t.Errorf("unexpected error message: [%v]", err)
+	}
+}
+
+// TestReservationReanchorProposal_Unmarshal_ZeroReanchorTxFee proves
+// Unmarshal rejects a peer-supplied ReanchorTxFee that decodes to
+// big.Int(0), mirroring the invariant Marshal already enforces on the
+// producer side.
+func TestReservationReanchorProposal_Unmarshal_ZeroReanchorTxFee(t *testing.T) {
+	pbMsg := &pb.ReservationReanchorProposal{
+		ReservationKey:            big.NewInt(424242).Bytes(),
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: make([]byte, 20),
+		ReanchorTxFee:             []byte{0x00},
+	}
+	pbMsg.TargetWalletPublicKeyHash[0] = 0x01
+
+	data, err := proto.Marshal(pbMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &ReservationReanchorProposal{}
+	err = proposal.Unmarshal(data)
+	if err == nil {
+		t.Fatal("expected error when unmarshaling proposal with zero re-anchor tx fee")
+	}
+	if !strings.Contains(err.Error(), "invalid re-anchor transaction fee value") {
 		t.Errorf("unexpected error message: [%v]", err)
 	}
 }

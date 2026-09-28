@@ -4,16 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
-
-// reservationActionTimeoutLookBackBlocks bounds the pending-action-request event
-// scan performed on the very first pass, before an incremental cursor
-// exists. Mirrors reservationProofLookBackBlocks in reservation_proof_loop.go:
-// 30 days at 12s/block.
-const reservationActionTimeoutLookBackBlocks = uint64(216000)
 
 // actionTimeoutRenotifyInterval bounds how often a still-Pending action
 // generation is re-offered to NotifyReservationActionTimeout once one
@@ -24,6 +21,18 @@ const reservationActionTimeoutLookBackBlocks = uint64(216000)
 // an action's timeout-to-slashing window rather than silently stalling
 // for the process lifetime.
 const actionTimeoutRenotifyInterval = 10 * time.Minute
+
+// reservationActionTimeoutMaxChecksPerTick bounds the number of tracked
+// pending actions whose GetReservationAction chain read pollPendingActions
+// issues on a single poll tick. Actions beyond this cap on a given tick are
+// picked up on a later tick via actionCheckCursor, so a single tick's RPC
+// volume stays bounded regardless of how many actions are tracked - unlike
+// the previous unbounded one-read-per-tracked-action pass. No reusable
+// multicall/batch-read helper exists elsewhere in this codebase for this
+// chain-read pattern (checked pkg/chain), and adding one to the shared
+// Chain interface is out of scope here, so this is the self-contained
+// partial fix; a true batched on-chain read remains a follow-up.
+const reservationActionTimeoutMaxChecksPerTick = 50
 
 // ReservationActionTimeoutWatcher observes the reservation action set and
 // notifies the Bridge when a pending action's on-chain deadline has elapsed
@@ -40,18 +49,16 @@ const actionTimeoutRenotifyInterval = 10 * time.Minute
 //
 // The Bridge exposes two distinct timeout entry points depending on the
 // action generation's type: NotifyReservationAcceptanceTimedOut for
-// Acceptance-type actions, and NotifyReservationActionTimeout (which
-// takes a wallet member IDs slice the router ignores for Reanchor
-// timeouts) for Reanchor-type actions. checkReservationActionTimeout
-// branches on action.ActionType to call the correct entry point; an
-// unexpected action type (Redemption and Dissolution are out of m1
-// scope) is logged and skipped rather than causing an ill-formed call.
+// Acceptance-type actions, and NotifyReservationActionTimeout for
+// Reanchor-type actions. checkReservationActionTimeout branches on
+// action.ActionType to call the correct entry point; an unexpected action
+// type (Redemption and Dissolution are out of m1 scope) is logged and
+// skipped rather than causing an ill-formed call.
 //
 // Reanchor timeouts are the permissionless path for a wallet the
 // operator no longer locally tracks as open (e.g. Closed/Terminated and
 // archived out of the wallet registry cache): NotifyReservationActionTimeout
-// is called with an empty member IDs slice unconditionally, requiring no
-// cooperation from the dead wallet.
+// requires no cooperation from the dead wallet.
 type ReservationActionTimeoutWatcher struct {
 	spvChain Chain
 	// nowFn returns the current UNIX timestamp the watcher treats as "now"
@@ -73,6 +80,61 @@ type ReservationActionTimeoutWatcher struct {
 	// pendingActions tracks still-pending reservation actions discovered from
 	// acceptance and re-anchor request events across successive poll passes.
 	pendingActions map[string]*pendingAction
+
+	// actionCheckCursor is the lexically-sorted pendingActions key
+	// nextActionCheckBatch resumes from on the next poll tick, so a large
+	// tracked-action set is checked in bounded
+	// reservationActionTimeoutMaxChecksPerTick-sized slices across
+	// successive ticks instead of all at once. Empty means resume from the
+	// beginning (also true once a rotation has covered every key).
+	actionCheckCursor string
+
+	// strandingWatcher, when non-nil, lets checkReservationActionTimeout
+	// defer a Reanchor-type action's reservation to a stranding recheck
+	// after a successful NotifyReservationActionTimeout call (see
+	// strandingRecheckWallets below and drainStrandingRechecks).
+	// ReservationRouter.sol's notifyReservationActionTimeout restores
+	// the reservation to Active under its current (possibly now-dead)
+	// source wallet, and the only trigger that would otherwise prompt a
+	// re-examination of that wallet - the stranding watcher's one-shot
+	// OnWalletClosed subscription - has already fired and been consumed by
+	// the time the reservation reappears as Active, so nothing else will
+	// ever notice it is stranded. It is a required
+	// NewReservationActionTimeoutWatcher parameter; nil is a legitimate,
+	// explicit "no stranding watcher" configuration (checkReservationActionTimeout
+	// never populates strandingRecheckWallets when this is nil), but the
+	// parameter can never be silently forgotten the way a
+	// post-construction setter could be.
+	strandingWatcher *reservationStrandingWatcher
+
+	// strandingRecheckWallets accumulates the wallet public key hashes
+	// whose reservation(s) had a Reanchor-type action-timeout
+	// notification submitted since the last drain, deferred here rather
+	// than rechecked synchronously at notify time: NotifyReservationActionTimeout's
+	// generated chain binding returns as soon as the transaction is
+	// submitted, not once it mines (mining is handled by a background
+	// ForceMining goroutine elsewhere), so a synchronous GetWallet
+	// re-check at that point would read pre-mining state and the
+	// State != Active guard in checkReservationStrandingForWallet would
+	// always skip it. drainStrandingRechecks, called at the top of
+	// every pollPendingActions tick, gives a wallet notified last tick
+	// roughly one full poll interval to mine before its state is
+	// re-checked. Multiple Reanchor-timeout notifications against the
+	// same wallet within one tick naturally dedupe here (map key),
+	// so a single stranding check runs once per wallet per drain
+	// regardless of how many of that wallet's reservations timed out
+	// in the same tick.
+	strandingRecheckWallets map[[20]byte]struct{}
+
+	// operatorAddress identifies this process for
+	// reservationOperatorStaggerOffset (see reservation_wiring.go), used
+	// to stagger the FIRST notify attempt for a given action generation
+	// so multiple operators' simultaneous first attempts do not collide
+	// on-chain (see pollPendingActions). It is a required
+	// NewReservationActionTimeoutWatcher parameter, not a
+	// post-construction setter, so a watcher can never be constructed in
+	// a partially-initialized state that would silently skip staggering.
+	operatorAddress common.Address
 }
 
 type pendingAction struct {
@@ -92,9 +154,14 @@ type pendingAction struct {
 	notifiedAt uint32
 }
 
-// actionEventKey identifies one reservation action generation.
+// actionEventKey identifies one reservation action generation. It
+// delegates to reservationEventKey (see reservation_proof_loop.go), the
+// canonical (reservationKey, requestNonce) key formatter shared by
+// every pending-event map in this package; this watcher previously used
+// its own "%s#%d" format, now consolidated onto reservationEventKey's
+// pre-existing "%s:%d" format.
 func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
-	return fmt.Sprintf("%s#%d", reservationKey.String(), requestNonce)
+	return reservationEventKey(reservationKey, requestNonce)
 }
 
 // NewReservationActionTimeoutWatcher constructs a watcher bound to the
@@ -105,15 +172,27 @@ func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 // WireReservationWatchers; pollInterval only needs to be non-zero for
 // that path, not for tests that drive the watcher directly through
 // CheckReservationActionTimeouts.
+//
+// operatorAddress is required (see the operatorAddress field doc).
+// strandingWatcher is required but may legitimately be nil (see the
+// strandingWatcher field doc for what a nil value means); both are
+// constructor parameters rather than post-construction setters so a
+// watcher can never be constructed in a partially-initialized state
+// that would silently skip staggering or the stranding recheck.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
 	pollInterval time.Duration,
+	operatorAddress common.Address,
+	strandingWatcher *reservationStrandingWatcher,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
-		spvChain:       spvChain,
-		nowFn:          defaultActionTimeoutNowFn,
-		interval:       pollInterval,
-		pendingActions: make(map[string]*pendingAction),
+		spvChain:                spvChain,
+		nowFn:                   defaultActionTimeoutNowFn,
+		interval:                pollInterval,
+		pendingActions:          make(map[string]*pendingAction),
+		operatorAddress:         operatorAddress,
+		strandingWatcher:        strandingWatcher,
+		strandingRecheckWallets: make(map[[20]byte]struct{}),
 	}
 }
 
@@ -123,34 +202,16 @@ func defaultActionTimeoutNowFn() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// nextScanRange calculates the start and current block numbers for the next
-// event scan. On the first scan (lastScannedBlock == 0), the scan window is
-// bounded by reservationActionTimeoutLookBackBlocks. On subsequent scans, it
-// resumes from lastScannedBlock + 1.
+// nextScanRange calculates the start and current block numbers for the
+// next event scan. It delegates to the shared reservationProofNextScanRange
+// helper (see reservation_proof_loop.go): this watcher's own incremental
+// scan shape (bounded catch-up window on the first pass, resume-from-cursor
+// thereafter) is identical to the proof loop's, so both now share one
+// implementation instead of two independently-maintained copies.
 func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
 	lastScannedBlock uint64,
 ) (startBlock uint64, currentBlock uint64, err error) {
-	blockCounter, err := ratw.spvChain.BlockCounter()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err = blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	if lastScannedBlock == 0 {
-		if currentBlock > reservationActionTimeoutLookBackBlocks {
-			startBlock = currentBlock - reservationActionTimeoutLookBackBlocks
-		} else {
-			startBlock = 0
-		}
-	} else {
-		startBlock = lastScannedBlock + 1
-	}
-
-	return startBlock, currentBlock, nil
+	return reservationProofNextScanRange(ratw.spvChain, lastScannedBlock)
 }
 
 // Run starts the background poll loop. It returns when ctx is done or when
@@ -185,8 +246,13 @@ func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
 
 // pollPendingActions scans for newly requested reservation actions, updates the
 // pendingActions map, evicts actions that are no longer pending, and checks
-// overdue actions for timeout.
+// overdue actions for timeout. Before any of that, it drains
+// strandingRecheckWallets (see drainStrandingRechecks), so a wallet
+// deferred there by a Reanchor-timeout notification in the PREVIOUS
+// tick is rechecked before this tick's own batch processing runs.
 func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
+	ratw.drainStrandingRechecks()
+
 	// 1. Scan new ReservationAcceptanceRequestedEvents
 	acceptanceStartBlock, acceptanceCurrentBlock, err := ratw.nextScanRange(
 		ratw.acceptanceLastScannedBlock,
@@ -249,12 +315,22 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 
 	now := ratw.nowFn()
 
-	// 3. Re-check each tracked action and remove entries that are no longer
-	// pending. Each tracked action costs one serial GetReservationAction RPC
-	// per poll tick; no multicall-style batching helper exists elsewhere in
-	// this codebase for this chain-read pattern (checked pkg/chain), so
-	// per-tick RPC count scales linearly with the number of tracked actions.
-	for key, item := range ratw.pendingActions {
+	// 3. Re-check a bounded batch of tracked actions and remove entries
+	// that are no longer pending. Each checked action costs one serial
+	// GetReservationAction RPC; nextActionCheckBatch caps how many are
+	// issued this tick (reservationActionTimeoutMaxChecksPerTick) and
+	// rotates through the full tracked set across successive ticks, so
+	// per-tick RPC count no longer scales unboundedly with the number of
+	// tracked actions. See reservationActionTimeoutMaxChecksPerTick's doc
+	// for why a full multicall-style batch read is not used instead.
+	for _, key := range ratw.nextActionCheckBatch() {
+		item, ok := ratw.pendingActions[key]
+		if !ok {
+			// Evicted since the batch was built (e.g. by an earlier
+			// eviction this same tick, or theoretically by a concurrent
+			// caller); nothing left to check.
+			continue
+		}
 		action, err := ratw.spvChain.GetReservationAction(
 			item.reservationKey,
 			item.requestNonce,
@@ -275,7 +351,20 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 		}
 
 		if item.notifiedAt != 0 &&
-			now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+			(now < item.notifiedAt ||
+				now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds())) {
+			// now < item.notifiedAt is treated the same as "interval not
+			// yet elapsed" rather than falling through to retry: now is a
+			// caller-supplied, not-guaranteed-monotonic tick token (see
+			// nowFn's doc comment), so without this guard a clock
+			// adjustment or an out-of-order now would underflow the
+			// subtraction below to a huge uint32 and fail OPEN -
+			// resubmitting immediately instead of waiting out the
+			// backoff. Staying in the skip branch is the safe direction
+			// for an ambiguous time comparison; a genuine elapsed
+			// interval will still be observed on a later tick with a
+			// larger now.
+			//
 			// A timeout notification was attempted recently for this
 			// action generation while it remains Pending; give it time
 			// to land before resubmitting a timeout notification on
@@ -286,7 +375,24 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			continue
 		}
 
-		if now > action.TimeoutAt {
+		deadline := action.TimeoutAt
+		if item.notifiedAt == 0 {
+			// FIRST notify attempt for this action generation: stagger
+			// it by a deterministic per-operator offset (see
+			// reservationOperatorStaggerOffset) so that every
+			// reservation-enabled operator's first permissionless
+			// notify attempt does not collide in the same poll tick.
+			// Retries (notifiedAt != 0) are unaffected by this and
+			// keep using the renotify-interval backoff checked above
+			// unchanged.
+			deadline += reservationOperatorStaggerOffset(
+				ratw.operatorAddress,
+				key,
+				actionTimeoutRenotifyInterval,
+			)
+		}
+
+		if now > deadline {
 			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
 				now,
@@ -307,6 +413,47 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 	}
 
 	return nil
+}
+
+// nextActionCheckBatch returns up to reservationActionTimeoutMaxChecksPerTick
+// pendingActions keys to check this tick, resuming from
+// ratw.actionCheckCursor and rotating through a lexically sorted view of the
+// tracked key set so every action eventually gets checked across successive
+// ticks even when the tracked count exceeds the per-tick cap. Sorting gives
+// the rotation a deterministic, reproducible order; map iteration order
+// would otherwise make which actions get deferred to a later tick
+// unpredictable from one run to the next. Persists the key immediately
+// after the last one returned as the next cursor, or "" once the returned
+// batch reaches the end of the sorted set (so the next tick starts over from
+// the beginning) or covers every tracked key.
+func (ratw *ReservationActionTimeoutWatcher) nextActionCheckBatch() []string {
+	if len(ratw.pendingActions) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(ratw.pendingActions))
+	for key := range ratw.pendingActions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	start := 0
+	if ratw.actionCheckCursor != "" {
+		start = sort.SearchStrings(keys, ratw.actionCheckCursor)
+	}
+
+	batchSize := min(len(keys), reservationActionTimeoutMaxChecksPerTick)
+	batch := make([]string, batchSize)
+	for i := range batch {
+		batch[i] = keys[(start+i)%len(keys)]
+	}
+
+	ratw.actionCheckCursor = ""
+	if batchSize < len(keys) {
+		ratw.actionCheckCursor = keys[(start+batchSize)%len(keys)]
+	}
+
+	return batch
 }
 
 // CheckReservationActionTimeouts inspects the current action generation of a
@@ -447,14 +594,11 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 
 		return true, nil
 	case tbtc.ReservationActionTypeReanchor:
-		// The router ignores the member-IDs parameter for Reanchor-type
-		// timeouts, and the action-timeout watcher is the permissionless
-		// path that must not depend on cooperation from the (possibly
-		// dead) custodying wallet, so an empty slice is passed
-		// unconditionally rather than resolving wallet members.
+		// The action-timeout watcher is the permissionless path that must
+		// not depend on cooperation from the (possibly dead) custodying
+		// wallet.
 		if err := ratw.spvChain.NotifyReservationActionTimeout(
 			reservationKey,
-			[]uint32{},
 		); err != nil {
 			return false, fmt.Errorf(
 				"failed to notify action timeout for "+
@@ -473,6 +617,17 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 			action.TimeoutAt,
 		)
 
+		// Defer the stranding recheck to the next pollPendingActions
+		// tick's drainStrandingRechecks call instead of running it
+		// synchronously here: NotifyReservationActionTimeout has only
+		// just been submitted, not mined, so a synchronous GetWallet
+		// read at this point would read pre-mining state (see the
+		// strandingRecheckWallets field doc). The map key naturally
+		// dedupes multiple Reanchor timeouts against the same wallet
+		// within this tick down to a single recheck.
+		if ratw.strandingWatcher != nil {
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+		}
 		return true, nil
 	default:
 		// Redemption and Dissolution are m2+ scope and should never
@@ -487,5 +642,72 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 		)
 
 		return false, nil
+	}
+}
+
+// drainStrandingRechecks runs the deferred stranding recheck (see the
+// strandingRecheckWallets field doc for why this is deferred rather
+// than run synchronously at notify time) for every wallet recorded
+// since the previous drain, then clears the set. pollPendingActions
+// calls this at the very top of every tick, before processing that
+// tick's own batch, so a wallet notified last tick has had roughly one
+// full poll interval for its NotifyReservationActionTimeout
+// transaction to mine before this recheck reads GetWallet's state -
+// and so this tick's own eviction of newly-non-Pending actions (later
+// in pollPendingActions) always happens after the drain for wallets
+// notified in a prior tick.
+//
+// The wallet hash recorded in strandingRecheckWallets is the one the
+// reservation already had BEFORE its NotifyReservationActionTimeout
+// call: ReservationRouter.sol's notifyReservationActionTimeout restores
+// the reservation to Active under its current wallet (does not
+// reassign a new one), so no re-resolution via GetReservation is
+// needed here.
+func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
+	if len(ratw.strandingRecheckWallets) == 0 {
+		return
+	}
+
+	wallets := ratw.strandingRecheckWallets
+	ratw.strandingRecheckWallets = make(map[[20]byte]struct{})
+
+	for walletPublicKeyHash := range wallets {
+		wallet, err := ratw.spvChain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			// Transient RPC failure, not a definitive "wallet is Live"
+			// outcome: re-queue the wallet on the new
+			// strandingRecheckWallets set (already reset above for
+			// this drain, and self-dedupes) so the next tick's drain
+			// retries it instead of permanently losing the deferred
+			// recheck.
+			logger.Errorf(
+				"failed to fetch wallet [0x%x] state for deferred "+
+					"stranding re-check after action timeout "+
+					"notification: [%v]; re-queuing for the next drain",
+				walletPublicKeyHash,
+				err,
+			)
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			continue
+		}
+
+		if wallet.State != tbtc.StateClosed && wallet.State != tbtc.StateTerminated {
+			continue
+		}
+
+		if err := ratw.strandingWatcher.checkReservationStrandingForWallet(
+			walletPublicKeyHash,
+		); err != nil {
+			// Same transient-failure reasoning as the GetWallet error
+			// above: re-queue rather than silently drop the recheck.
+			logger.Errorf(
+				"deferred stranding re-check after action timeout "+
+					"notification failed for wallet [0x%x]: [%v]; "+
+					"re-queuing for the next drain",
+				walletPublicKeyHash,
+				err,
+			)
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+		}
 	}
 }
