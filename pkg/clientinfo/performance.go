@@ -760,12 +760,11 @@ const (
 	//     on-chain inKindFeeDebtSat view.
 	//   - MetricReservationVaultFeeReserveTbtc is in TBTC base units
 	//     (1e18 per whole TBTC): a gauge value of N means N / 1e18
-	//     whole TBTC held in reserve. The gauge API takes a float64
-	//     and the balance is a big.Int, so the base-unit figure is
-	//     published directly (float64 keeps ~15-17 significant digits,
-	//     more than enough for the TBTC scale) rather than dividing by
-	//     1e18, which would lose the sub-whole-TBTC precision the
-	//     reserve is tracked in.
+	//     whole TBTC held in reserve. The balance is a big.Int while
+	//     the gauge API takes a float64, so the base-unit figure is
+	//     published directly; float64 represents base units
+	//     approximately above 2^53 base units, so consumers must
+	//     treat the gauge as an indicator, not for exact accounting.
 	MetricReservationVaultFeeDebtSat     = "reservation_vault_fee_debt_sat"
 	MetricReservationVaultFeeReserveTbtc = "reservation_vault_fee_reserve_tbtc"
 )

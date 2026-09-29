@@ -1,15 +1,14 @@
 package ethereum
 
 // This file exercises TbtcChain.ValidateReservationAnchorProposal and
-// TbtcChain.ValidateReservationReanchorProposal (tbtc.go) against the real,
-// unmodified tbtc-v2 WalletProposalValidator contract deployed into a shared
-// in-memory go-ethereum EVM (core/vm/runtime over a single shared StateDB),
-// backed by a minimal stub Bridge
-// (testdata/walletproposalvalidator/StubBridge.sol). Closes review finding
-// I-7: prior to this harness, both wrappers had no coverage that could
-// catch a P0 like "validation runs before the authorizing action exists",
-// because every other test in this package fakes the validator response
-// instead of calling a real contract.
+// TbtcChain.ValidateReservationReanchorProposal (tbtc.go) against the
+// real, unmodified tbtc-v2 WalletProposalValidator bytecode deployed into
+// a shared in-memory go-ethereum EVM (core/vm/runtime over a single
+// shared StateDB), backed by a minimal stub Bridge
+// (testdata/walletproposalvalidator/StubBridge.sol). No other test in
+// this package calls a real validator: the others fake the validator
+// response, so only this harness can catch a regression where validation
+// runs against a request nonce for which no action was ever authorized.
 //
 // The test-only in-memory backend satisfies the keep-common
 // ethutil.EthereumClient interface that the generated tbtccontract
@@ -18,16 +17,9 @@ package ethereum
 // helpers the wiring touches) and returns a clear "not supported in
 // harness" error for the rest.
 //
-// Replaces the former ethclient/simulated backend, which could not be
-// linked by the test binary on Go 1.24/1.25: simulated -> internal/debug
-// -> github.com/fjl/memsize, whose reference to runtime.stopTheWorld trips
-// the Go 1.23+ linkname restriction that CI's plain `go test` (no
-// -checklinkname=0) enforces. The EVM below executes the same real
-// validator bytecode against the same seeded state; the block number is
-// the fixed constant below and the block timestamp is captured at
-// harness construction from the wall clock (as the simulated backend
-// mined blocks at wall clock), so every seed value keeps its margin
-// around wall-clock "now".
+// The block number is the fixed constant below and the block timestamp is
+// captured at harness construction from the wall clock, so every seed
+// value keeps its margin around wall-clock "now".
 //
 // Regenerating the vendored artifacts:
 //   see testdata/walletproposalvalidator/regenerate.sh
@@ -206,21 +198,21 @@ func loadValidatorTestdataArtifact(t *testing.T, name string) (hostchainabi.ABI,
 
 // harnessBlockNumber is the fixed block number the in-memory EVM executes
 // at. The block timestamp is not fixed: newHarnessBackend captures the
-// wall-clock time at construction (mirroring the simulated backend,
-// which mined at wall clock), keeping every seed value's margin around
-// wall-clock "now" correct.
+// wall-clock time at construction, keeping every seed value's margin
+// around wall-clock "now" correct.
 const harnessBlockNumber uint64 = 1
 
 // harnessBackend is a test-only, in-memory backend that runs EVM code on
 // a single shared state.StateDB (like core/vm/runtime does when
 // Config.State is nil, but kept across deploy and seeding calls so the
 // state persists) and exposes it through the keep-common
-// ethutil.EthereumClient interface. It replaces the former
-// ethclient/simulated backend, which could not be linked by the test
-// binary on Go 1.24/1.25 (simulated -> node/eth/catalyst ->
-// internal/debug -> github.com/fjl/memsize, whose reference to
-// runtime.stopTheWorld is rejected by the Go 1.23+ linkname
-// restriction).
+// ethutil.EthereumClient interface.
+//
+// An in-memory EVM over one shared StateDB is used instead of an
+// ethclient/simulated node so that the real, unmodified validator
+// bytecode runs to completion in the test binary without pulling in the
+// simulated node's heavy dependencies, which the test binary cannot link
+// on recent Go toolchains.
 //
 // The chain context is a fixed block number (harnessBlockNumber) and a
 // block timestamp captured at construction: the validator compares
@@ -808,9 +800,10 @@ func TestValidateReservationAnchorProposal(t *testing.T) {
 		h := newValidatorHarness(t)
 		now := uint32(time.Now().Unix())
 
-		// Mirrors the P0 bug this harness exists to catch: validation
-		// running against a request nonce for which no acceptance action
-		// was ever authorized.
+		// No acceptance action has been authorized for this nonce:
+		// reservationActions must return a zeroed struct
+		// (actionType == None), and the real validator must reject the
+		// proposal as not a pending acceptance action.
 		deposit, fundingTx, _ := buildFundingDeposit(
 			t, depositor, walletPubKeyHash, refundPubKeyHash,
 			now+uint32((60*24*time.Hour).Seconds()), 1_000_000,
@@ -928,9 +921,10 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 	t.Run("no pending re-anchor action at the given nonce", func(t *testing.T) {
 		h := newValidatorHarness(t)
 
-		// Deliberately no setReservation/setReservationAction call:
-		// reservationActions returns a zeroed struct (actionType == None)
-		// for this nonce, the same P0 shape as the anchor-side test above.
+		// No re-anchor action has been authorized for this nonce:
+		// reservationActions returns a zeroed struct
+		// (actionType == None), and the real validator rejects the
+		// proposal as not a pending re-anchor action.
 		proposal := &tbtc.ReservationReanchorProposal{
 			ReservationKey:            reservationKey,
 			RequestNonce:              1,
