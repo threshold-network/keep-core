@@ -33,8 +33,10 @@ const (
 	// StaleDepositResolutionKeep indicates the deposit is still
 	// pending-stale and must be retained in the caller's tracking set
 	// for the next tick: its snapshotted refund deadline has not yet
-	// passed (no per-deposit chain read is made before it does), its
-	// current action generation is still Pending (the contract would
+	// passed - for a pollTick-discovered deposit the deadline is
+	// memoized from the reveal event, so no per-deposit chain read is
+	// made before it does - its current action generation is still
+	// Pending (the contract would
 	// revert the notification while an acceptance authorization is
 	// pending), a previously submitted notification is inside its
 	// renotify backoff window, or a notification was just submitted
@@ -42,13 +44,14 @@ const (
 	StaleDepositResolutionKeep
 	// StaleDepositResolutionDrop indicates the deposit is no longer a
 	// staleness candidate without this watcher's notification being the
-	// observed release: the reserved deposit record was already cleared
-	// on-chain (its wallet field is zero - every clearing path,
-	// including another operator's notification, emits
-	// ReservedDepositMarkedStale in the same transaction) or the
-	// deposit is not reserved at all. The caller should also call
-	// forgetDeposit to release any per-deposit entries the watcher
-	// holds for this key.
+	// observed release: the reserved deposit record is not pending on-
+	// chain - its wallet field is zero, whether the deposit was never
+	// reserved or a release path already cleared it (a stale
+	// notification or governance's force-release emits
+	// ReservedDepositMarkedStale in the same transaction; the
+	// owner's acceptance clears the record without emitting the
+	// event). The caller should also call forgetDeposit to release any
+	// per-deposit entries the watcher holds for this key.
 	StaleDepositResolutionDrop
 	// StaleDepositResolutionNotified indicates this watcher's release
 	// was confirmed: an outstanding NotifyStaleReservedDeposit
@@ -74,18 +77,23 @@ const (
 // reverseUint32) at reveal. Until that deadline the deposit cannot
 // become stale - the contract rejects
 // NotifyStaleReservedDeposit with "Deposit refund deadline has not
-// elapsed" - so the watcher makes no per-deposit chain read at all
-// before the deadline (an in-memory gate only). Once the deadline has
-// passed, the watcher notifies whenever the current action generation
-// is not Pending, regardless of the assigned wallet's state: a Live
-// wallet that never accepts its deposit is exactly the case the
-// notification exists to clean up. Every tracked deposit is kept until
-// its reserved deposit record clears on-chain (wallet field zero,
-// which every release path - including the owner's acceptance -
-// performs in the same transaction that emits
-// ReservedDepositMarkedStale); a still-pending record is never dropped
-// merely because its action generation is TimedOut or has not reached
-// Settled.
+// elapsed" - so for a deposit discovered by pollTick, whose deadline is
+// memoized from the reveal event, the watcher makes no per-deposit
+// chain read at all before the deadline (an in-memory gate only); a
+// deposit checked directly without that memo first recovers its
+// deadline from chain state (see getRefundDeadline). Once the deadline
+// has passed, the watcher notifies whenever the current action
+// generation is not Pending, regardless of the assigned wallet's
+// state: a Live wallet that never accepts its deposit is exactly the
+// case the notification exists to clean up. Every tracked deposit is
+// kept until its reserved deposit record is observed cleared on-chain
+// (wallet field zero): both the owner's acceptance and a stale
+// release clear the record, and only the stale-release paths - a
+// successful NotifyStaleReservedDeposit or governance's
+// forceStaleReservedDeposit - emit ReservedDepositMarkedStale. The
+// zero field, not the event, is the completion signal; a
+// still-pending record is never dropped merely because its action
+// generation is TimedOut or has not reached Settled.
 type ReservationStaleDepositWatcher struct {
 	spvChain Chain
 	// notifiedAt is the UNIX timestamp of this watcher's last
@@ -114,17 +122,6 @@ type ReservationStaleDepositWatcher struct {
 	// steady operation no per-deposit chain read happens before the
 	// deadline.
 	refundDeadlineMemo map[string]uint32
-
-	// reservationParamsTickCache applies the identical
-	// tick-generation-token contract described below to the
-	// ReservationParameters fetch: a `now` that differs from
-	// reservationParamsTickCacheNow signals a new tick and triggers a
-	// fresh fetch; a repeated `now` reuses it. pollTick relies on this
-	// so every reveal scanned within one tick shares a single
-	// governance-parameter fetch instead of paying for one per event.
-	reservationParamsTickCacheValid bool
-	reservationParamsTickCacheNow   uint32
-	reservationParamsTickCache      reservationParamsFetchResult
 
 	// operatorAddress identifies this process for
 	// reservationOperatorStaggerOffset (see reservation_wiring.go),
@@ -170,14 +167,6 @@ type ReservationStaleDepositWatcher struct {
 	// watcher skips the startup scan entirely - reservations are
 	// inactive - and the cursor jumps to the chain head.
 	activationBlock uint64
-}
-
-// reservationParamsFetchResult caches the outcome of a single
-// ReservationParameters call, including an error, so a failed fetch is
-// not retried for every reveal scanned in the same poll tick.
-type reservationParamsFetchResult struct {
-	params *tbtc.ReservationParameters
-	err    error
 }
 
 // errStaleDepositCleared signals that the reserved deposit record was
@@ -235,17 +224,19 @@ func reverseUint32(locktime [4]byte) uint32 {
 // notifyStaleReservedDeposit guards:
 //
 //  1. The deposit's reserved record is still open: its wallet field is
-//     non-zero. Every release path - a successful
-//     NotifyStaleReservedDeposit (this watcher's or another
-//     operator's), governance's forceStaleReservedDeposit, or the
-//     owner's acceptance - clears the wallet field in the same
-//     transaction that emits ReservedDepositMarkedStale, so the
-//     cleared field is the completion signal.
+//     non-zero. The owner's acceptance and the stale-release paths
+//     (a successful NotifyStaleReservedDeposit - this watcher's or
+//     another operator's - or governance's forceStaleReservedDeposit)
+//     all clear the record; only the stale-release paths emit
+//     ReservedDepositMarkedStale in the clearing transaction. The
+//     zero field, not the event, is the completion signal.
 //  2. The snapshotted refund deadline (the reveal-time RefundLocktime,
 //     byte-reversed; see reverseUint32) has STRICTLY passed: the
-//     contract's requirement is block.timestamp > refundDeadline. At or
-//     before the deadline the check performs no per-deposit chain
-//     reads at all (in-memory gate only).
+//     contract's requirement is block.timestamp > refundDeadline. At
+//     or before the deadline, a deposit discovered by pollTick
+//     performs no per-deposit chain reads at all (in-memory gate
+//     only); a deposit checked directly without that memo first
+//     recovers its deadline from chain state (see getRefundDeadline).
 //  3. The current action generation is not Pending: while an
 //     acceptance authorization is pending, the contract reverts the
 //     notification with "Acceptance authorization pending", so the
@@ -313,32 +304,14 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		return StaleDepositResolutionKeep, nil
 	}
 
-	// Past the deadline: per-deposit chain reads begin. The deferred
-	// IsReservedDeposit confirmation - pollTick's vault-match discovery
-	// no longer calls it (it tracks every vault-matched reveal in
-	// memory and only verifies the on-chain reservation status once
-	// the check actually needs to do anything with the result) - is
-	// the first such read. A reveal that satisfied the vault-match
-	// filter but is not actually a reservation has no
-	// pendingReservedDeposit record on-chain; it retires here without
-	// burning a NotifyStaleReservedDeposit transaction.
-	isReserved, err := rsdw.spvChain.IsReservedDeposit(depositKey)
-	if err != nil {
-		return StaleDepositResolutionUnknown, fmt.Errorf(
-			"failed to check whether deposit [%v] is reserved: [%v]",
-			depositKey,
-			err,
-		)
-	}
-	if !isReserved {
-		logger.Debugf(
-			"deposit [%v] was revealed with the reservation vault but "+
-				"is not actually a reservation; retiring from tracking "+
-				"without notifying",
-			depositKey,
-		)
-		return StaleDepositResolutionDrop, nil
-	}
+	// Past the deadline: per-deposit chain reads begin with the
+	// wallet-field read below. The record's wallet field is the
+	// completion signal and also the pending-or-not discriminator: a
+	// reveal that satisfied the vault-match filter but was not
+	// actually reserved has no pendingReservedDeposit record on
+	// chain, so ReservedDepositWallet reads back zero and retires
+	// the deposit here without burning a NotifyStaleReservedDeposit
+	// transaction.
 
 	walletPublicKeyHash, err := rsdw.spvChain.ReservedDepositWallet(depositKey)
 	if err != nil {
@@ -349,11 +322,14 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 		)
 	}
 
-	// A zero wallet field means the reserved deposit record was released
-	// on-chain - this watcher's notification mined, another operator's
-	// did, the owner's acceptance consumed it, or governance force-
-	// cleared it; on-chain, every such transaction also emits
-	// ReservedDepositMarkedStale. Nothing left to release.
+	// A zero wallet field means the reserved deposit record was
+	// cleared on-chain - this watcher's stale notification mined,
+	// another operator's did, the owner's acceptance consumed it, or
+	// governance force-cleared it - and there is nothing left to
+	// release: only the stale-release paths emit
+	// ReservedDepositMarkedStale, while the owner's acceptance
+	// clears the record without emitting it, so the zero field - not
+	// the event - is the completion signal.
 	if walletPublicKeyHash == ([20]byte{}) {
 		logger.Debugf(
 			"reserved deposit [%v] record cleared on-chain; retiring from "+
@@ -609,28 +585,6 @@ func (rsdw *ReservationStaleDepositWatcher) snapshotRefundDeadline(
 	return reverseUint32(matchingEvent.RefundLocktime), nil
 }
 
-// getReservationParametersForTick fetches the live ReservationParameters,
-// applying the identical tick-generation-token contract as the
-// notification caches above: a `now` that differs from the cached tick
-// token signals a new tick and triggers a fresh fetch, while a repeated
-// `now` reuses the cached result. pollTick relies on this so every
-// reveal scanned within one tick shares a single governance-parameter
-// fetch instead of paying for one per event.
-func (rsdw *ReservationStaleDepositWatcher) getReservationParametersForTick(
-	now uint32,
-) (*tbtc.ReservationParameters, error) {
-	if !rsdw.reservationParamsTickCacheValid || now != rsdw.reservationParamsTickCacheNow {
-		rsdw.reservationParamsTickCacheValid = true
-		rsdw.reservationParamsTickCacheNow = now
-		params, err := rsdw.spvChain.ReservationParameters()
-		rsdw.reservationParamsTickCache = reservationParamsFetchResult{
-			params: params,
-			err:    err,
-		}
-	}
-	return rsdw.reservationParamsTickCache.params, rsdw.reservationParamsTickCache.err
-}
-
 // forgetDeposit clears any cached notification state and snapshotted
 // refund deadline held for the given deposit key. The poller invokes
 // this once a deposit resolves to Drop or Notified, so a resolved
@@ -713,7 +667,7 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 			rsdw.activationBlock > currentBlock:
 			// Skip the catch-up window entirely (cursor on the
 			// next tick starts from this head). Returning early here
-			// (before getReservationParametersForTick) keeps the
+			// (before the ReservationParameters fetch) keeps the
 			// tick fast on networks where reservations are not
 			// active; pending is empty so the Check loop below is a
 			// no-op anyway.
@@ -726,11 +680,10 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		queryStartBlock = rsdw.lastSeenBlock + 1
 	}
 
-	// I-1: chunk the reveal-event scan so a wide catch-up window
+	// Chunk the reveal-event scan so a wide catch-up window
 	// (activation block to chain tip) does not become a single huge
 	// PastDepositRevealedEvents query. Steady-state deltas are small
-	// enough to fall into a single chunk and behave identically to
-	// the previous one-call path.
+	// enough to fall into a single chunk.
 	events, err := fetchPastEventsInChunks[*tbtc.DepositRevealedEvent](
 		func(chunkStart, chunkEnd uint64) ([]*tbtc.DepositRevealedEvent, error) {
 			return rsdw.spvChain.PastDepositRevealedEvents(
@@ -752,7 +705,7 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		return rsdw.trackedCount(), false
 	}
 
-	params, err := rsdw.getReservationParametersForTick(now)
+	params, err := rsdw.spvChain.ReservationParameters()
 	if err != nil {
 		reservationWiringLogger.Errorf(
 			"stale-deposit poll failed to fetch reservation "+
@@ -774,16 +727,14 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 
 		// Track every vault-matched reveal in memory only: the vault
 		// match (ReservationParameters().ReservationVault, fetched
-		// once per tick) is the discovery gate, and all per-deposit
-		// chain reads - including the IsReservedDeposit confirmation -
-		// are deferred until CheckStaleReservedDeposit sees this
-		// deposit past its snapshotted refund deadline. Doing the
-		// read here would re-introduce the per-deposit RPC the
-		// deadline-aware scheduling was meant to eliminate.
-		//
-		// Snapshot the refund deadline from the reveal event in
-		// hand so CheckStaleReservedDeposit's deadline gate stays
-		// purely in-memory until then.
+		// once per tick) is the discovery gate, and the refund
+		// deadline is memoized from the reveal event in hand, so a
+		// tracked deposit performs no per-deposit chain reads until
+		// its deadline passes - by which point CheckStaleReservedDeposit
+		// reads the record's wallet field first. Doing any read here
+		// would re-introduce the per-deposit RPC the deadline-aware
+		// scheduling was meant to eliminate.
+
 		rsdw.pending[depositKey.String()] = depositKey
 		rsdw.refundDeadlineMemo[depositKey.String()] = reverseUint32(
 			event.RefundLocktime,

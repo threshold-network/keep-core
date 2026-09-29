@@ -247,11 +247,13 @@ func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
 		return lastScannedBlock + 1, currentBlock, nil
 	}
 
-	// First pass: bounded catch-up window, clamped to the network's
-	// reservation activation block.  An activation block above the
-	// current tip is treated as a no-op start (covered by chunked fetch
-	// returning nil for an inverted range) - reservations have not yet
-	// activated on this network.
+	// First pass: bounded catch-up window. The clamp to the network's
+	// reservation activation block applies only when the activation is
+	// known (not math.MaxUint64) and falls at or below the current tip;
+	// an activation block above the current tip - or an unknown
+	// activation - leaves the bounded lookback range unchanged, so the
+	// scan is ordinary and simply finds nothing while reservations have
+	// not yet activated on this network.
 	start := uint64(0)
 	if currentBlock > reservationDefaultLookBackBlocks {
 		start = currentBlock - reservationDefaultLookBackBlocks

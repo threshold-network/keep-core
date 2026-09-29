@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -505,22 +506,48 @@ func TestGetProofInfo_NormalizesZeroMaxProofHeaders(t *testing.T) {
 }
 
 // recordingMetricsRecorder captures IncrementCounter and SetGauge calls for
-// assertions. proveTransactions and the maintainer control loop invoke it
-// synchronously, so no locking is needed.
+// assertions. Most tests invoke it synchronously from a single goroutine, but
+// the reservation watcher-death path increments it from the watcher's
+// goroutines while the test polls it, so every read and write goes through a
+// mutex and the accessors below.
 type recordingMetricsRecorder struct {
+	mu       sync.Mutex
 	counters map[string]float64
 	gauges   map[string]float64
 }
 
 func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.counters == nil {
+		r.counters = make(map[string]float64)
+	}
 	r.counters[name] += value
 }
 
 func (r *recordingMetricsRecorder) SetGauge(name string, value float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.gauges == nil {
 		r.gauges = make(map[string]float64)
 	}
 	r.gauges[name] = value
+}
+
+// Counter returns the accumulated value of the named counter (0 when unset);
+// mutex-safe for readers racing the watcher goroutines.
+func (r *recordingMetricsRecorder) Counter(name string) float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counters[name]
+}
+
+// Gauge returns the last value set for the named gauge (0 when unset);
+// mutex-safe.
+func (r *recordingMetricsRecorder) Gauge(name string) float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gauges[name]
 }
 
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
@@ -662,7 +689,7 @@ func TestProveTransactions(t *testing.T) {
 				wantFailures = 1
 			}
 			for _, name := range []string{"spv_proof_task_failures_total", "redemption_proof_task_failures_total"} {
-				if got := recorder.counters[name]; got != wantFailures {
+				if got := recorder.Counter(name); got != wantFailures {
 					t.Errorf("%s: want %v, got %v", name, wantFailures, got)
 				}
 			}
@@ -683,7 +710,7 @@ func TestProveTransactions(t *testing.T) {
 			}
 
 			if test.expectedCounter != "" {
-				if got := recorder.counters[test.expectedCounter]; got != 1 {
+				if got := recorder.Counter(test.expectedCounter); got != 1 {
 					t.Errorf(
 						"expected counter [%s] to be 1, got [%v]",
 						test.expectedCounter,

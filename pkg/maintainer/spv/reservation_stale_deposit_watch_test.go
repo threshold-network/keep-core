@@ -22,11 +22,9 @@ func reservationDepositKey(low uint64) *big.Int {
 	return new(big.Int).SetUint64(low)
 }
 
-// reservationActionTimeout is the fixed action timeout used by some tests
-// to seed ReservationParameters. It plays no role in the stale-deposit
-// watcher's own staleness derivation any more (see D-2/C-3): it only
-// matters for tests that rely on pollTick's vault matching against
-// ReservationParameters.
+// reservationActionTimeout is the fixed action timeout used by some
+// tests to seed ReservationParameters. It only matters for tests that
+// rely on pollTick's vault matching against ReservationParameters.
 const reservationActionTimeout uint32 = 3600
 
 // locktimeForDeadline returns the 4-byte little-endian Bitcoin refund
@@ -132,12 +130,11 @@ func TestReservationStaleDepositWatcher_NonReservedDepositIsSkipped(t *testing.T
 	}
 }
 
-// TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline is a
-// regression test for C-3 (case 1): a reserved deposit assigned to a Live
-// wallet that never accepts it must still be notified once its refund
-// deadline has passed and its action generation is no longer Pending -
-// the old code treated a Live wallet as permanently exempt and never
-// notified it.
+// TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline
+// pins that notification eligibility is independent of the assigned
+// wallet's state: a reserved deposit on a Live wallet that never
+// accepts it must still be notified once its refund deadline has
+// passed and its action generation is no longer Pending.
 func TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline(t *testing.T) {
 	spvChain := newLocalChain()
 
@@ -173,12 +170,10 @@ func TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline(t *testi
 	}
 }
 
-// TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline is
-// a regression test for C-3 (case 2): a deposit whose acceptance
-// generation timed out before its later refund deadline must still be
-// notified once that deadline passes - the old code dropped the deposit
-// as soon as it observed the TimedOut action, well before the on-chain
-// refund deadline had elapsed.
+// TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline
+// pins that a TimedOut acceptance generation does not by itself retire
+// a deposit: one whose generation timed out before its refund deadline
+// is still notified once that deadline passes.
 func TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline(t *testing.T) {
 	spvChain := newLocalChain()
 
@@ -215,7 +210,7 @@ func TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline(t *t
 }
 
 // TestReservationStaleDepositWatcher_PendingActionNotNotifiedAfterDeadline
-// pins the notification-eligibility rule (C-3): even after the refund
+// pins the notification-eligibility rule: even after the refund
 // deadline has passed, a still-Pending action generation must not be
 // notified - the contract would revert with "Acceptance authorization
 // pending" - so the deposit stays tracked rather than triggering an
@@ -254,27 +249,18 @@ func TestReservationStaleDepositWatcher_PendingActionNotNotifiedAfterDeadline(t 
 	}
 }
 
-// staleReadCountingChain wraps a Chain and counts the per-deposit chain
-// reads CheckStaleReservedDeposit issues past the deadline gate
-// (IsReservedDeposit, ReservedDepositWallet, GetReservation,
-// GetReservationAction), delegating every other method to the embedded
-// Chain. It is used to verify I-2/D-2's "no chain reads before the
-// deadline" invariant, extended to cover IsReservedDeposit (I-3): the
-// deferred reservation confirmation pollTick's vault-match discovery no
-// longer performs at discovery time.
+// staleReadCountingChain wraps a Chain and counts the per-deposit
+// chain reads CheckStaleReservedDeposit issues past the deadline gate
+// (ReservedDepositWallet, GetReservation, GetReservationAction),
+// delegating every other method to the embedded Chain. It verifies the
+// "no chain reads before the deadline" invariant: with the deadline
+// memoized, the pre-deadline check stays in-memory only, and only the
+// post-deadline check reads on-chain state.
 type staleReadCountingChain struct {
 	Chain
-	isReservedDepositCalls     int
 	reservedDepositWalletCalls int
 	getReservationCalls        int
 	getReservationActionCalls  int
-}
-
-func (c *staleReadCountingChain) IsReservedDeposit(
-	depositKey *big.Int,
-) (bool, error) {
-	c.isReservedDepositCalls++
-	return c.Chain.IsReservedDeposit(depositKey)
 }
 
 func (c *staleReadCountingChain) ReservedDepositWallet(
@@ -299,11 +285,11 @@ func (c *staleReadCountingChain) GetReservationAction(
 	return c.Chain.GetReservationAction(reservationKey, requestNonce)
 }
 
-// TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline is a
-// regression test for I-2/D-2: before the snapshotted refund deadline
-// has passed, CheckStaleReservedDeposit must not issue any per-deposit
-// chain read at all (the check is in-memory only). Once the deadline has
-// passed, the check does read on-chain state.
+// TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline pins
+// the deadline gate: before the snapshotted refund deadline has
+// passed, CheckStaleReservedDeposit issues no per-deposit chain read
+// at all (the check is in-memory only); once it has passed, the check
+// reads on-chain state to decide the deposit's fate.
 func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T) {
 	inner := newLocalChain()
 	spvChain := &staleReadCountingChain{Chain: inner}
@@ -335,14 +321,12 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 	if res != StaleDepositResolutionKeep {
 		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
-	if spvChain.isReservedDepositCalls != 0 ||
-		spvChain.reservedDepositWalletCalls != 0 ||
+	if spvChain.reservedDepositWalletCalls != 0 ||
 		spvChain.getReservationCalls != 0 ||
 		spvChain.getReservationActionCalls != 0 {
 		t.Fatalf(
 			"expected zero chain reads before the deadline, got "+
-				"isReserved=%d wallet=%d reservation=%d action=%d",
-			spvChain.isReservedDepositCalls,
+				"wallet=%d reservation=%d action=%d",
 			spvChain.reservedDepositWalletCalls,
 			spvChain.getReservationCalls,
 			spvChain.getReservationActionCalls,
@@ -356,14 +340,12 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 	if res != StaleDepositResolutionKeep {
 		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
 	}
-	if spvChain.isReservedDepositCalls == 0 ||
-		spvChain.reservedDepositWalletCalls == 0 ||
+	if spvChain.reservedDepositWalletCalls == 0 ||
 		spvChain.getReservationCalls == 0 ||
 		spvChain.getReservationActionCalls == 0 {
 		t.Fatalf(
-			"expected chain reads past the deadline, got isReserved=%d "+
+			"expected chain reads past the deadline, got "+
 				"wallet=%d reservation=%d action=%d",
-			spvChain.isReservedDepositCalls,
 			spvChain.reservedDepositWalletCalls,
 			spvChain.getReservationCalls,
 			spvChain.getReservationActionCalls,
@@ -375,10 +357,10 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 }
 
 // TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField
-// is a regression test for the C-3 completion signal: the deposit is
-// retired only once ReservedDepositWallet reads back zero - not on
-// submission alone - and the retirement resolution reflects whether this
-// watcher's own notification was outstanding.
+// pins the completion signal: the deposit is retired only once
+// ReservedDepositWallet reads back zero - not on submission alone -
+// and the retirement resolution reflects whether this watcher's own
+// notification was outstanding.
 func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t *testing.T) {
 	t.Run("our outstanding notification is confirmed", func(t *testing.T) {
 		spvChain := newLocalChain()
@@ -426,9 +408,9 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		spvChain := newLocalChain()
 
 		key := reservationDepositKey(0xB007)
-		// isReserved true but the wallet field is already zero: released
-		// by another operator, an acceptance, or governance before this
-		// watcher ever attempted a notification.
+		// The wallet field is already zero: released by another
+		// operator, an acceptance, or governance before this watcher
+		// ever attempted a notification.
 		spvChain.setReservedDeposit(key, [20]byte{}, true)
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
@@ -705,10 +687,11 @@ func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesCurrentGeneration
 }
 
 // TestReservationStaleDepositWatcher_RefundDeadlineFromRevealEvent covers
-// the deadline snapshot's derivation path (a deposit checked without a
-// pre-populated memo, i.e. not yet discovered by pollTick), and the
-// exact byte-reversal (D-2): the deadline decoded from RefundLocktime
-// must be honored precisely, both for "not yet reached" and "notify".
+// the deadline snapshot's derivation path: a deposit checked without a
+// pre-populated memo (not yet discovered by pollTick) has its deadline
+// recovered from its own DepositRevealed event's RefundLocktime, and
+// that decoded value must be honored precisely, both for "not yet
+// reached" and "notify".
 func TestReservationStaleDepositWatcher_RefundDeadlineFromRevealEvent(t *testing.T) {
 	spvChain := newLocalChain()
 
@@ -846,15 +829,14 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 }
 
 // staleDepositEventCountingChain wraps a Chain and counts calls to
-// PastDepositRevealedEvents and IsReservedDeposit, delegating every
-// other method to the embedded Chain. It is used to verify pollTick's
-// activation-block-aware startup scan (I-1) and its deferral of the
-// IsReservedDeposit read to after a tracked deposit's refund deadline
-// (I-3).
+// PastDepositRevealedEvents, delegating every other method to the
+// embedded Chain. It is used to verify pollTick's
+// activation-block-aware startup scan: the first scan starts at the
+// network's reservation activation block instead of a fixed lookback,
+// and an inactive network skips the startup scan entirely.
 type staleDepositEventCountingChain struct {
 	Chain
 	pastDepositRevealedEventsCalls int
-	isReservedDepositCalls         int
 }
 
 func (c *staleDepositEventCountingChain) PastDepositRevealedEvents(
@@ -864,25 +846,19 @@ func (c *staleDepositEventCountingChain) PastDepositRevealedEvents(
 	return c.Chain.PastDepositRevealedEvents(filter)
 }
 
-func (c *staleDepositEventCountingChain) IsReservedDeposit(
-	depositKey *big.Int,
-) (bool, error) {
-	c.isReservedDepositCalls++
-	return c.Chain.IsReservedDeposit(depositKey)
-}
-
-// TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateIsReservedDeposit
-// is a regression test for I-3: a newly observed reveal whose vault
-// matches the reservation vault must be tracked directly from the event
-// (vault match against ReservationParameters().ReservationVault, read
-// once per tick) without an immediate IsReservedDeposit chain read. That
-// read is deferred until the tracked deposit's snapshotted refund
-// deadline has passed. On the old behavior (IsReservedDeposit called at
-// discovery time inside pollTick) this test fails: isReservedDepositCalls
-// would already be 1 after the very first, pre-deadline tick.
-func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateIsReservedDeposit(t *testing.T) {
+// TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead
+// pins the discovery gate: a newly observed reveal whose vault matches
+// the reservation vault is tracked directly from the event, with its
+// refund deadline memoized from the event's RefundLocktime, so the
+// pre-deadline check performs no per-deposit chain read - and a
+// deposit whose record has since cleared on-chain is retired by the
+// post-deadline check's ReservedDepositWallet read alone, without
+// notifying.
+func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
+	t *testing.T,
+) {
 	inner := newLocalChain()
-	spvChain := &staleDepositEventCountingChain{Chain: inner}
+	spvChain := &staleReadCountingChain{Chain: inner}
 
 	const currentBlock = uint64(1000)
 	blockCounter := newMockBlockCounter()
@@ -913,23 +889,29 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateIsReservedDepos
 	}
 	depositKey := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
 
-	// Reserved deposit record so the eventual post-deadline check does
-	// not immediately drop it as never-reserved, isolating the
-	// pre-deadline assertion below from that branch.
+	// Pending record so the post-deadline check reaches the stale path
+	// instead of retiring the deposit as not-pending.
 	wallet := walletPKHAt(0x77)
 	inner.setReservedDeposit(depositKey, wallet, true)
-	inner.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+	inner.setWallet(
+		wallet,
+		&tbtc.WalletChainData{State: tbtc.StateUnknown},
+	)
 	inner.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
-	inner.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
-		State:     tbtc.ReservationActionStateTimedOut,
-		TimeoutAt: 100,
-	})
+	inner.setReservationAction(
+		depositKey,
+		1,
+		&tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStateTimedOut,
+			TimeoutAt: 100,
+		},
+	)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
 
 	// First tick, now (1_000) is far before the deadline (50_000): the
-	// reveal is discovered and tracked, but IsReservedDeposit must not
-	// be called yet.
+	// reveal is discovered and tracked, with its deadline memoized,
+	// and the check stays in-memory.
 	trackedCount, ok := watcher.pollTick(1_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")
@@ -937,42 +919,141 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateIsReservedDepos
 	if trackedCount != 1 {
 		t.Fatalf("expected the reveal to be tracked on discovery, got %d", trackedCount)
 	}
-	if spvChain.isReservedDepositCalls != 0 {
+	if spvChain.reservedDepositWalletCalls != 0 ||
+		spvChain.getReservationCalls != 0 ||
+		spvChain.getReservationActionCalls != 0 {
 		t.Fatalf(
-			"expected zero IsReservedDeposit calls before the deadline, got %d",
-			spvChain.isReservedDepositCalls,
+			"expected zero per-deposit chain reads before the deadline, "+
+				"got wallet=%d reservation=%d action=%d",
+			spvChain.reservedDepositWalletCalls,
+			spvChain.getReservationCalls,
+			spvChain.getReservationActionCalls,
 		)
 	}
 
-	// Second tick, now (60_000) is past the deadline: the deferred
-	// IsReservedDeposit read fires exactly once as part of the
-	// post-deadline check.
+	// The record clears on-chain before the deadline passes.
+	inner.setReservedDeposit(depositKey, [20]byte{}, true)
+
+	// Second tick, now (60_000) is past the deadline: the post-deadline
+	// check reads the record's wallet field and observes it cleared,
+	// retiring the deposit without notifying.
+	trackedCount, ok = watcher.pollTick(60_000)
+	if !ok {
+		t.Fatal("expected pollTick to report a definitively successful scan")
+	}
+	if trackedCount != 0 {
+		t.Fatalf(
+			"expected the cleared deposit to be retired past the deadline, "+
+				"got %d tracked",
+			trackedCount,
+		)
+	}
+	if spvChain.reservedDepositWalletCalls == 0 {
+		t.Fatal("expected the post-deadline check to read the wallet field")
+	}
+	if calls := inner.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
+		t.Fatalf(
+			"expected no notification for a cleared deposit, got %d",
+			len(calls),
+		)
+	}
+}
+
+// TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline
+// pins the other half of the post-deadline check: a still-pending
+// record (non-zero wallet field) with a non-Pending action generation
+// is notified once its refund deadline passes, and stays tracked until
+// the record clears.
+func TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline(
+	t *testing.T,
+) {
+	inner := newLocalChain()
+	spvChain := &staleReadCountingChain{Chain: inner}
+
+	const currentBlock = uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	inner.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	fundingTxHash := bitcoin.Hash{0x05}
+	fundingOutputIndex := uint32(1)
+	endBlock := currentBlock
+	if err := inner.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(50_000),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	depositKey := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+
+	inner.setReservedDeposit(depositKey, walletPKHAt(0x78), true)
+	inner.setWallet(
+		walletPKHAt(0x78),
+		&tbtc.WalletChainData{State: tbtc.StateUnknown},
+	)
+	inner.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+	inner.setReservationAction(
+		depositKey,
+		1,
+		&tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStateTimedOut,
+			TimeoutAt: 100,
+		},
+	)
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	// First tick, now (1_000) is far before the deadline (50_000): the
+	// reveal is tracked and the check stays in-memory.
+	trackedCount, ok := watcher.pollTick(1_000)
+	if !ok {
+		t.Fatal("expected pollTick to report a definitively successful scan")
+	}
+	if trackedCount != 1 {
+		t.Fatalf("expected the reveal to be tracked on discovery, got %d", trackedCount)
+	}
+
+	// Second tick, now (60_000) is past the deadline: the still-pending
+	// record is notified and stays tracked awaiting the clear.
 	trackedCount, ok = watcher.pollTick(60_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")
 	}
 	if trackedCount != 1 {
-		t.Fatalf("expected the deposit to stay tracked awaiting the record to clear, got %d", trackedCount)
-	}
-	if spvChain.isReservedDepositCalls != 1 {
 		t.Fatalf(
-			"expected exactly one IsReservedDeposit call past the deadline, got %d",
-			spvChain.isReservedDepositCalls,
+			"expected the deposit to stay tracked awaiting the record to "+
+				"clear, got %d",
+			trackedCount,
 		)
 	}
-	if calls := inner.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+	calls := inner.getSubmittedStaleReservedDeposits()
+	if len(calls) != 1 {
 		t.Fatalf("expected one stale notification, got %d", len(calls))
+	}
+	if diff := deep.Equal(depositKey, calls[0]); diff != nil {
+		t.Errorf("unexpected notified key: %v", diff)
 	}
 }
 
-// TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock is a
-// regression test for I-1: the stale-deposit watcher's first reveal
-// scan must start at the network's reservation activation block instead
-// of a fixed 30-day lookback. currentBlock - reservationDefaultLookBackBlocks
-// is 300_000 - 216_000 = 84_000, so a reveal at block 50_001 (inside the
-// activation-based window, outside the old lookback window) is missed
-// by the pre-fix 30-day-lookback scan and found by the activation-based
-// one.
+// TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock pins
+// the activation-block-aware startup scan: the stale-deposit watcher's
+// first reveal scan starts at the network's reservation activation
+// block instead of a fixed lookback window. currentBlock -
+// reservationDefaultLookBackBlocks is 300_000 - 216_000 = 84_000, so
+// a reveal at block 50_001 (inside the activation-based window,
+// outside the 30-day lookback window) is only found by the
+// activation-based scan.
 func TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock(t *testing.T) {
 	inner := newLocalChain()
 
@@ -991,7 +1072,7 @@ func TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock(t *testing.T) 
 	fundingTxHash := bitcoin.Hash{0x06}
 	fundingOutputIndex := uint32(0)
 	// Seeded at block 50_001: inside [activationBlock, currentBlock],
-	// outside the old head-30d window [84_001, 300_000].
+	// outside the head-30d window [84_001, 300_000].
 	eventEnd := currentBlock
 	if err := inner.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &eventEnd},
@@ -1022,13 +1103,13 @@ func TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock(t *testing.T) 
 	}
 }
 
-// TestRunStaleDepositPollTick_UnknownNetworkSkipsStartupScan is a
-// regression test for I-1: on a network with no reservation-activation
-// entry (tbtc.ReservationsActivationBlock's math.MaxUint64 sentinel),
-// the first reveal scan must be skipped entirely rather than falling
-// back to a 30-day lookback - no PastDepositRevealedEvents call at all,
-// and the tracked set stays empty even though a reveal exists on-chain
-// within what would have been the old lookback window.
+// TestRunStaleDepositPollTick_UnknownNetworkSkipsStartupScan pins the
+// inactive-network branch of the startup scan: on a network with no
+// reservation-activation entry (tbtc.ReservationsActivationBlock's
+// math.MaxUint64 sentinel), the first reveal scan is skipped entirely
+// rather than falling back to a fixed lookback window - no
+// PastDepositRevealedEvents call at all, and the tracked set stays
+// empty even though a reveal exists on-chain within the 30-day window.
 func TestRunStaleDepositPollTick_UnknownNetworkSkipsStartupScan(t *testing.T) {
 	inner := newLocalChain()
 	spvChain := &staleDepositEventCountingChain{Chain: inner}

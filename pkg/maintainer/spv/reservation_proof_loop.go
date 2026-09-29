@@ -2,9 +2,12 @@ package spv
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
@@ -68,6 +71,30 @@ func newReservationProofScanState() *reservationProofScanState {
 // deterministically, mirroring the watcher's nowFn pattern.
 func defaultReservationProofNowFn() uint32 {
 	return uint32(time.Now().Unix())
+}
+
+// reanchorSourceAnchorHash computes exactly the Bridge's
+// anchorUtxoHash(reservation) from Reservation.sol:
+// keccak256(abi.encodePacked(anchorTxHash, uint32 anchorTxOutputIndex)) -
+// the 32-byte anchor transaction hash in its Bitcoin internal byte order
+// (the order the Bridge stores it, matching the
+// transaction.Hash bytes), followed by the output index as a
+// big-endian uint32. It is the hash the Bridge's
+// requireCurrentSourceAnchor check in ReservationProofs.sol compares
+// against each tracked generation's on-chain source anchor snapshot. A
+// reservation with no anchor outpoint yields the zero hash.
+func reanchorSourceAnchorHash(reservation *tbtc.Reservation) [32]byte {
+	if reservation == nil ||
+		reservation.AnchorUtxo == nil ||
+		reservation.AnchorUtxo.Outpoint == nil ||
+		reservation.AnchorUtxo.Outpoint.TransactionHash == (bitcoin.Hash{}) {
+		return [32]byte{}
+	}
+	outpoint := reservation.AnchorUtxo.Outpoint
+	packed := make([]byte, 36)
+	copy(packed, outpoint.TransactionHash[:])
+	binary.BigEndian.PutUint32(packed[32:], outpoint.OutputIndex)
+	return crypto.Keccak256Hash(packed)
 }
 
 // evictStaleWalletTransactionCacheEntries removes walletTransactionCache
@@ -204,9 +231,7 @@ func reservationProofNextScanRange(
 	}
 
 	if lastScannedBlock == 0 {
-		start, active := reservationStartupScanStartBlock(
-			activationBlock, currentBlock,
-		)
+		start, active := reservationStartupScanStartBlock(activationBlock)
 		if !active {
 			return 0, currentBlock, true, nil
 		}
@@ -231,6 +256,10 @@ func reservationProofNextScanRange(
 // outer restart-backoff loop wraps an inner idle-backoff loop, so a
 // transient error restarts after config.RestartBackoffTime and a clean pass
 // with nothing to prove waits config.IdleBackoffTime before trying again.
+// A single reservationProofScanState is created once here and threaded
+// through every restarted pass, so after a transient chain-wide read error
+// a restart resumes each scan from its last completed position instead
+// of replaying the activation-to-tip history.
 func maintainReservationProofs(
 	ctx context.Context,
 	config Config,
@@ -245,8 +274,22 @@ func maintainReservationProofs(
 		logger.Info("stopping reservation proof maintainer")
 	}()
 
+	// Created once for the maintainer's lifetime and threaded through
+	// every restarted inner loop, so a restart after a chain-wide read
+	// error resumes each scan from its last completed position instead
+	// of re-scanning activation to tip; see runReservationProofLoop.
+	state := newReservationProofScanState()
+
 	for {
-		err := runReservationProofLoop(ctx, config, spvChain, btcDiffChain, btcChain, metricsRecorder)
+		err := runReservationProofLoop(
+			ctx,
+			config,
+			spvChain,
+			btcDiffChain,
+			btcChain,
+			metricsRecorder,
+			state,
+		)
 		if err != nil {
 			logger.Errorf(
 				"error while maintaining reservation proofs: [%v]; "+
@@ -271,9 +314,10 @@ func maintainReservationProofs(
 // (e.g. cannot read the current block) aborts the pass and triggers the
 // outer restart backoff.
 //
-// A single reservationProofScanState is created once and threaded through
-// every pass for the lifetime of the loop, carrying the incremental event
-// cursor and pending-action set described on that type.
+// The caller creates the single reservationProofScanState and passes it in
+// (maintainReservationProofs creates one per maintainer lifetime),
+// carrying the incremental event cursor and pending-action set described
+// on that type across every pass and every restart of the loop.
 func runReservationProofLoop(
 	ctx context.Context,
 	config Config,
@@ -281,9 +325,8 @@ func runReservationProofLoop(
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
 	metricsRecorder MetricsRecorder,
+	state *reservationProofScanState,
 ) error {
-	state := newReservationProofScanState()
-
 	for {
 		// One cache per pass, shared by the acceptance and re-anchor proof
 		// rounds below; see proofInfoCache in spv.go.
@@ -561,12 +604,70 @@ func isMatchingReservationAcceptanceTransaction(
 	return true
 }
 
+// evictReanchorGenerationIfSourceAnchorMoved reports whether the TimedOut
+// re-anchor generation identified by key must be evicted from state
+// because the reservation's current anchor outpoint no longer matches
+// the source anchor snapshotted on-chain when the generation was
+// requested.
+//
+// The Bridge settles a re-anchor generation's late proof only while its
+// snapshotted source anchor still matches the reservation's current
+// anchor (requireCurrentSourceAnchor in ReservationProofs.sol rejects
+// the submit otherwise, so once the anchor moves the generation can
+// never settle again). The comparison is keyed on the action's
+// on-chain sourceAnchorUtxoHash snapshot (written by
+// anchorUtxoHash(reservation) at request time in Reservation.sol), not
+// on any Go-side first-observation snapshot, so a process restart
+// still evicts a generation whose source anchor was already replaced
+// before the loop ever observed it. A generation whose on-chain source
+// anchor still matches the current anchor outpoint is kept regardless
+// of age - re-anchor late settlement is unbounded - so age alone never
+// triggers an eviction.
+func evictReanchorGenerationIfSourceAnchorMoved(
+	state *reservationProofScanState,
+	spvChain Chain,
+	key string,
+	event *tbtc.ReservationReanchorRequestedEvent,
+	action *tbtc.ReservationAction,
+) bool {
+	reservation, err := spvChain.GetReservation(event.ReservationKey)
+	if err != nil {
+		// The source-anchor comparison cannot be evaluated without a
+		// readable reservation record; keep tracking this generation
+		// and retry on the next pass.
+		logger.Errorf(
+			"failed to load reservation for re-anchor eviction check [%v]: [%v]",
+			event.ReservationKey,
+			err,
+		)
+		return false
+	}
+
+	if reanchorSourceAnchorHash(reservation) == action.SourceAnchorUtxoHash {
+		// The reservation's current anchor outpoint is still the source
+		// anchor the generation was requested against; this TimedOut
+		// generation can still settle a late re-anchor proof on the
+		// Bridge.
+		return false
+	}
+
+	// The anchor outpoint moved past this generation's on-chain source
+	// anchor; the Bridge will reject its late settlement forever.
+	delete(state.pendingReanchorEvents, key)
+	return true
+}
+
 // proveReservationReanchorActions finds settleable ReservationReanchor
 // action generations, locates each one's already-broadcast re-anchor
 // transaction on the Bitcoin chain (if any), and submits its SPV proof
-// once it has accumulated enough confirmations. TimedOut generations
-// remain candidates without bound, mirroring the Bridge, which settles
-// re-anchor proofs for TimedOut generations past the term.
+// once it has accumulated enough confirmations. A TimedOut generation
+// remains a candidate for late settlement without bound while its
+// on-chain source anchor is still the reservation's current anchor
+// outpoint; once a later settled generation has re-anchored the
+// reservation past the source anchor the generation snapshotted at
+// request time, the Bridge rejects this generation's late settlement
+// and it is evicted instead (see
+// evictReanchorGenerationIfSourceAnchorMoved).
 func proveReservationReanchorActions(
 	state *reservationProofScanState,
 	config Config,
@@ -620,7 +721,11 @@ func proveReservationReanchorActions(
 	// generation while its action is Pending or TimedOut, and re-anchor
 	// late settlement is unbounded (see loadSettleableAction in
 	// ReservationProofs.sol), so a TimedOut generation is kept as a
-	// candidate indefinitely.
+	// candidate for as long as its on-chain source anchor is still the
+	// reservation's current anchor outpoint; once a later settled
+	// generation has re-anchored the reservation past the source
+	// anchor the generation snapshotted at request time, the Bridge
+	// rejects its late settlement and it is evicted.
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationReanchorRequestedEvent)
 	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
@@ -638,7 +743,17 @@ func proveReservationReanchorActions(
 		}
 
 		switch action.State {
-		case tbtc.ReservationActionStatePending, tbtc.ReservationActionStateTimedOut:
+		case tbtc.ReservationActionStatePending:
+		case tbtc.ReservationActionStateTimedOut:
+			if evictReanchorGenerationIfSourceAnchorMoved(
+				state,
+				spvChain,
+				key,
+				event,
+				action,
+			) {
+				continue
+			}
 		default:
 			// Settled, Superseded, Vetoed and absent generations are not
 			// settleable on the Bridge; stop tracking them.

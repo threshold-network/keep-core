@@ -144,14 +144,17 @@ func recordReservationWatcherDeath(recorder MetricsRecorder) {
 	if recorder == nil {
 		return
 	}
-	// cmd/start.go hands a typed-nil *clientinfo.PerformanceMetrics
-	// through this interface when the process has no client-info
-	// pipeline (clientinfo.NewPerformanceMetrics was never called):
-	// the interface value is non-nil but the underlying pointer is
-	// nil, and a method call would dereference it. The watcher death
-	// path runs inside a deferred function in the watcher's goroutine;
-	// a panic there is not recovered again, so the whole process would
-	// crash. Treat the typed-nil pointer as a disabled recorder.
+	// Callers other than cmd/start.go may hand a typed-nil
+	// *clientinfo.PerformanceMetrics through this interface: the
+	// interface value is non-nil but the underlying pointer is nil,
+	// and a method call would dereference it. cmd/start.go normalizes
+	// its recorder to a true nil interface value when the process has
+	// no client-info pipeline, so this guard protects every other
+	// caller - package wiring and tests - that boxes the concrete
+	// pointer directly. The watcher death path runs inside a
+	// deferred function in the watcher's goroutine; a panic there is
+	// not recovered again, so the whole process would crash. Treat
+	// the typed-nil pointer as a disabled recorder.
 	if pm, ok := recorder.(*clientinfo.PerformanceMetrics); ok && pm == nil {
 		return
 	}

@@ -1056,11 +1056,15 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 	}
 }
 
-// TestWireReservationWatchers_WatcherDeathIncrementsMetric verifies (I-6)
-// that when a watcher goroutine dies (here: a panic during its initial
-// poll pass, recovered by the goroutine's panic-recover), the
-// watcher-death counter is incremented on the supplied MetricsRecorder -
-// not just a log line - so a dead watcher is observable in metrics.
+// TestWireReservationWatchers_WatcherDeathIncrementsMetric verifies that
+// when a watcher goroutine dies (here: a panic during its initial poll
+// pass, recovered by the goroutine's panic-recover), the watcher-death
+// counter is incremented on the supplied MetricsRecorder - not just a
+// log line - so a dead watcher is observable in metrics. Both watcher
+// goroutines are forced through the death path, and the test asserts
+// exactly two increments (one per goroutine), read through the
+// recorder's mutex-safe accessor so the polling race is real but
+// data-race-free.
 func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1078,10 +1082,10 @@ func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 	}
 
 	waitForReservationWiringCondition(t, 500*time.Millisecond, func() bool {
-		return recorder.counters[clientinfo.MetricSpvReservationWatcherDeathsTotal] >= 2
+		return recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal) >= 2
 	})
 
-	if got := recorder.counters[clientinfo.MetricSpvReservationWatcherDeathsTotal]; got != 2 {
+	if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 2 {
 		t.Fatalf("expected exactly two watcher-death increments (one per watcher goroutine), got %v", got)
 	}
 }
@@ -1089,39 +1093,47 @@ func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 // watcherDeathPanickingChain wraps a *localChain and panics on the first
 // chain read each watcher's initial poll pass performs, so the
 // goroutine's panic-recover (and thus the watcher-death counter) fires
-// deterministically.
+// deterministically. Each intercepted read also signals deathSignal before
+// it panics, so an end-to-end test can wait for both watcher goroutines to
+// actually reach their forced panic - a real completion signal in place of
+// a sleep. The channel is buffered enough for one send from each watcher.
 type watcherDeathPanickingChain struct {
 	*localChain
+	deathSignal chan struct{}
 }
 
 func (c *watcherDeathPanickingChain) PastDepositRevealedEvents(
 	filter *tbtc.DepositRevealedEventFilter,
 ) ([]*tbtc.DepositRevealedEvent, error) {
+	if c.deathSignal != nil {
+		c.deathSignal <- struct{}{}
+	}
 	panic("stale-deposit watcher boom")
 }
 
 func (c *watcherDeathPanickingChain) PastReservationAcceptanceRequestedEvents(
 	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
 ) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	if c.deathSignal != nil {
+		c.deathSignal <- struct{}{}
+	}
 	panic("action-timeout watcher boom")
 }
 
-// TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics is a
-// regression test for I-6/cmd-start-typed-nil: cmd/start.go's client
-// process wraps its *clientinfo.PerformanceMetrics instance directly
-// into the MetricsRecorder interface parameter, and that instance is a
-// nil pointer when the process has no client-info pipeline configured.
-// A nil *clientinfo.PerformanceMetrics boxed into the interface is NOT
-// a nil interface value (recorder == nil is false), so without
-// normalizing it, recordReservationWatcherDeath's IncrementCounter call
-// dereferences the nil pointer and panics - inside the watcher
-// goroutine's deferred recover, where a second panic is not caught and
-// crashes the process. On the old, unguarded implementation this test
-// panics; the fix must make it a safe no-op.
+// TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics guards
+// recordReservationWatcherDeath against the shape a direct caller can
+// hand in: a *clientinfo.PerformanceMetrics pointer boxed into the
+// MetricsRecorder interface. That interface value is NOT nil
+// (recorder == nil is false) while the underlying pointer is nil, and
+// without the guard the IncrementCounter call would dereference the nil
+// pointer and panic - inside the watcher goroutine's deferred recover,
+// where a second panic is not caught and crashes the process. With the
+// guard, the typed-nil recorder is treated as a disabled metrics
+// pipeline: a safe no-op.
 func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) {
 	t.Run("typed nil *clientinfo.PerformanceMetrics does not panic", func(t *testing.T) {
 		var typedNilMetrics *clientinfo.PerformanceMetrics
-		var recorder MetricsRecorder = typedNilMetrics // exactly cmd/start.go's shape
+		var recorder MetricsRecorder = typedNilMetrics // the shape a direct caller can pass
 		recordReservationWatcherDeath(recorder)        // must not panic
 	})
 
@@ -1132,7 +1144,7 @@ func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) 
 	t.Run("a live recorder still increments the death counter", func(t *testing.T) {
 		recorder := &recordingMetricsRecorder{counters: make(map[string]float64)}
 		recordReservationWatcherDeath(recorder)
-		if got := recorder.counters[clientinfo.MetricSpvReservationWatcherDeathsTotal]; got != 1 {
+		if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 1 {
 			t.Fatalf(
 				"expected the death counter to increment by 1 for a live "+
 					"recorder, got %v",
@@ -1146,14 +1158,20 @@ func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) 
 // is the end-to-end counterpart of
 // TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics: it wires
 // the reservation watchers with a typed-nil *clientinfo.PerformanceMetrics
-// recorder (mirroring cmd/start.go's typed-nil call shape when its
-// client-info pipeline is disabled) against a chain that panics on the
-// first chain read, forcing both watcher goroutines through the
-// recovered-panic death path that calls recordReservationWatcherDeath.
-// On the old, unguarded implementation the death-counter increment
-// itself panics inside the deferred recover, crashing the whole test
-// process; this test's completion (rather than a process crash) is
-// the proof the fix holds end-to-end, not just at the unit level above.
+// recorder - the shape a direct caller (package wiring or a test) produces
+// when it boxes the concrete pointer, which recordReservationWatcherDeath
+// must tolerate - against a chain that panics on the first chain read,
+// forcing both watcher goroutines through the recovered-panic death path
+// that calls recordReservationWatcherDeath. Without the guard the
+// death-handler's counter increment panics inside the deferred recover,
+// crashing the whole test process; this test's completion (rather than a
+// process crash) is the proof the guard holds end-to-end, not just at the
+// unit level above.
+//
+// The watcher goroutines' completion is signalled, not slept for: each
+// intercepted chain read sends on deathSignal before it panics, so the
+// test waits - with a bounded timeout - for both goroutines to actually
+// reach their forced panic instead of assuming 100ms is enough.
 func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1162,7 +1180,8 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
-	panickingChain := &watcherDeathPanickingChain{localChain: spvChain}
+	deathSignal := make(chan struct{}, 2)
+	panickingChain := &watcherDeathPanickingChain{localChain: spvChain, deathSignal: deathSignal}
 
 	var typedNilMetrics *clientinfo.PerformanceMetrics
 
@@ -1177,8 +1196,23 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Give both watcher goroutines' initial pass time to panic and run
-	// their recover path; reaching here without the test process
-	// crashing is the assertion.
-	time.Sleep(100 * time.Millisecond)
+	// One signal per watcher goroutine at its forced panic; waiting for
+	// both (bounded) is the assertion setup - a goroutine that never
+	// reaches its chain read means the death path was not actually
+	// exercised, and the test fails loudly rather than passing by
+	// timing.
+	deadline := time.After(5 * time.Second)
+	for range 2 {
+		select {
+		case <-deathSignal:
+		case <-deadline:
+			t.Fatal("a watcher goroutine never reached its forced panic")
+		}
+	}
+
+	// Both watcher goroutines have reached their forced panic and
+	// dispatched their recover handlers, which run
+	// recordReservationWatcherDeath against the typed-nil recorder;
+	// a crash would take the whole test process down, so surviving to
+	// here (with both signals observed) is the assertion.
 }

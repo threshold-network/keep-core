@@ -1,10 +1,13 @@
 package spv
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -1843,6 +1846,12 @@ func newTimedOutReanchorFixture(
 			TimeoutAt:                 1000,
 			TermSeconds:               100,
 			MinAmount:                 1000,
+			// The Bridge snapshotted this generation's source anchor as
+			// keccak256(anchorTxHash | big-endian anchorTxOutputIndex) at
+			// request time, which for the fixture's anchor outpoint is:
+			SourceAnchorUtxoHash: reanchorSourceAnchorHash(
+				&tbtc.Reservation{AnchorUtxo: anchorUtxo},
+			),
 		},
 	)
 	spvChain.setReservation(reservationKey, &tbtc.Reservation{
@@ -2165,4 +2174,350 @@ func TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot(t *testing
 			t.Errorf("expected exactly one proof submission at the snapshot bound, got %d", fixture.submissions)
 		}
 	})
+}
+
+// TestProveReservationReanchorActions_TimedOutSourceAnchor verifies that a
+// TimedOut re-anchor generation is evicted exactly when it is provably
+// un-settleable: the reservation's current anchor outpoint no longer
+// matches the source anchor the generation snapshotted on-chain at request
+// time (action.SourceAnchorUtxoHash), after which the Bridge's
+// requireCurrentSourceAnchor check in ReservationProofs.sol rejects its
+// late settlement forever. The comparison is keyed on that on-chain
+// snapshot, not on any first-observation record kept by the Go loop, so a
+// fresh scan state (process restart) still evicts a generation whose
+// source anchor was replaced before it was ever observed. While the source
+// anchor is unchanged the generation stays tracked regardless of age, and
+// the wallet's cached transaction entry is released only once no tracked
+// generation remains.
+func TestProveReservationReanchorActions_TimedOutSourceAnchor(t *testing.T) {
+	replaceFixtureSourceAnchor := func(fixture *timedOutReanchorFixture) {
+		// A later settled generation has re-anchored the reservation:
+		// the on-chain reservation record now points at a different
+		// anchor outpoint than the one this generation was requested
+		// against, while the action's snapshotted
+		// SourceAnchorUtxoHash still refers to the original outpoint.
+		replacementAnchorTx := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{{Value: 400000}},
+		}
+		if err := fixture.btcChain.BroadcastTransaction(replacementAnchorTx); err != nil {
+			t.Fatal(err)
+		}
+		fixture.spvChain.setReservation(
+			fixture.reservationKey,
+			&tbtc.Reservation{
+				AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+					Outpoint: &bitcoin.TransactionOutpoint{
+						TransactionHash: replacementAnchorTx.Hash(),
+						OutputIndex:     0,
+					},
+					Value: 400000,
+				},
+			},
+		)
+	}
+
+	t.Run("replaced source anchor is evicted", func(t *testing.T) {
+		fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+
+		if err := proveReservationReanchorActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error on the first pass: %v", err)
+		}
+		if fixture.submissions != 1 {
+			t.Fatalf("expected exactly one proof submission on the first pass, got %d", fixture.submissions)
+		}
+
+		key := reservationEventKey(fixture.reservationKey, fixture.requestNonce)
+		if _, tracked := fixture.state.pendingReanchorEvents[key]; !tracked {
+			t.Fatal("expected the generation to be tracked before its source anchor moved")
+		}
+
+		replaceFixtureSourceAnchor(fixture)
+
+		if err := proveReservationReanchorActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error on the second pass: %v", err)
+		}
+
+		if fixture.submissions != 1 {
+			t.Errorf("expected no further proof submission after eviction, got %d", fixture.submissions)
+		}
+		if _, tracked := fixture.state.pendingReanchorEvents[key]; tracked {
+			t.Error("expected the generation to be evicted once its source anchor was replaced")
+		}
+
+		// The wallet's cached entry is released now that no tracked
+		// generation remains for it; runReservationProofLoop performs
+		// this eviction after each proof round.
+		evictStaleWalletTransactionCacheEntries(fixture.state)
+		if _, cached := fixture.state.walletTransactionCache[fixture.sourceWalletPKH]; cached {
+			t.Error("expected the wallet's cached transaction entry to be released once no tracked generation remains")
+		}
+	})
+
+	t.Run("unchanged source anchor is kept regardless of age", func(t *testing.T) {
+		fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+		// Far past any bounded late window: re-anchor late settlement is
+		// unbounded, so age alone never evicts a tracked generation.
+		fixture.state.nowFn = func() uint32 { return 4000000000 }
+
+		key := reservationEventKey(fixture.reservationKey, fixture.requestNonce)
+
+		for pass := 1; pass <= 3; pass++ {
+			if err := proveReservationReanchorActions(
+				fixture.state,
+				fixture.config,
+				fixture.spvChain,
+				fixture.spvChain,
+				fixture.btcChain,
+				newProofInfoCache(),
+				nil,
+			); err != nil {
+				t.Fatalf("unexpected error on pass %d: %v", pass, err)
+			}
+		}
+
+		if fixture.submissions != 3 {
+			t.Errorf(
+				"expected the still-settleable generation to be proved on each pass, got %d submissions",
+				fixture.submissions,
+			)
+		}
+		if _, tracked := fixture.state.pendingReanchorEvents[key]; !tracked {
+			t.Error("expected a TimedOut generation with an unchanged source anchor to remain tracked")
+		}
+
+		// The wallet's cached entry survives the eviction pass because a
+		// tracked generation still references it.
+		evictStaleWalletTransactionCacheEntries(fixture.state)
+		if _, cached := fixture.state.walletTransactionCache[fixture.sourceWalletPKH]; !cached {
+			t.Error("expected the wallet's cached transaction entry to survive while a generation remains tracked")
+		}
+	})
+
+	t.Run("fresh scan state still evicts a replaced source anchor", func(t *testing.T) {
+		// Simulated process restart: the generation's source anchor was
+		// already replaced before this scan state ever observed the
+		// generation. A Go-side first-observation snapshot would record
+		// the replacement anchor and never evict; the on-chain snapshot
+		// (action.SourceAnchorUtxoHash) still refers to the original
+		// outpoint, so the very first pass evicts the generation.
+		fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+		replaceFixtureSourceAnchor(fixture)
+
+		if err := proveReservationReanchorActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if fixture.submissions != 0 {
+			t.Errorf(
+				"expected zero proof submissions against a replaced source anchor, got %d",
+				fixture.submissions,
+			)
+		}
+		if _, tracked := fixture.state.pendingReanchorEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; tracked {
+			t.Error("expected a fresh scan state to evict a generation whose source anchor was already replaced")
+		}
+	})
+}
+
+// TestReanchorSourceAnchorHash pins reanchorSourceAnchorHash against a
+// hand-computed keccak256 of the Bridge's anchorUtxoHash encoding
+// (keccak256(abi.encodePacked(anchorTxHash, uint32 anchorTxOutputIndex)) in
+// Reservation.sol) for a fixed outpoint: the transaction hash in its
+// Bitcoin internal byte order, the output index big-endian.
+func TestReanchorSourceAnchorHash(t *testing.T) {
+	txHash := [32]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+	t.Run("output index 0", func(t *testing.T) {
+		reservation := &tbtc.Reservation{
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash(txHash),
+					OutputIndex:     0,
+				},
+			},
+		}
+
+		expected := [32]byte{
+			0xf3, 0x38, 0x31, 0xec, 0x8a, 0x7f, 0x96, 0x37, 0x9e, 0xf0,
+			0xdb, 0x74, 0x5d, 0x66, 0xa8, 0xa8, 0xcb, 0x56, 0x33, 0xc5,
+			0x8f, 0xd3, 0xc0, 0xcf, 0x9f, 0xce, 0xa9, 0x78, 0x03, 0x0e,
+			0xc8, 0xcd,
+		}
+		if actual := reanchorSourceAnchorHash(reservation); actual != expected {
+			t.Errorf("expected anchor hash [%x], got [%x]", expected, actual)
+		}
+	})
+
+	t.Run("output index 1", func(t *testing.T) {
+		reservation := &tbtc.Reservation{
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash(txHash),
+					OutputIndex:     1,
+				},
+			},
+		}
+
+		expected := [32]byte{
+			0xb6, 0x48, 0x8c, 0xd5, 0x8d, 0xbe, 0xef, 0x5b, 0x11, 0xde,
+			0xe5, 0xf7, 0x8c, 0xc0, 0xe9, 0x21, 0x20, 0x02, 0xae, 0x61,
+			0x40, 0x3c, 0x32, 0xfc, 0xf4, 0xdf, 0x32, 0x6d, 0x19, 0xbd,
+			0xf4, 0x21,
+		}
+		if actual := reanchorSourceAnchorHash(reservation); actual != expected {
+			t.Errorf("expected anchor hash [%x], got [%x]", expected, actual)
+		}
+	})
+
+	t.Run("no anchor outpoint yields the zero hash", func(t *testing.T) {
+		if actual := reanchorSourceAnchorHash(&tbtc.Reservation{}); actual != ([32]byte{}) {
+			t.Errorf("expected the zero hash, got [%x]", actual)
+		}
+	})
+}
+
+// reservationScanCountingChain wraps localChain, counting Past*Events scan
+// calls and failing the re-anchor scan on demand, so a test can drive one
+// chain-wide read error through a runReservationProofLoop invocation
+// followed by a restarted invocation against the same scan state.
+type reservationScanCountingChain struct {
+	*localChain
+
+	acceptanceScanCalls int
+	reanchorScanCalls   int
+	failReanchorScan    bool
+}
+
+func (c *reservationScanCountingChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	c.acceptanceScanCalls++
+	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+func (c *reservationScanCountingChain) PastReservationReanchorRequestedEvents(
+	filter *tbtc.ReservationReanchorRequestedEventFilter,
+) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+	c.reanchorScanCalls++
+	if c.failReanchorScan {
+		return nil, errors.New("simulated provider failure")
+	}
+	return c.localChain.PastReservationReanchorRequestedEvents(filter)
+}
+
+// TestRunReservationProofLoop_ResumesScanAfterRestart verifies that a
+// restarted runReservationProofLoop invocation resumes each scan from its
+// last completed position instead of replaying the activation-to-tip
+// history: the first invocation advances the acceptance scan's cursor to
+// the tip and then dies on a chain-wide re-anchor read error; the restart
+// against the same state does not refetch the already-scanned acceptance
+// range, while the re-anchor scan still completes from its own cursor.
+func TestRunReservationProofLoop_ResumesScanAfterRestart(t *testing.T) {
+	inner := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	inner.setBlockCounter(blockCounter)
+
+	chain := &reservationScanCountingChain{localChain: inner}
+
+	state := newReservationProofScanState()
+	config := Config{
+		IdleBackoffTime:  time.Hour,
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
+	btcChain := newLocalBitcoinChain()
+
+	// First invocation: a chain-wide re-anchor read error aborts the
+	// restartable loop, after the acceptance scan has already completed.
+	chain.failReanchorScan = true
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+
+	if err := runReservationProofLoop(
+		firstCtx,
+		config,
+		chain,
+		chain,
+		btcChain,
+		nil,
+		state,
+	); err == nil {
+		t.Fatal("expected the chain-wide re-anchor read error to abort the loop")
+	}
+	if chain.acceptanceScanCalls != 1 {
+		t.Fatalf("expected exactly one acceptance scan on the first invocation, got %d", chain.acceptanceScanCalls)
+	}
+	if chain.reanchorScanCalls != 1 {
+		t.Fatalf("expected exactly one re-anchor scan on the first invocation, got %d", chain.reanchorScanCalls)
+	}
+
+	// Restart: the provider recovers. The restarted loop runs its clean
+	// pass against a pre-cancelled context, so it finishes both scans
+	// and then exits at the idle-backoff select without sleeping.
+	chain.failReanchorScan = false
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	cancelSecond()
+
+	restartErr := runReservationProofLoop(
+		secondCtx,
+		config,
+		chain,
+		chain,
+		btcChain,
+		nil,
+		state,
+	)
+	if restartErr != context.Canceled {
+		t.Fatalf(
+			"expected the restarted clean pass to end in context cancellation, got: %v",
+			restartErr,
+		)
+	}
+
+	// The acceptance scan already covered activation through the tip on
+	// the first invocation; the restart must not refetch that range.
+	if chain.acceptanceScanCalls != 1 {
+		t.Errorf(
+			"expected the restarted invocation to resume the acceptance scan from its last completed position, but it refetched: acceptance scan calls = %d",
+			chain.acceptanceScanCalls,
+		)
+	}
+	if chain.reanchorScanCalls != 2 {
+		t.Errorf(
+			"expected the re-anchor scan to complete on the restart from its own last completed position, calls = %d",
+			chain.reanchorScanCalls,
+		)
+	}
+	if state.acceptanceLastScannedBlock != 1000 {
+		t.Errorf("expected the acceptance cursor to survive the restart at 1000, got %d", state.acceptanceLastScannedBlock)
+	}
+	if state.reanchorLastScannedBlock != 1000 {
+		t.Errorf("expected the re-anchor cursor to advance to 1000 on the restart, got %d", state.reanchorLastScannedBlock)
+	}
 }
