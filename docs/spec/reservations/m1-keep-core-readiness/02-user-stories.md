@@ -91,15 +91,15 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 
 ### Story 7: Cap enforcement awareness
 - Actor: Coordinator (acceptance proposal generator)
-- Goal: Never propose an acceptance that would breach a governance-set cap.
-- Benefit: Keeps the Bridge's on-chain caps meaningful — the coordinator self-polices instead of relying solely on the Bridge to reject an overshoot after the fact.
+- Goal: Consume a pending acceptance generation without double-enforcing the caps the Bridge already reserved at request time.
+- Benefit: Keeps the Bridge's on-chain caps meaningful - capacity was reserved when `requestReservationAcceptance` ran, so the coordinator enforces only the signer-time rules (wallet state, signing window, snapshotted minimum) instead of re-applying request-time caps that would reject a valid pending generation.
 - Precondition: `ReservationParameters` fetched live for the current acceptance attempt.
-- Trigger: A new deposit is being considered for reservation acceptance.
-- Expected keep-core behavior: Reject the candidate before proposing if it would exceed `MaxReservationsPerWallet`, fall below `ReservationMinAmount`, or push `ReservationTotalAmount` over `ReservationMaxTotalAmount`.
-- Acceptance criteria: at-limit values pass, one-over-limit values are rejected, for each of the three checks independently.
-- Current status: implemented (`pkg/tbtcpg/reservation_acceptance.go:539` `ReservationMinAmount`, `:988-993` `MaxReservationsPerWallet`, `:1037-1052` `ReservationMaxTotalAmount`, all inside `checkReservationAcceptanceEligibility`) (line citations corrected 2026-09-28: previously cited `:424`, `:443`, `:475-478`, which are unrelated caps/deposit-min-age fetch setup code, not the boundary comparisons themselves)
+- Trigger: A pending acceptance generation is being considered for proposal.
+- Expected keep-core behavior: Propose the anchor when the generation targets this wallet, the wallet is `Live` or `MovingFunds` (mirroring the validator's `requireWalletLiveOrMovingFunds`), the signing window still has more than `REQUEST_TIMEOUT_SAFETY_MARGIN` left, and the deposit clears the generation's snapshotted minimum (`action.MinAmount` plus the estimated anchor fee, mirroring the on-chain validator, which compares against the action's snapshot rather than the live `reservationMinAmount`). The request-time caps (`MaxReservationsPerWallet`, per-wallet amount, single-reservation amount, global total) are NOT re-checked for an existing Pending Acceptance; the zero-cap parity note (a zero cap is "disabled", not an error) applies only where caps are still read - the re-anchor task's target headroom pre-check.
+- Acceptance criteria: a pending generation is proposed even when the request-time caps are saturated (`TestReservationAcceptanceTask_IgnoresRequestTimeCaps`); the snapshotted minimum passes at `action.MinAmount + fee` and fails below it; boundary fixture rows for `MaxReservationsPerWallet`/`ReservationMinAmount`/`ReservationMaxTotalAmount` pass with headroom and exercise the re-anchor cap-boundary checks (`TestReservationAcceptanceTask_BoundaryChecks`); a generation inside the timeout safety margin is skipped (`TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin`).
+- Current status: implemented. `checkReservationAcceptanceEligibility` was deleted from `pkg/tbtcpg/reservation_acceptance.go` on `fix/m1-cross-repo-review` (the earlier fix-branch snapshot had it at `:1020-1100`; the M1 pinned tip had it at `:977-1078`); the remaining candidate checks live in candidate selection (`:340-947`, wallet state check `:456-470`, margin skip `:761-780`, snapshotted minimum `:825-826` on the fix branch; the M1 pinned tip used live `ReservationMinAmount` at `:539` and `:731`). Re-anchor headroom checks live in `walletHasReanchorHeadroom` (`pkg/tbtcpg/reservation_reanchor.go:874-899`). (line citations corrected 2026-09-29; previously cited `:424`, `:443`, `:475-478` and `:807-822`, which were the earlier snapshot's cap-comparison and minimum lines)
 - Test level needed: unit
-- Why: Three independent cap checks with distinct boundary conditions — each needs its own boundary-value test (at-limit, one-over-limit).
+- Why: The cap boundary conditions moved to the re-anchor headroom check and the validator; the acceptance side needs one regression test pinning that request-time caps are not re-checked.
 
 ### Story 8: Wallet proposal validation
 - Actor: Client
@@ -107,9 +107,9 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Benefit: Avoids wasting a signing round on a proposal the Bridge would reject, and catches proposal-generation bugs before they reach the network.
 - Precondition: An acceptance or re-anchor proposal has been generated.
 - Trigger: Client validates the proposal against current chain state before broadcasting.
-- Expected keep-core behavior: Call `ValidateReservationAnchorProposal` (`pkg/chain/ethereum/tbtc.go:482-512`) or `ValidateReservationReanchorProposal` (`:569-597`), both real calls into `tc.walletProposalValidator`.
-- Acceptance criteria: a proposal that violates a Bridge-side rule is rejected before broadcast; both validators are real on-chain calls, not local approximations. No dedicated unit test exists yet for these two functions themselves (see `01-gap-analysis.md` Minor row, deferred — no simulated-backend test infrastructure in this package); they are exercised indirectly through `pkg/tbtcpg`'s interface-fake tests.
-- Current status: implemented (`pkg/chain/ethereum/tbtc.go:482-597`) (line citations corrected 2026-09-28: previously cited `:2541-2647`, past the end of the 1,820-line file)
+- Expected keep-core behavior: Call `ValidateReservationAnchorProposal` (`pkg/chain/ethereum/tbtc.go:492-522` on `fix/m1-cross-repo-review`; the M1 pinned tip had it at `:482-512`) or `ValidateReservationReanchorProposal` (`:583-607` on the fix branch; tip at `:573-597`), both real calls into `tc.walletProposalValidator`.
+- Acceptance criteria: a proposal that violates a Bridge-side rule is rejected before broadcast; both validators are real on-chain calls, not local approximations. Correction 2026-09-28 (fix branch): the direct unit tests now exist — `pkg/chain/ethereum/tbtc_validator_harness_test.go` deploys the real `WalletProposalValidator` against a stub Bridge in an in-memory go-ethereum EVM (`core/vm/runtime`, chosen because `ethclient/simulated` cannot link under Go 1.24 due to `fjl/memsize`) and covers both wrappers plus revert-reason propagation (`TestValidateReservationAnchorProposal`, `TestValidateReservationReanchorProposal`); prior to the fix branch, coverage was indirect through `pkg/tbtcpg`'s interface-fake tests.
+- Current status: implemented (`pkg/chain/ethereum/tbtc.go:492-607` on `fix/m1-cross-repo-review`; the M1 pinned tip had both wrappers at `:482-597`) (line citations corrected 2026-09-28: previously cited `:2541-2647`, past the end of the 1,820-line file; re-corrected against `fix/m1-cross-repo-review`)
 - Test level needed: unit
 - Why: Essential security gate before any proposal is broadcast to the wallet signing group.
 
@@ -121,7 +121,7 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Trigger: A new acceptance proposal generation begins.
 - Expected keep-core behavior: Fetch `ReservationParameters` fresh via `rat.chain.ReservationParameters()` for every generation, not a cached/stale copy.
 - Acceptance criteria: two sequential generations with an intervening parameter change each observe the parameter value in effect at that generation, not the first generation's value (`TestReservationAcceptanceTask_ReservationParametersFetchedLive`).
-- Current status: implemented (`pkg/tbtcpg/reservation_acceptance.go:339`) (line citation corrected 2026-09-28: previously cited `:133`, which is the unrelated `reservationAcceptanceFundingTxCandidate` type declaration)
+- Current status: implemented (`pkg/tbtcpg/reservation_acceptance.go:349` on `fix/m1-cross-repo-review`; the M1 pinned tip had the fetch at `:339`) (line citation corrected 2026-09-28: previously cited `:133`, which is the unrelated `reservationAcceptanceFundingTxCandidate` type declaration; re-corrected against `fix/m1-cross-repo-review`)
 - Test level needed: unit
 - Why: A cached-parameters bug would silently let stale caps/fees apply after a governance update — a live-fetch-vs-cache regression is exactly what a unit test with two sequential fetches and an intervening parameter change would catch.
 

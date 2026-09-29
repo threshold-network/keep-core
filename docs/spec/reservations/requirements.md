@@ -1,8 +1,12 @@
 # UTXO Reservations — Milestone 1 Requirements
 
-Draft: 2026-09-28. Grounded in the M1 code — tbtc-v2 `reservations-upgrade` @
-`9f8f5ef1` and keep-core `reservations-epic` @ `f66f11240` — which is
-implemented on integration branches, **not merged to `dev`/`main`, not
+Draft: 2026-09-28. Grounded in the M1 base code - tbtc-v2
+`reservations-upgrade` @ `9f8f5ef1` and keep-core `reservations-epic` @
+`f66f11240` - with the reviewed corrections at tbtc-v2 `e635e229`
+([#1161](https://github.com/threshold-network/tbtc-v2/pull/1161)) and
+keep-core `e28df49ba`
+([#4343](https://github.com/threshold-network/keep-core/pull/4343)). This code
+is implemented on integration branches, **not merged to `dev`/`main`, not
 audited, not deployed** (tracker PRs: tbtc-v2 #1116, keep-core #4282, both
 open drafts). Every claim below is subordinate to the dated decisions
 recorded in `README.md` and to the scope decision in `roadmap.md` §1: this
@@ -63,8 +67,11 @@ M1 action uses (`architecture.md` §5).
 - **G-6.** Keep the storage layout complete for the M2 feature set — every
   field a future redemption/dissolution/renewal design will read
   (`expiresAt`, `dissolutionEligibleAt`, the `ActionType`/`ActionState`
-  enum values) must already be written by M1, even where nothing in M1
-  reads it back (FR-11, `roadmap.md` §2.1, §0.7 item 3).
+  enum values) must already be written by M1, even where M1 reads it
+  back only partially (FR-11, `roadmap.md` §2.1, §0.7 item 3).
+  `dissolutionEligibleAt` has exactly one M1 reader, the `Closing`-wallet
+  stranding precondition (FR-9); `expiresAt` and the M2-only `ActionType`/
+  `ActionState` values are write-only in M1.
 - **G-7.** Ship the reservation surface without pushing `Bridge` over the
   EIP-170 deployed-bytecode limit, using a mechanism (delegatecall router)
   that costs the ceremony M2 needs anyway rather than adding a new one
@@ -111,8 +118,11 @@ earlier plan to ship a full vault entry-point surface behind pause flags.
   (`ReservationVault.sol:46-136`). Re-pointing `Bridge.reservationVault`
   to a new vault requires total quiescence
   (`reservationTotalAmount == 0 && pendingReservedDeposits == 0`,
-  `Reservation.sol:1307-1314`) — under B that state is reachable only by
-  terminating every custodying wallet (`docs/RESERVATION_CAPS_DEPLOYMENT.md`
+  `Reservation.sol:1307-1314`) — under B that state is reachable only
+  once every position has been stranded or otherwise released: an
+  `Active` position strands when its wallet is `Terminated`, `Closed`, or
+  `Closing` past `dissolutionEligibleAt` (FR-9), and a pending reserved
+  deposit releases via staleness (`docs/RESERVATION_CAPS_DEPLOYMENT.md`
   "Irreversible Vault Activation Warning"). M2's redemption/renewal ship via
   a **new vault deployment and a depositor opt-in migration ceremony**, not
   an unpause flag on this vault (Decision 4, confirmed by the project owner
@@ -360,8 +370,9 @@ As anyone, I want an unaccepted reserved deposit released once its refund
 deadline passes, so that its slot in `pendingReservedDeposits` stops
 blocking a governance vault change and the depositor's normal Bitcoin
 refund path is unblocked.
-- **Given** a pending reserved deposit with no pending acceptance
-  authorization, past its snapshotted refund deadline,
+- **Given** a pending reserved deposit, past its snapshotted refund
+  deadline, whose current action is not `Pending` (no acceptance
+  authorization in flight, whatever the designated wallet's state),
 - **When** anyone calls `notifyStaleReservedDeposit`,
 - **Then** the pending-reserved-deposit entry is cleared and
   `pendingReservedDeposits` decrements (`Reservation.sol:1117-1165`).
@@ -379,20 +390,33 @@ depositors.
 - **Then** the same clearing effect as US-11 applies immediately
   (`Reservation.sol:1167-1213`).
 
-### US-13 — Coordinator respects caps before proposing
+### US-13 — Coordinator consumes a pending acceptance inside its signing window
 As the keep-core coordinator generating an acceptance proposal, I want to
-reject a candidate deposit before broadcasting it, so that a proposal
-never wastes a signing round on a request the Bridge will revert.
-- **Given** live `ReservationParameters`/caps fetched fresh for the current
-  proposal,
-- **When** a candidate would exceed `MaxReservationsPerWallet`, fall below
-  `ReservationMinAmount`, or push `ReservationTotalAmount` past
-  `ReservationMaxTotalAmount`,
-- **Then** the coordinator excludes it before proposing
-  (`pkg/tbtcpg/reservation_acceptance.go:567-580`, calling
-  `checkReservationAcceptanceEligibility`, `:977-1078`).
+consume only a pending acceptance generation that the Bridge's validator will
+actually sign, so that a proposal never wastes a signing round on a
+generation the validator rejects.
+- **Given** a pending `Acceptance` generation the depositor created on-chain
+  (its request-time capacity was reserved when `requestReservationAcceptance`
+  ran, so the coordinator does not re-check the request-time caps —
+  `MaxReservationsPerWallet`, per-wallet amount, single-reservation amount, or
+  global total — for that generation),
+- **When** the generation's target is this wallet, the wallet is `Live` or
+  `MovingFunds`, the deposit is old enough and unswept, the signing window
+  still has more than the validator's `REQUEST_TIMEOUT_SAFETY_MARGIN` left
+  (a generation at or past `now + 7200 >= TimeoutAt` is skipped), and the
+  deposit clears the generation's snapshotted minimum (`action.MinAmount`
+  plus the estimated anchor fee, checked against the generation's own
+  snapshot, not the live `reservationMinAmount`),
+- **Then** the coordinator proposes the anchor from the generation's real
+  `requestNonce` and snapshotted values (`pkg/tbtcpg/reservation_acceptance.go`
+  on `fix/m1-cross-repo-review`: candidate selection at `:340-947` (wallet
+  state check `:456-470`, margin skip `:761-780`, snapshotted minimum
+  `:825-826`), not the deleted `checkReservationAcceptanceEligibility` cap
+  gate; request-time cap checks remain only where fresh requests are made —
+  the re-anchor task's target headroom pre-check — with a zero cap treated as
+  "disabled" exactly as the contract does.
 - Maps to keep-core#7 and #9 (live parameter refresh,
-  `pkg/tbtcpg/reservation_acceptance.go:339`, inside
+  `pkg/tbtcpg/reservation_acceptance.go:349` on `fix/m1-cross-repo-review`, inside
   `findReservationAcceptanceCandidate`).
 
 ### US-14 — Governance updates reservation parameters and caps
@@ -438,8 +462,13 @@ never sign an unauthorized or stale reservation transaction.
 - **When** the signer calls `ValidateReservationAnchorProposal` /
   `ValidateReservationReanchorProposal`,
 - **Then** the call reaches the real `WalletProposalValidator` contract
-  functions (`WalletProposalValidator.sol:966,1143`) via
-  `pkg/chain/ethereum/tbtc.go:482-647`, and an invalid proposal is
+  functions (`WalletProposalValidator.sol:966-1079` at `9f8f5ef1`, the
+  minimum check moved to the snapshotted `action.minAmount` at
+  `:1052` in `fix/m1-cross-repo-review`; `:1111-1199` for the
+  re-anchor validator) via
+  `pkg/chain/ethereum/tbtc.go:492-607` on `fix/m1-cross-repo-review`
+  (the M1 pinned tip had the wrappers at `:482-647`), and an invalid
+  proposal is
   hard-rejected before any signature is produced.
 - Maps to keep-core#8.
 
@@ -451,16 +480,18 @@ edge case becomes an incident.
 - **When** occupancy, per-wallet counts, pending action timeouts, or
   in-kind fee debt change,
 - **Then** the operator's tooling surfaces it: `ReservationOccupancyChanged`
-  events and the four saturation gauges
+  events and the four occupancy gauges
   (`active_reservations_count`, `max_active_reservations`,
   `live_wallets_count`, `wallet_reservations_count`,
-  `pkg/clientinfo/performance.go:738-741`, registered per
-  `pkg/clientinfo/performance_test.go:717-757`) for occupancy; the
+  registered per `pkg/clientinfo/performance_test.go`) for occupancy;
+  the
   action-timeout watcher's poll loop for pending deadlines; the stranding
-  watcher for dead-wallet cleanup. **Gap:** no chain-read or gauge exists
-  today for `inKindFeeDebtSat` or the fee reserve balance anywhere in
-  `pkg/` (confirmed: zero matches for `InKindFeeDebt`/`FeeReserve` in the
-  keep-core tree) — open per §12.
+  watcher for dead-wallet cleanup. For fee debt, the gauges
+  `reservation_vault_fee_debt_sat` (satoshi) and
+  `reservation_vault_fee_reserve_tbtc` (TBTC base units, 1e18 per whole
+  TBTC) are published by `ReservationAcceptanceTask` on each candidate
+  pass (NFR-OBS-3); a read error keeps the gauge's previously recorded
+  value.
 
 ### US-18 — Anyone verifies a reservation's state independently
 As any observer (an indexer, an auditor, a depositor checking their own
@@ -472,7 +503,7 @@ public view functions, so that I don't have to trust an off-chain summary.
   `walletReservationsCount`, `activeReservationsCount`, or
   `reservationParameters`,
 - **Then** I get the exact on-chain struct/values with no additional
-  trust assumption (`ReservationRouter.sol:449-597`, 11 view functions).
+  trust assumption (`ReservationRouter.sol:449-597`, 11 view functions; FR-29).
 
 ## 7. Functional requirements
 
@@ -492,7 +523,7 @@ that snapshot or states `no test found`.
 | FR-8 | `submitReservationReanchorProof` MUST call `financeInKindFee` last, after every accounting and stranding-check effect has committed. | Checks-effects-interactions: an untrusted vault reentering during financing must only ever observe a fully settled generation. | `ReservationProofs.sol:640-761` (comment at `:753-757`) | `Bridge.ReservationSourceAnchorBinding.test.ts` |
 | FR-9 | `notifyReservationStranded` MUST require the reservation `Active` and the custodying wallet `Terminated`, `Closed`, or `Closing` with `block.timestamp >= dissolutionEligibleAt` — never a `Closing` wallet before that timestamp. | Prevents a permissionless strand from racing a legitimate in-window re-anchor off a `Closing` wallet. | `Reservation.sol:1066-1115` | `Bridge.ReservationStranding.test.ts`, `Bridge.ReservationStrandingLibrary.test.ts` |
 | FR-10 | `strandReservation` MUST leave the owner's minted tBTC balance unchanged and MUST NOT mark the anchor as honestly spent. | The loss is the in-kind option, not the tBTC (`exit/stranded.md` §1); the anchor must stay recognizable in the fraud/dispute record. | `Reservation.sol:985-1028` | `Bridge.ReservationStrandingLibrary.test.ts` |
-| FR-11 | `notifyStaleReservedDeposit` MUST require no pending acceptance authorization and the snapshotted refund deadline to have elapsed; `forceStaleReservedDeposit` (governance-only) MUST require no pending acceptance authorization but MUST NOT check the refund deadline. | Permissionless release needs the depositor's own refund-path guarantee to have kicked in; governance's griefing-mitigation override does not. | `Reservation.sol:1117-1213` | `notifyStaleReservedDeposit`: `Bridge.ReservationStranding.test.ts`, `Bridge.ReservationStrandingLibrary.test.ts`. `forceStaleReservedDeposit`: no test found (grepped both files and `Reservation.test.ts` — the function appears only in the ABI snapshot fixture, not in any `describe`/`it` block). |
+| FR-11 | `notifyStaleReservedDeposit` MUST require no pending acceptance authorization (i.e. the deposit's current action is not `Pending`) and the snapshotted refund deadline to have elapsed, regardless of the designated wallet's current state; `forceStaleReservedDeposit` (governance-only) MUST require no pending acceptance authorization but MUST NOT check the refund deadline. | Permissionless release needs the depositor's own refund-path guarantee to have kicked in, which is the snapshotted refund deadline rather than the wallet's state, so a `Live` wallet that never anchors and a timed-out acceptance generation both become releasable once the deadline passes; governance's griefing-mitigation override does not. | `Reservation.sol:1117-1213` | `notifyStaleReservedDeposit`: `Bridge.ReservationStranding.test.ts`, `Bridge.ReservationStrandingLibrary.test.ts`. `forceStaleReservedDeposit`: no test found (grepped both files and `Reservation.test.ts` — the function appears only in the ABI snapshot fixture, not in any `describe`/`it` block). |
 | FR-12 | `updateReservationParameters` MUST validate, before writing any field: `reservationTxMaxFee > 0`; `reservationMinAmount > reservationTxMaxFee`; `reservationTermSeconds` within protocol bounds; `reservationRenewalWindowSeconds` within `(0, reservationTermSeconds)`; `reservationActionTimeout` above the safety margin; `maxReservationsPerWallet > 0`; the Decision-1 cap/slot relation; and, only when actually re-pointing to a new non-zero vault, both the launch gate (`maxActiveReservations > 0`) and quiescence (`reservationTotalAmount == 0 && pendingReservedDeposits == 0`) — nine checks in total, the last two conditional on the vault argument changing. | A partially-invalid parameter set must never reach storage. | `Reservation.sol:1260-1354` | `Bridge.ReservationCaps.test.ts` (governance-parameter section) |
 | FR-13 | `updateReservationCaps` MUST require `maxActiveReservations > 0` and MUST validate the Decision-1 relational invariant against the stored `reservationMaxTotalAmount` before writing. | `maxActiveReservations > 0` is the M1 launch gate (no reservation can be accepted before it is set). | `Reservation.sol:1376-1406` | `Bridge.ReservationCaps.test.ts` ("bootstrap ordering" group) |
 | FR-14 | `Wallets.notifyWalletClosingPeriodElapsed` MUST revert if `walletReservationInfo[wallet].count != 0`. | A wallet must never finalize closing while custodying an anchor (US-9). | `Wallets.sol:360-386` | `Bridge.Wallets.test.ts` |
@@ -501,15 +532,16 @@ that snapshot or states `no test found`.
 | FR-17 | `updateInitiationFee` MUST reject any value above `MAX_FEE_BASIS_POINTS` (500 = 5%). | Hard ceiling on the one fee depositors cannot avoid. | `ReservationVault.sol:321-339` | `ReservationVault.test.ts` |
 | FR-18 | The `ReservationRouter` MUST declare exactly one storage variable (`self`) and MUST NOT shadow any Bridge-declared selector; `Bridge.setReservationRouter` MUST be callable at most once. | Storage-parity and no-standalone-authority are the invariants the delegatecall architecture depends on (G-7). | `ReservationRouter.sol:57-103`; `Bridge.sol:2100-2104`; `BridgeState.sol:1077-1080` | `Bridge.RouterStorageParity.test.ts`, `Bridge.RouterSelectorDisjointness.test.ts`, `Bridge.StorageLayout.test.ts` |
 | FR-19 | `Reservation.reserveAcceptanceCapacity` MUST check and increment `activeReservationsCount` against `maxActiveReservations`, the wallet count against `maxReservationsPerWallet`, and (if non-zero) the wallet amount against `maxReservationsAmountPerWallet`, at request time. | Caps are request-time throttles, not proof-time checks (G-4). | `Reservation.sol:916-958` | `Bridge.ReservationOccupancy.test.ts`, `Bridge.ReservationCaps.test.ts` |
-| FR-20 | `requestReservationAcceptance`/`requestReservationReanchor` MUST reject a deposit whose amount exceeds `reservationMaxSingleAmount` (when non-zero). | Bounds single-position blast radius independent of occupancy. | `Reservation.sol:598-602` | `Bridge.ReservationCaps.test.ts` |
-| FR-21 | `pkg/tbtcpg` `ReservationAcceptanceTask` MUST fetch `ReservationParameters` fresh on every proposal generation, not a cached copy. | A cached-parameters bug would silently apply stale caps/fees after a governance update. | `pkg/tbtcpg/reservation_acceptance.go:339` (inside `findReservationAcceptanceCandidate`, called fresh on every `Run` invocation) | `pkg/tbtcpg/reservation_acceptance_test.go` (`TestReservationAcceptanceTask_ReservationParametersFetchedLive`) |
-| FR-22 | `pkg/tbtcpg` `checkReservationAcceptanceEligibility` MUST reject a candidate before proposing if it would exceed `MaxReservationsPerWallet`, fall below `ReservationMinAmount`, or push `ReservationTotalAmount` over `ReservationMaxTotalAmount`. | Avoids wasting a signing round on a proposal the Bridge will revert. | `pkg/tbtcpg/reservation_acceptance.go:977-1078` | `pkg/tbtcpg/reservation_acceptance_test.go` (`TestReservationAcceptanceTask_AmountCapBoundaries`) |
-| FR-23 | `ReservationReanchorTask` MUST trigger on a source wallet's `WalletMovingFunds` transition and MUST select a `Live` target wallet with headroom, excluding wallets already targeted by another in-flight re-anchor from the same task instance; it MUST NOT trigger for a `Closing` source. | G-3: re-anchor off a retiring wallet must be automatic, not manual — but this automation stops at `MovingFunds`. A `Closing` source is contract-eligible (FR-5, FR-6) yet has no keep-core trigger; draining it is a permissionless-caller-only gap tracked in `m1-keep-core-readiness/01-gap-analysis.md` (Major row), open per §12. | `pkg/tbtcpg/reservation_reanchor.go:65-83,139,438-599` | `pkg/tbtcpg/reservation_reanchor_test.go` (`TestReservationReanchorTask_TargetWalletExclusion_SharedTask`) |
-| FR-24 | `ReservationReanchorTask.notifyMovingFundsBelowDustIfEligible` MUST call the permissionless below-dust report once a retiring wallet's reservation count has reached zero and its remaining balance is below dust. | The only remaining route to close a wallet that proved its funds moved while still holding anchors (`roadmap.md` §0.8). | `pkg/tbtcpg/reservation_reanchor.go:601-737` | `pkg/tbtcpg/reservation_reanchor_test.go` (`TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`) |
-| FR-25 | `ReservationActionTimeoutWatcher.checkReservationActionTimeout` MUST call `NotifyReservationAcceptanceTimedOut` for an overdue `Acceptance` action and `NotifyReservationActionTimeout` for an overdue `Reanchor` action, and MUST skip (not misdispatch) any other action type. | The Bridge exposes two distinct entry points; calling the wrong one reverts. | `pkg/maintainer/spv/reservation_action_timeout_watch.go:486-646` | `pkg/maintainer/spv/reservation_action_timeout_watch_test.go` |
+| FR-20 | `requestReservationAcceptance` MUST reject a deposit whose amount exceeds `reservationMaxSingleAmount` (when non-zero). The cap applies at acceptance only: `requestReservationReanchor` does not re-check it, so a reservation anchored above a later-lowered cap remains re-anchorable (grandfathered; both Solidity and keep-core read only `anchorAmount > reservationTxMaxFee + reservationMinAmount` on the re-anchor path). | Bounds single-position blast radius independent of occupancy at entry; re-anchors shrink the anchor by the per-hop miner fee, so the grandfathered path cannot grow the position and blocking it would pin in-flight positions behind a cap change with no unpin policy. | `Reservation.sol:598-602` (acceptance); re-anchor path `Reservation.sol:772-837` reads no single-amount cap | `Bridge.ReservationCaps.test.ts` |
+| FR-21 | `pkg/tbtcpg` `ReservationAcceptanceTask` MUST fetch `ReservationParameters` fresh on every proposal generation, not a cached copy. | A cached-parameters bug would silently apply stale caps/fees after a governance update. | `pkg/tbtcpg/reservation_acceptance.go:349` on `fix/m1-cross-repo-review` (inside `findReservationAcceptanceCandidate`, called fresh on every `Run` invocation; the M1 pinned tip had the call at `:339`) | `pkg/tbtcpg/reservation_acceptance_test.go` (`TestReservationAcceptanceTask_ReservationParametersFetchedLive`) |
+| FR-22 | `pkg/tbtcpg` `ReservationAcceptanceTask` MUST NOT re-check the request-time capacity caps (active `MaxReservationsPerWallet` occupancy, per-wallet count/amount, single-reservation amount, or global `ReservationMaxTotalAmount`) when consuming a `Pending` Acceptance generation: the Bridge already reserved that capacity when `requestReservationAcceptance` ran, and re-applying the caps at consumption time would double-count the generation against them. The candidate checks that remain are the pending-generation precondition (target wallet is this wallet, action is a `Pending` Acceptance), the wallet state check (`Live` or `MovingFunds`, mirroring the validator's `requireWalletLiveOrMovingFunds`), the signing-window skip (`now + REQUEST_TIMEOUT_SAFETY_MARGIN >= TimeoutAt`), and the snapshotted minimum (`action.MinAmount` plus the estimated anchor fee, checked against the generation's own snapshot, never the live `reservationMinAmount`). The zero-cap parity note - a zero `ReservationMaxTotalAmount` is treated as "disabled" exactly as the contract does - applies only where caps are still read client-side: the re-anchor task's target headroom pre-check (FR-23), which reads the per-wallet count cap and the per-wallet amount cap (a zero amount cap disables that check). | Capacity is a request-time throttle (FR-19); re-checking it at consumption time would reject a valid pending generation whose cap headroom was consumed by later requests, while the validator-side rules (window, minimum, wallet state) are what can actually change between request and proposal. | `pkg/tbtcpg/reservation_acceptance.go` on `fix/m1-cross-repo-review` (candidate selection `:340-947`: wallet state check `:456-470`, margin skip `:761-780`, snapshotted minimum `:825-826`; the cap pre-check `checkReservationAcceptanceEligibility` was deleted - the earlier fix-branch snapshot had it at `:1020-1100`, the M1 pinned tip at `:977-1078`). Re-anchor headroom: `pkg/tbtcpg/reservation_reanchor.go:874-899` (`walletHasReanchorHeadroom`) | `pkg/tbtcpg/reservation_acceptance_test.go` (`TestReservationAcceptanceTask_IgnoresRequestTimeCaps` pins that saturated request-time caps no longer gate consumption; `TestReservationAcceptanceTask_BoundaryChecks` exercises the snapshotted minimum gate, with the cap fields now set as fixture data only; `TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin`) |
+| FR-23 | `ReservationReanchorTask` MUST trigger on a source wallet's `WalletMovingFunds` transition and MUST select a `Live` target wallet with headroom, excluding wallets already tried in this pass (cached-target eviction); it MUST NOT trigger for a `Closing` source. After `RequestReservationReanchor` (which returns the transaction hash) the task MUST record the submission in an in-memory per-reservation map and, on later rounds, resolve it by receipt: a mined receipt resumes the generation without a new request, a reverted or dropped submission (not observed more than 6 blocks after the submission block) allows a new request, and a still-pending receipt skips the reservation for that round; the map is in-memory only, so after a restart the resume is driven by the chain state (`ActionPending`) instead. The resume path MUST skip a generation whose signing window is inside the validator's timeout safety margin (`now + 7200 >= TimeoutAt`). | G-3: re-anchor off a retiring wallet must be automatic, not manual - but this automation stops at `MovingFunds`. A `Closing` source is contract-eligible (FR-5, FR-6) yet has no keep-core trigger; draining it is a permissionless-caller-only gap tracked in `m1-keep-core-readiness/01-gap-analysis.md` (Major row), open per §12. | `pkg/tbtcpg/reservation_reanchor.go` on `fix/m1-cross-repo-review`: `Run` `:154-531` (trigger gate `:195`), in-flight receipt check in `Run` `:266-310` (`resolveReanchorRequestInFlight` `:1032-1099`; map `:42-52, :92-100`, `recordReanchorRequestInFlight` `:951`), `ProposeReservationReanchor` `:532-689` (same-round fast path `waitForReservationReanchorRequestMined` `:697-760`, wait bound `reservationReanchorRequestWaitBlocks = 6` `:30`), resume margin gate `:352-370` (margin constant `:40`), target headroom `:815-899`; chain receipt API `pkg/tbtcpg/chain.go:198-214` (`RequestReservationReanchor` returns the tx hash, `GetReservationReanchorRequestReceipt`) | `pkg/tbtcpg/reservation_reanchor_inflight_test.go` (`TestReservationReanchorTask_InFlight_Mined_ResumesWithoutNewRequest`, `TestReservationReanchorTask_InFlight_Reverted_AllowsNewRequest`, `TestReservationReanchorTask_InFlight_PendingWithinBound_SkipsWithoutNewRequest`, `TestReservationReanchorTask_InFlight_DroppedPastBound_AllowsNewRequest`, `TestReservationReanchorTask_ResumeMarginGate`); `pkg/tbtcpg/reservation_reanchor_test.go` |
+| FR-24 | `ReservationReanchorTask.notifyMovingFundsBelowDustIfEligible` MUST call the permissionless below-dust report once a retiring wallet's reservation count has reached zero and its remaining balance is below dust. | The only remaining route to close a wallet that proved its funds moved while still holding anchors (`roadmap.md` §0.8). | `pkg/tbtcpg/reservation_reanchor.go:1067-1115` on `fix/m1-cross-repo-review` (the M1 pinned tip had it at `:682`) | `pkg/tbtcpg/reservation_reanchor_test.go` (`TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`) |
+| FR-25 | `ReservationActionTimeoutWatcher.checkReservationActionTimeout` MUST call `NotifyReservationAcceptanceTimedOut` for an overdue `Acceptance` action and `NotifyReservationActionTimeout` for an overdue `Reanchor` action, and MUST skip (not misdispatch) any other action type; "overdue" matches the contract's boundary, where a generation is eligible as soon as `now >= timeoutAt` (skipped only while `now < timeoutAt`), so the exact deadline second is not missed by a poll interval. | The Bridge exposes two distinct entry points; calling the wrong one reverts, and an off-by-one-second boundary would delay capacity release by a full poll cadence. | `pkg/maintainer/spv/reservation_action_timeout_watch.go:511-658` on `fix/m1-cross-repo-review` (`checkReservationActionTimeout`; the M1 pinned tip had it at `:505`) | `pkg/maintainer/spv/reservation_action_timeout_watch_test.go` |
 | FR-26 | `reservationStrandingWatcher.checkReservationStrandingForWallet` MUST notify stranding for every `Active` reservation on a wallet it observes as `Terminated`/`Closed`, identically regardless of which of the three termination causes fired; keep-core has no automated trigger for the third on-chain-eligible precondition. | Cause-agnostic by design for the two states it covers — the reservation-facing consequence is the same regardless of termination cause (`exit/stranded.md` §1). A `Closing` wallet past `dissolutionEligibleAt` has no client trigger and relies solely on a permissionless caller, a gap tracked in `m1-keep-core-readiness/01-gap-analysis.md` (Major row), open per §12. | `pkg/maintainer/spv/reservation_stranding_watch.go:84-204` | `pkg/maintainer/spv/reservation_stranding_watch_test.go` |
-| FR-27 | `ReservationStaleDepositWatcher.CheckStaleReservedDeposit` MUST NOT notify for a deposit whose designated wallet has already reached `Live`, and MUST re-arm (park then reconcile) rather than permanently drop such a deposit if the wallet later leaves `Live` without anchoring. | A wallet observed `Live` is expected to anchor the deposit itself; the watcher must not race a legitimate in-flight acceptance. | `pkg/maintainer/spv/reservation_stale_deposit_watch.go:208-488,860-902` | `pkg/maintainer/spv/reservation_stale_deposit_watch_test.go` |
-| FR-28 | `pkg/chain/ethereum/tbtc.go` reservation proposal validators MUST call the real `WalletProposalValidator.validateReservationAnchorProposal` / `validateReservationReanchorProposal` contract functions, not a local approximation. | A signer must reject an invalid proposal using the exact on-chain rule set, not a client-side reimplementation that could drift. | `pkg/chain/ethereum/tbtc.go:482-647`; `WalletProposalValidator.sol:966,1143` | No test found — an explicit `TODO(test-coverage)` comment at `pkg/chain/ethereum/tbtc.go:468-476` records that `ValidateReservationAnchorProposal` has no direct unit test because the simulated-backend infra it needs does not exist yet in `pkg/chain/ethereum`; covered only indirectly via `LocalChain` fakes in task-level tests. |
+| FR-27 | `ReservationStaleDepositWatcher` MUST keep every pending reserved deposit tracked until its wallet field reads zero on-chain (`ReservedDepositWallet(depositKey) == 0`; every on-chain release path emits the `ReservedDepositMarkedStale` event in the same transaction, so a zero read is corroborated by that event), MUST schedule its per-deposit chain reads from the deposit's snapshotted refund deadline, and MUST NOT perform a per-deposit chain read before that deadline passes, including the `IsReservedDeposit` confirmation, which is deferred until after the deadline; discovery is a vault match on the `DepositRevealed` event (the reveal's vault equals the tick's `ReservationParameters().ReservationVault`, fetched once per tick) with the deadline snapshotted from the event's `refundLocktime`, so a restart's first scan starts at the network's reservation activation block with chunked queries, skipping the startup scan entirely when the network has no activation entry. Once the deadline has passed it MUST call `notifyStaleReservedDeposit` whenever the deposit's current action is not `Pending`, regardless of the designated wallet's state, staggering each deposit's first notify attempt per operator by up to a ten-minute deterministic offset after the deadline and retrying on the same interval. The deadline is the reveal-time value snapshotted on-chain (`Deposit.sol:215-238`), which keep-core derives from the `DepositRevealed` event's `refundLocktime` using the same byte reversal as the contract's `BTCUtils.reverseUint32(uint32(refundLocktime))` (`Deposit.sol:230,496`), not from the live `reservationActionTimeout` parameter. | After the refund deadline the contract permits cleanup for any wallet state, so the only pre-deadline constraint is not racing a legitimate in-flight acceptance (a `Pending` action): a `Live` wallet that never anchors must not park the cleanup forever, and a timed-out acceptance generation must not drop the deposit from tracking. Scheduling from the live action-timeout parameter instead of the snapshotted deadline produced avoidable reverting transactions until the real Bitcoin refund deadline arrived. | `pkg/maintainer/spv/reservation_stale_deposit_watch.go` (`fix/m1-cross-repo-review`): `pollTick` vault-match discovery at `:680`, `CheckStaleReservedDeposit` in-memory deadline gate and deferred `IsReservedDeposit` confirmation at `:274-341`, first-scan start at the activation block at `:700-724` | `pkg/maintainer/spv/reservation_stale_deposit_watch_test.go` (`TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline`, `TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateIsReservedDeposit`, `TestRunStaleDepositPollTick_FirstScanStartsAtActivationBlock`) |
+| FR-28 | `pkg/chain/ethereum/tbtc.go` reservation proposal validators MUST call the real `WalletProposalValidator.validateReservationAnchorProposal` / `validateReservationReanchorProposal` contract functions, not a local approximation. | A signer must reject an invalid proposal using the exact on-chain rule set, not a client-side reimplementation that could drift. | `pkg/chain/ethereum/tbtc.go:492-607` (`fix/m1-cross-repo-review` line numbers; `WalletProposalValidator.sol:966,1111` at tbtc-v2 `9f8f5ef1` plus the validator min-check shift in `fix/m1-cross-repo-review`) | Direct tests now exist: `pkg/chain/ethereum/tbtc_validator_harness_test.go` deploys the real `WalletProposalValidator` against a stub Bridge in an in-memory go-ethereum EVM (`core/vm/runtime`, chosen over `ethclient/simulated`, whose `fjl/memsize` dependency fails to link under Go 1.24) and covers both wrappers including revert-reason propagation (`TestValidateReservationAnchorProposal`, `TestValidateReservationReanchorProposal`); `pkg/chain/ethereum/tbtc.go:478` retains a pre-fix `TODO(test-coverage)` comment that predates the harness. |
+| FR-29 | The `ReservationRouter` views MUST expose a reservation's full state and lineage to any observer: `reservations(key)`, `reservationActions(key, nonce)`, `reservationByAnchorUtxo(txHash, index)`, `reservedDepositWallet(key)`, `walletReservationsAmount(walletPubKeyHash)`, `walletReservationsCount(walletPubKeyHash)`, `activeReservationsCount()`, `reservationParameters()`, `reservationCaps()`, `pendingReservedDeposits()`, and `reservationRouter()`, eleven view functions returning the exact on-chain records with no additional trust assumption. | Independent observability (US-18): an indexer, auditor, or depositor must be able to verify a position without trusting an off-chain summary. This requirement covers the view API only; FR-18 covers the router's storage/selector invariants separately. | `ReservationRouter.sol:449-597` | `Bridge.ReservationAbiSnapshot.test.ts` |
 
 ## 8. Non-functional requirements
 
@@ -600,12 +632,20 @@ that snapshot or states `no test found`.
 - **NFR-OBS-2.** keep-core MUST expose `active_reservations_count`,
   `max_active_reservations`, `live_wallets_count`, and
   `wallet_reservations_count` as gauges when reservations are enabled
-  (`pkg/clientinfo/performance.go:738-741`, verified registered by
-  `pkg/clientinfo/performance_test.go:717-757`).
+  (`pkg/clientinfo/performance.go:389-398` on `fix/m1-cross-repo-review`,
+  where all six reservation gauges register inside the
+  `reservationsEnabled` block; verified by `TestReservationGaugesRegistered`
+  in `pkg/clientinfo/performance_test.go`).
 - **NFR-OBS-3.** keep-core SHOULD expose the vault's `inKindFeeDebtSat`
-  and fee-reserve balance as a chain-read gauge. **Not implemented**:
-  grepping the keep-core tree for `InKindFeeDebt`/`FeeReserve` returns zero
-  matches. Open per §12.
+  and fee-reserve balance as chain-read gauges. Status:
+  **Implemented (fix/m1-cross-repo-review)**. The gauges
+  `reservation_vault_fee_debt_sat` (the vault's `inKindFeeDebtSat`, in
+  satoshi) and `reservation_vault_fee_reserve_tbtc` (the vault's TBTC
+  fee-reserve balance, in TBTC base units, 1e18 per whole TBTC) are
+  registered in keep-core `pkg/clientinfo` only when reservations are
+  enabled, and are published by `ReservationAcceptanceTask` on each
+  `findReservationAcceptanceCandidate` pass; a read error keeps the
+  gauge's previously recorded value. The M1 pinned tip predated them.
 
 ### Operational duties (from `m1-b-implementation.md` §5, re-verified against current code)
 
@@ -625,8 +665,10 @@ that snapshot or states `no test found`.
   has no client trigger and relies on a permissionless caller, a gap open
   per §12.
 - **NFR-OPS-5.** Below-dust report after the last re-anchor — implemented
-  (FR-24). In-kind fee reserve / debt watch — **not implemented**
-  (NFR-OBS-3); this duty from the original list remains an open gap.
+  (FR-24). In-kind fee reserve / debt watch — implemented as the
+  `reservation_vault_fee_debt_sat` and `reservation_vault_fee_reserve_tbtc`
+  gauges (NFR-OBS-3, `fix/m1-cross-repo-review`); alert thresholds on
+  those gauges remain an operator-side concern.
 
 ## 9. Parameters and caps
 
@@ -644,7 +686,7 @@ if any is missing).
 |---|---|---|---|---|
 | `reservationTxMaxFee` | `updateReservationParameters` | `> 0` | Mainnet: env `RESERVATION_TX_MAX_FEE_SATS` (no repo default). Local/test: 1000 sats | Snapshotted per action request; never retroactive |
 | `reservationMinAmount` | `updateReservationParameters` | `> reservationTxMaxFee` | Mainnet: env `RESERVATION_MIN_AMOUNT_SATS`. Local/test: 10,000 sats | Prospective |
-| `reservationTermSeconds` | `updateReservationParameters` | `[MIN_RESERVATION_TERM=90d, MAX_RESERVATION_TERM=730d]` | Mainnet: env `RESERVATION_TERM_SECONDS`, hard-failed below 90d by the calldata script. Local/test: 7,776,000s (90d) | Applies to future term grants only; never alters an existing `expiresAt` |
+| `reservationTermSeconds` | `updateReservationParameters` | `[MIN_RESERVATION_TERM=90d, MAX_RESERVATION_TERM=730d]` | Mainnet decision (recorded in `roadmap.md` §1.4, a planning decision, not a script-enforced constant): 12 months; supplied via env `RESERVATION_TERM_SECONDS`, which the calldata script hard-fails below 90d and above 730d but does not itself pin to 12 months, so the launch runbook must check the supplied value against the decision. Local/test: 7,776,000s (90d) | Applies to future term grants only; never alters an existing `expiresAt` |
 | `reservationDissolutionDelay` | `updateReservationParameters` | None beyond overflow safety in `expiresAt + delay` | Mainnet: env `RESERVATION_DISSOLUTION_DELAY_SECONDS`. Local/test: 86,400s (1d) | Snapshotted into `dissolutionEligibleAt` per term grant; never retroactive (`Reservation.sol:198-208`) |
 | `reservationMaxTotalAmount` | `updateReservationParameters` | Decision-1 relational invariant vs. `maxActiveReservations * reservationMaxSingleAmount` (skipped if either is 0) | Mainnet: env `RESERVATION_MAX_TOTAL_AMOUNT_SATS`. Local/test: 10,000,000 sats | Applies to the next request; does not retroactively affect existing positions |
 | `maxReservationsPerWallet` | `updateReservationParameters` | `> 0` | Mainnet: env `RESERVATION_MAX_PER_WALLET`, **hard-enforced == 1** by the calldata script (throws otherwise — `98_generate_reservation_mainnet_calldata.ts:409-414`). Local/test: 5 (documented as deliberately larger, not the launch value) | Prospective |
@@ -662,7 +704,9 @@ Deploy ordering (`docs/RESERVATION_CAPS_DEPLOYMENT.md` "Deploy Order"):
 so the Decision-1 check in the parameters finalizer evaluates against
 real cap values rather than the pre-launch zero short-circuit.
 `setReservationRouter` runs before either, and `setVaultStatus(vault,
-true)` runs last (`architecture.md` §8).
+true)` runs last, no earlier than the keep-core build carrying the
+network's `reservationsActivationBlocks` entry is deployed
+(`architecture.md` §8 activation ordering gate).
 
 ## 10. Failure modes
 
@@ -672,10 +716,10 @@ true)` runs last (`architecture.md` §8).
 | Re-anchor authorization not signed before timeout | Action-timeout watcher poll | Target capacity released, reservation restored to `Active` on the source wallet, `reanchorCooldownUntil` set; **no slashing** | Watcher calls automatically; retry after cooldown |
 | Custodying wallet becomes `Terminated` (liveness failure or fraud) while holding an `Active` reservation | Stranding watcher on wallet-closed/terminated events | `notifyReservationStranded` on request; owner's tBTC unaffected, in-kind option lost | Stranding watcher calls automatically (FR-26); no reward, no compensation |
 | Custodying wallet is `Closing` and reaches `dissolutionEligibleAt`, or still holds reservations while retiring in `Closing` | **No automated detection for either path**: no keep-core watcher observes a `Closing` wallet crossing `dissolutionEligibleAt` (stranding), and `ReservationReanchorTask` triggers re-anchor only on `StateMovingFunds`, not `StateClosing` (`pkg/tbtcpg/reservation_reanchor.go:139`) | Both `notifyReservationStranded` and `requestReservationReanchor` are contract-eligible for a `Closing` source (FR-5, FR-6, FR-9), but neither is called automatically | No automatic call; anyone may call either entry point manually as a permissionless backstop — open per §12 (`m1-keep-core-readiness/01-gap-analysis.md` Major row) |
-| Reserved deposit never accepted before its refund deadline | Stale-deposit watcher poll | `notifyStaleReservedDeposit` clears the pending-deposit slot | Watcher calls automatically; depositor claims the Bitcoin refund path |
+| Reserved deposit never accepted before its refund deadline | Stale-deposit watcher poll, scheduled from the snapshotted refund deadline | `notifyStaleReservedDeposit` clears the pending-deposit slot | Watcher calls automatically (FR-27); depositor claims the Bitcoin refund path |
 | Griefing depositor reveals a reserved deposit and never funds the anchor | Governance monitoring `pendingReservedDeposits` | `forceStaleReservedDeposit` clears it before the refund deadline | Governance calls manually — no automated trigger exists |
 | Active-position cap saturation | Occupancy gauges vs. `maxActiveReservations` (alert thresholds 70%/90% per `docs/RESERVATION_CAPS_DEPLOYMENT.md`) | New acceptance requests revert (`"Active reservations cap exceeded"`) | Governance raises `maxActiveReservations` via `updateReservationCaps`, respecting the Decision-1 invariant |
-| In-kind fee reserve depleted during re-anchor settlement | **No automated detection** — `inKindFeeDebtSat` has no keep-core gauge (NFR-OBS-3) | `financeInKindFee` never reverts; shortfall recorded as public debt | Anyone may call `repayInKindFeeDebt`; governance should manually watch `InKindFeeFinanced` events until a gauge exists |
+| In-kind fee reserve depleted during re-anchor settlement | `reservation_vault_fee_debt_sat` and `reservation_vault_fee_reserve_tbtc` gauges (NFR-OBS-3, `fix/m1-cross-repo-review`); operators set the alert thresholds | `financeInKindFee` never reverts; shortfall recorded as public debt | Anyone may call `repayInKindFeeDebt`; governance should manually watch `InKindFeeFinanced` events alongside the gauges |
 | Governance stages an invalid parameter/cap combination | Transaction simulation before submission | `updateReservationParameters`/`updateReservationCaps` revert on the violated `require` | Correct the ordering/values and re-stage per §9 |
 | `receiveBalanceIncrease` trusts an unverified Bank-routed credit if a vault is marked trusted before `reservationVault` is wired | Pre-activation sanity checks (`docs/RESERVATION_CAPS_DEPLOYMENT.md` "Verification") | No on-chain guard — this is a documented, not a fixed, gap (`ReservationVault.sol:147-160`) | Governance runbook enforces the correct activation order manually |
 | Global or per-wallet capacity saturates with no `Live` target anywhere | Occupancy monitor at 90%+ | Every `requestReservationReanchor` call reverts (`"Wallet reservations cap exceeded"` on every candidate target) | Governance raises caps before saturation; this is the `m1-b-implementation.md` §4.1 launch-gate scenario the caps exist to convert into a revert rather than a stuck wallet |
@@ -727,27 +771,27 @@ full D-1..D-27 register and prior resolution history):
   (per-reservation fractional bound at acceptance, vs. a
   proportional-to-`mintedAmount` dust floor) closes the ratio is
   unresolved (`roadmap.md` §7 item 5).
-- **Whether arriving fee revenue floors debt repayment at
-  `feeReserveTarget` in `sweepFees`.** `roadmap.md` §7 item 6 records a
-  2026-09-07 decision to cap debt repayment at the reserve target so it
-  degrades to partial repayment instead of reverting. Re-reading the
-  current `sweepFees`/`_burnFromReserve` code (`ReservationVault.sol:286-372`)
-  finds no floor at `feeReserveTarget` on the debt-repayment burn (it
-  burns up to the full current balance) and no `require(balance >
-  feeReserveTarget)` guard either (the function returns early instead of
-  reverting when balance doesn't exceed target after repayment). Whether
-  this is the intended final shape of the decision or a partially-applied
-  fix has not been re-confirmed with the implementer — flagged rather than
-  asserted either way.
+- **Fee-reserve floor on debt repayment, resolved 2026-09-28: no floor.**
+  `roadmap.md` §7 item 6 had recorded a 2026-09-07 decision to cap debt
+  repayment at `feeReserveTarget` in `sweepFees`. The M1 decision stands
+  instead: `sweepFees` repays `inKindFeeDebtSat` from the vault's full
+  current balance before comparing against `feeReserveTarget`
+  (`ReservationVault.sol` `sweepFees`/`_burnFromReserve`), so incoming
+  revenue may repay debt below the configured target and no
+  `require(balance > feeReserveTarget)` guard exists. No contract logic
+  change is required; the `feeReserveTarget` floor applies only to how
+  much excess `sweepFees` transfers out to the recipient, not to how
+  much it burns against debt.
 - **Reservation-eligible wallet allowlist.** `roadmap.md` §7 item 3 records
   a 2026-09-07 decision to add one; grepping the current M1 code finds no
   allowlist mapping, setter, or check anywhere in `ReservationRouter.sol`
   or `Reservation.sol` — not implemented, separate repo/scope per that
   item's own note.
-- **`inKindFeeDebtSat`/fee-reserve observability.** No keep-core chain-read
-  or gauge exists (NFR-OBS-3); tracked as a real operational gap, not a
-  silently dropped one, per the original `m1-b-implementation.md` §5
-  2026-09-07 status note, still true against the current tree.
+- **`inKindFeeDebtSat`/fee-reserve observability, resolved 2026-09-28.**
+  Implemented in keep-core `fix/m1-cross-repo-review` as the
+  `reservation_vault_fee_debt_sat` and `reservation_vault_fee_reserve_tbtc`
+  gauges (NFR-OBS-3), closing the operational gap the original
+  `m1-b-implementation.md` §5 2026-09-07 status note tracked.
 - **Bridge deployed-bytecode re-measurement — resolved 2026-09-28.** The
   EIP-170 margin at the M1 code is now measured (NFR-GAS-1): `Bridge` 22,914
   B, 1,662 B headroom, clean build of `reservations-upgrade` @ `9f8f5ef1`.
@@ -795,12 +839,12 @@ full D-1..D-27 register and prior resolution history):
 | US-10 | FR-9, FR-10 | `Reservation.sol:985-1115` | `Bridge.ReservationStranding.test.ts`, `Bridge.ReservationStrandingLibrary.test.ts` |
 | US-11 | FR-11 | `Reservation.sol:1117-1165` | `Bridge.ReservationStranding.test.ts`, `Bridge.ReservationStrandingLibrary.test.ts` |
 | US-12 | FR-11 | `Reservation.sol:1167-1213` | `no test found` |
-| US-13 | FR-22 | `pkg/tbtcpg/reservation_acceptance.go:977-1078` | `pkg/tbtcpg/reservation_acceptance_test.go` |
+| US-13 | FR-22, FR-23 | `pkg/tbtcpg/reservation_acceptance.go` on `fix/m1-cross-repo-review` (candidate selection `:340-947`: wallet state check `:456-470`, margin skip `:761-780`, snapshotted minimum `:825-826`; the cap pre-check `checkReservationAcceptanceEligibility` is deleted - the earlier fix-branch snapshot had it at `:1020-1100`, the M1 pinned tip at `:977-1078`); re-anchor headroom `pkg/tbtcpg/reservation_reanchor.go:874-899` | `pkg/tbtcpg/reservation_acceptance_test.go` (`TestReservationAcceptanceTask_IgnoresRequestTimeCaps`, `TestReservationAcceptanceTask_BoundaryChecks`); `pkg/tbtcpg/reservation_reanchor_inflight_test.go` |
 | US-14 | FR-12, FR-13 | `Reservation.sol:1220-1406` | `Bridge.ReservationCaps.test.ts` |
 | US-15 | FR-15, FR-16, FR-17 | `ReservationVault.sol:161-339` | `ReservationVault.test.ts` |
-| US-16 | FR-28 | `pkg/chain/ethereum/tbtc.go:482-647`; `WalletProposalValidator.sol:966,1143` | `no test found` |
-| US-17 | NFR-OBS-1, NFR-OBS-2, NFR-OBS-3, FR-25, FR-26 | `pkg/clientinfo/performance.go:738-741`; `pkg/maintainer/spv/reservation_action_timeout_watch.go`, `reservation_stranding_watch.go` | `pkg/clientinfo/performance_test.go`, `pkg/maintainer/spv/reservation_action_timeout_watch_test.go`, `reservation_stranding_watch_test.go` |
-| US-18 | FR-18 | `ReservationRouter.sol:449-597` | `Bridge.ReservationAbiSnapshot.test.ts` |
+| US-16 | FR-28 | `pkg/chain/ethereum/tbtc.go:492-607` on `fix/m1-cross-repo-review`; `WalletProposalValidator.sol:966-1079,1111-1199` | `pkg/chain/ethereum/tbtc_validator_harness_test.go` (`TestValidateReservationAnchorProposal`, `TestValidateReservationReanchorProposal`) |
+| US-17 | NFR-OBS-1, NFR-OBS-2, NFR-OBS-3, FR-25, FR-26 | `pkg/clientinfo/performance.go:389-398` on `fix/m1-cross-repo-review` (all six reservation gauges register in the `reservationsEnabled` block; the M1 pinned tip had the four occupancy gauges at `:738-741`); `pkg/maintainer/spv/reservation_action_timeout_watch.go`, `reservation_stranding_watch.go` | `pkg/clientinfo/performance_test.go`, `pkg/maintainer/spv/reservation_action_timeout_watch_test.go`, `reservation_stranding_watch_test.go` |
+| US-18 | FR-29 | `ReservationRouter.sol:449-597` | `Bridge.ReservationAbiSnapshot.test.ts` |
 
 ## 14. Glossary
 

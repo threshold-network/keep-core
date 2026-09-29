@@ -59,7 +59,7 @@ sections between items 7 and 8 are listed here for navigability):
 | Minor | The one #1102 finding left unimplemented | Unaffected by m1 rewrite; not independently re-verified here |
 | Addendum | Two items outside the original review's scope | Unaffected by m1 rewrite; not independently re-verified here |
 | Resolution | Resolution of items 5 and 7 for milestone 1 | Reconciled below against the true M1 code (previously verified against an interim `#1093` tip) |
-| 8 | Aggregate in-kind fee debt unbounded and only voluntarily repayable | PARTIALLY RESOLVED — `sweepFees` no longer reverts in the high-debt regime (fixed via an early return, not the debt-capped-at-target design decided 2026-09-07); `financeInKindFee` is still uncapped, so the no-ceiling half stays open |
+| 8 | Aggregate in-kind fee debt unbounded and only voluntarily repayable | RESOLVED as M1 decision D-3 (2026-09-28) — the 2026-09-07 debt-capped-at-target design was superseded: keep the no-floor behavior, `sweepFees` repays `inKindFeeDebtSat` from the vault's full current balance before comparing against `feeReserveTarget` (target bounds only the sweepable surplus), no contract logic change; recorded in `requirements.md` §12 and the tbtc-v2 runbook, and commented in `sweepFees` by `e635e229` on `fix/m1-cross-repo-review`; `financeInKindFee` remains deliberately uncapped (the no-ceiling half of the item) |
 | 9 | Permissionless re-anchor requests let an outsider dictate migration targets | NARROWED — a `reanchorCooldownUntil` cooldown (implemented, not "post-m1 work" as originally framed) now gates the immediate re-request the attacker relied on |
 
 ---

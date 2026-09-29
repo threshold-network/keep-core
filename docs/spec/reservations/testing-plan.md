@@ -191,6 +191,46 @@ including #4274/#4276-#4280/#4324).
   handler dispatch is wired in `node_coordination.go`/`node_proposals.go`.
   This closes Tier 1 item 3 below.
 
+## 2.5. Direct validator coverage (I-7) — landed
+
+The deferred direct-validator-test row (`m1-keep-core-readiness/01-gap-analysis.md`
+Minor row "no direct unit tests"; `03-delta-changes.md` S8 row, Story S8) is closed
+by a **go-ethereum in-memory EVM validator
+harness** (`pkg/chain/ethereum/tbtc_validator_harness_test.go`; Phase 2 work,
+dedicated agent, I-7): it deploys
+the real, unmodified `WalletProposalValidator` into an in-memory go-ethereum
+EVM (`core/vm/runtime` over a single shared `StateDB`) backed by a stub
+Bridge, so the two real chain-calling wrappers in
+`pkg/chain/ethereum/tbtc.go` (contract call, error wrap, `valid == false`
+branch, and revert-reason propagation) get direct tests for the first time.
+The `core/vm/runtime` backend was chosen because `ethclient/simulated`
+could not be linked by the test binary on Go 1.24: it pulls in
+`internal/debug`'s `fjl/memsize` dependency, whose reference to
+`runtime.stopTheWorld` trips the Go 1.23+ linkname restriction that
+CI's plain `go test` (no `-checklinkname=0`) enforces.
+
+**P0 lesson recorded 2026-09-28:** permissive validator fakes in the
+unit and multi-signer tests hid a validate-before-request ordering bug —
+keep-core called
+`ValidateReservationAnchorProposal`/`ValidateReservationReanchorProposal`
+against a predicted nonce *before* the required authorization action
+existed (and in the acceptance case even tried to call
+`RequestReservationAcceptance` operator-side, which on-chain is
+depositor-only), so neither wallet-side flow could ever reach signing at
+the pinned tips. The tests passed because the fakes returned "valid"
+without enforcing the on-chain preconditions, and the multi-signer test
+injected ready-made proposals. The fix (in `fix/m1-cross-repo-review`)
+replaces the permissive fakes with **strict validator fakes** that
+enforce the real preconditions (a Pending action must exist at the
+proposal's nonce; acceptance consumes the depositor's Pending Acceptance
+action instead of requesting one; re-anchor requests - recording the
+transaction hash for the cross-round in-flight receipt check - wait up to 6
+blocks in the same round for the request to be mined, re-read the reservation
+and the action at its real nonce, then validates). Rule going forward: any fake
+standing in for an
+on-chain validator must enforce the same state preconditions the contract
+does, or the test proves nothing about ordering.
+
 ## 3. Recommendations, ranked by bang-for-buck
 
 ### Tier 1 — cheap, high value, do before anything else

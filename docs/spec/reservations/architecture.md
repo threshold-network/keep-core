@@ -7,7 +7,10 @@ tasks, SPV proof loop, watchers). This code is implemented on integration branch
 merged to `dev`/`main`, **not** audited, and **not** deployed to any live network. Tracker PRs:
 tbtc-v2 #1116 (`reservations-upgrade` → `dev`, open draft) and keep-core #4282
 (`reservations-epic` → `dev`, open draft). Every function and line reference below was verified
-directly against those two snapshots.
+against those base snapshots, then corrected against keep-core `e28df49ba`
+([#4343](https://github.com/threshold-network/keep-core/pull/4343)) and
+tbtc-v2 `e635e229` ([#1161](https://github.com/threshold-network/tbtc-v2/pull/1161));
+lines moved by the fix commits are annotated as such (for example, "fix branch: :154").
 
 This document describes milestone 1 (variant B: creation, custody and re-anchor only — no
 in-kind redemption, no renewal, no dissolution). For the full multi-milestone design those
@@ -60,11 +63,14 @@ holds the entire reservation surface as a `delegatecall` extension so it execute
 own storage, address and Bank authority, but its bytecode lives outside the monolithic `Bridge`
 implementation (see §2). The wallet's signers, running keep-core, watch for authorized actions,
 build and sign the required 1-input-1-output Bitcoin transaction, and broadcast it. A trusted SPV
-maintainer — also keep-core — proves that transaction to the Bridge, which settles the position,
+maintainer (also keep-core) proves that transaction to the Bridge, which settles the position,
 checks it against `LightRelay`'s difficulty data, and credits the gross anchor amount through the
 Bank to `ReservationVault`. `ReservationVault` mints TBTC and forwards it to the depositor minus
 an initiation fee, in parallel with (but structurally separate from) the pooled `TBTCVault` path
-ordinary deposits use. `BridgeGovernance` is the only path that can set the router, trust the
+ordinary deposits use. One reachable exception (detailed in §5.1): if governance revokes the
+reveal-time vault's trust before a late proof settles, the settlement instead credits the
+depositor directly through the Bank and no initiation fee is charged.
+`BridgeGovernance` is the only path that can set the router, trust the
 vault, or change reservation parameters and caps, always through the same governance-delay
 machinery the rest of the Bridge uses.
 
@@ -77,7 +83,7 @@ machinery the rest of the Bridge uses.
 | `Bridge` (proxy) | Holds every Bridge selector directly declared on it (deposits, sweeps, redemptions, wallet lifecycle, fraud) plus the fallback that routes unmatched selectors to the router. Exposes `getReservationRouter()` as its own view (distinct from the router's own `reservationRouter()` view) so the router address is readable even before it is reached through the fallback. | `BridgeState.Storage` (the single struct backing both `Bridge` and `ReservationRouter`) | Anyone (public entry points), `onlyGovernance` (parameter/router/vault-trust setters), `onlySpvMaintainer` (proofs) | Transparent proxy; implementation upgrade via the proxy admin |
 | `ReservationRouter` | Delegatecall extension holding all 22 reservation-specific external entry points (11 state-changing + 11 views, enumerated below) | None of its own — declares exactly one storage variable, `BridgeState.Storage internal self`, aligned to the same slots as the Bridge (`ReservationRouter.sol:59-68`) | Same callers as the entry point it implements; direct calls (not through the Bridge fallback) hit its own empty storage and every state-changing entry point reverts | Bridge implementation upgrade (see `setReservationRouter`, §7) |
 | `Reservation` library | Control plane: request/authorization side of acceptance and re-anchor, capacity accounting, stranding, stale-deposit cleanup, parameter/cap governance setters | None (operates on `BridgeState.Storage` passed by reference) | Invoked only through `ReservationRouter`/`Bridge` | Ships as part of the router's code; same upgrade path |
-| `ReservationProofs` library | Settlement plane: the two-phase SPV proof dispatcher and the acceptance/re-anchor settlement logic | None (operates on `BridgeState.Storage` passed by reference) | Invoked only through `ReservationRouter` (`submitReservationAcceptanceProof`, `submitReservationReanchorProof`) | Same as `Reservation` |
+| `ReservationProofs` library | Settlement plane: the two-phase SPV proof dispatcher and the acceptance/re-anchor settlement logic. The acceptance settlement credits the reveal-time vault only while it is still trusted; otherwise it credits the depositor directly through `bank.increaseBalances` and no initiation fee is charged (§5.1). | None (operates on `BridgeState.Storage` passed by reference) | Invoked only through `ReservationRouter` (`submitReservationAcceptanceProof`, `submitReservationReanchorProof`) | Same as `Reservation` |
 | `BridgeState` (library + storage struct) | Owns the `Storage` layout shared by `Bridge` and `ReservationRouter`, including every reservation field and the `__gap` (§7) | The canonical storage of the whole Bridge, including `reservations`, `reservationActions`, `walletReservationInfo`, `pendingReservedDeposit`, `reservationsByAnchorUtxo` | Internal; also declares `setReservationRouter` | N/A (a library, not a deployed contract) |
 | `ReservationVault` | Liability-side companion: mints TBTC against a proven anchor, charges the initiation fee, finances in-kind re-anchor miner fees, holds the fee reserve/debt | Its own contract storage: `initiationFeeBps`, `feeReserveTarget`, `inKindFeeDebtSat` | `onlyBank` (`receiveBalanceIncrease`), `onlyOwner` (fee/target setters, `sweepFees`), Bridge-only (`financeInKindFee`, `msg.sender == address(bridge)`), anyone (`repayInKindFeeDebt`) | Plain `Ownable`, **not** proxy-upgradeable — replacing it means deploying a new vault and re-pointing `Bridge.reservationVault` (§7) |
 | `TBTCVault` | Pooled-path mint/redeem vault; unrelated code path reservations never call, kept here only for contrast in the diagram | Its own contract storage | N/A to reservations | N/A to reservations |
@@ -162,25 +168,61 @@ Four invariants are enforced by construction and asserted by tests:
 moving-funds/moved-funds-sweep task list only when `reservationsEnabled` is true
 (`pkg/tbtcpg/tbtcpg.go:90-127`):
 
-- **`ReservationAcceptanceTask`** (`pkg/tbtcpg/reservation_acceptance.go`) scans a wallet's
-  `DepositRevealed` events for its own designated reserved deposits and, per candidate, checks
-  that the wallet is `Live`, the deposit is old enough and unswept, no acceptance action is
-  already `Pending` (`hasPendingAction`), and every cap — per-wallet count/amount,
-  single-reservation amount, global occupancy — has headroom
-  (`checkReservationAcceptanceEligibility`), before proposing a `ReservationAnchorProposal`.
+- **`ReservationAcceptanceTask`** (`pkg/tbtcpg/reservation_acceptance.go`) consumes
+  the `Pending` `Acceptance` actions that the depositor created on-chain: it
+  selects deposits whose current action is a `Pending` Acceptance (a deposit
+  with no pending action is skipped, because its owner has not requested
+  acceptance yet) and, per candidate, checks that the wallet is `Live` or
+  `MovingFunds` (mirroring the validator's `requireWalletLiveOrMovingFunds`),
+  that the deposit is old enough and unswept, and that the generation's
+  signing window still has more than the validator's
+  `REQUEST_TIMEOUT_SAFETY_MARGIN` left (a generation at or past
+  `now + 7200 >= TimeoutAt` is skipped). It does not re-check the
+  request-time capacity caps: the Bridge already reserved the active count,
+  wallet count/amount, and global total capacity when
+  `requestReservationAcceptance` ran, so the deleted
+  `checkReservationAcceptanceEligibility` cap gate is no longer applied on
+  this path (caps are read client-side only where fresh requests are made,
+  i.e. the re-anchor task's target headroom pre-check). The proposal is then
+  built from that action's real `requestNonce` and snapshotted values
+  (`minAmount`, `txMaxFee`, `timeoutAt`), validated against the on-chain
+  action (including the snapshotted minimum `action.MinAmount` plus the
+  estimated anchor fee), and
+  dispatched as a `ReservationAnchorProposal`. The task itself never calls
+  `RequestReservationAcceptance` from the operator account: only the
+  depositor may create the action on-chain, so the task merely consumes it.
 - **`ReservationReanchorTask`** (`pkg/tbtcpg/reservation_reanchor.go`) fires once a wallet enters
-  `StateMovingFunds`: for each reservation the wallet still custodies, it picks a `Live` target
-  wallet (`findTargetWallet`) and proposes a `ReservationReanchorProposal`. Once a `MovingFunds`
-  wallet's reservation count has drained to zero, the same task also checks whether the wallet's
-  main UTXO has fallen below the moving-funds dust threshold and, if so, calls
-  `notifyMovingFundsBelowDustIfEligible` — the permissionless
-  `MovingFunds.notifyMovingFundsBelowDust` path that lets a wallet which proved its funds moved
-  while still holding reservation anchors finish closing once those anchors are gone (see §5.2,
-  §6.3). Re-anchor off a `Live` source wallet requires a governance (`privileged`) caller, which
-  the client's ordinary operator key can never satisfy, so this task never attempts one. The
-  Bridge accepts a permissionless re-anchor request from a `Closing` source wallet exactly as
-  readily as a `MovingFunds` one (`Reservation.sol:722-858`), but this task's own trigger checks
-  `StateMovingFunds` only (`pkg/tbtcpg/reservation_reanchor.go:139`) — a `Closing` wallet still
+  `StateMovingFunds`: for each reservation the wallet still custodies, it submits
+  `RequestReservationReanchor` on the Bridge, which returns the transaction hash.
+  The task records each submission in an in-memory per-reservation in-flight
+  map; in later rounds it resolves the receipt of any unresolved request before
+  doing anything else - a mined receipt resumes the generation without issuing
+  a new request (re-reading the reservation and the resulting action to obtain
+  the actual `ReservationReanchorProposal`), a reverted receipt allows a fresh
+  request, a still-pending receipt skips that reservation for the round, and a
+  request not observed more than 6 blocks after its submission is treated as
+  dropped, which also allows a fresh request. The map is in memory only: after
+  a process restart, the resume is driven by the chain state (a `Pending`
+  Reanchor action) instead, and the resume path skips a generation whose
+  signing window is inside the validator's timeout safety margin
+  (`now + 7200 >= TimeoutAt`). Within the round a fresh request was just made,
+  a same-round fast path polls for up to 6 blocks for the transaction to be
+  mined before building the proposal. Target selection is per
+  reservation: a target's count and amount headroom are checked against the current caps and
+  the reservation's anchor amount (a cached target without room is evicted and the next
+  candidate tried, including after a cap revert), so a full wallet is not
+  re-picked by every later round. Once a
+  `MovingFunds` wallet's reservation count has drained to zero, the same task also checks
+  whether the wallet's main UTXO has fallen below the moving-funds dust threshold and, if so,
+  calls `notifyMovingFundsBelowDustIfEligible` (the permissionless
+  `MovingFunds.notifyMovingFundsBelowDust` path) so that a wallet which proved its funds
+  moved while still holding reservation anchors can finish closing once those anchors are
+  gone (see §5.2, §6.3). Re-anchor off a `Live` source wallet requires a governance
+  (`privileged`) caller, which the client's ordinary operator key can never satisfy, so this
+  task never attempts one. The Bridge accepts a permissionless re-anchor request from a
+  `Closing` source wallet exactly as readily as a `MovingFunds` one
+  (`Reservation.sol:722-858`), but this task's own trigger checks
+  `StateMovingFunds` only (`pkg/tbtcpg/reservation_reanchor.go:195`; the M1 pinned tip used `:139`) - a `Closing` wallet still
   custodying reservations has no automated re-anchor caller in M1 and depends on a manual,
   permissionless call (§6.3).
 
@@ -209,9 +251,21 @@ loop, separate from the maintainer's generic proof-submission control loop, beca
 `(reservationKey, requestNonce)` pair identifying the action generation, which the generic
 proof-submitter interfaces (shared with deposit sweep, redemption, moving funds) cannot carry.
 Each pass incrementally scans for new `ReservationAcceptanceRequested`/`ReservationReanchorRequested`
-events, matches them against each wallet's confirmed Bitcoin transaction history, and submits an
-SPV proof once a matching transaction has enough confirmations
-(`proveReservationAcceptanceActions`, `proveReservationReanchorActions`).
+events, matches them against each wallet's confirmed Bitcoin transaction history, and keeps
+every `Pending` **and** `TimedOut` generation as a proof candidate through the contract's
+settlement window, so it submits an SPV proof once a matching transaction has enough
+confirmations (`proveReservationAcceptanceActions`, `proveReservationReanchorActions`). The
+matchers accept both P2PKH and P2WPKH outputs paying the authorized public key hash,
+mirroring `BitcoinTx.sol`'s `extractPubKeyHash`, so a settlement broadcast in either
+encoding is provable. A `TimedOut` generation is only evicted once the
+contract's own window closes: late acceptance settlement is bounded to
+`timeoutAt + termSeconds`, where `termSeconds` is the custody term snapshotted
+onto the action when its generation was requested (the live
+`reservationTermSeconds` parameter does not shrink that window; see
+`ReservationProofs.sol` `loadSettleableAction`), while late re-anchor
+settlement has no bound; states that can no longer settle (`Settled`,
+`Superseded`, and the non-settleable `TimedOut`-past-its-window) are the
+ones the loop drops.
 
 ### 3.4 Watchers
 
@@ -221,14 +275,40 @@ Three watchers, wired together by `spv.WireReservationWatchers`
 | Watcher | Watches | Calls |
 |---|---|---|
 | `ReservationActionTimeoutWatcher` | Every tracked reservation's current pending action generation, once its `timeoutAt` has elapsed | `notifyReservationAcceptanceTimedOut` (Acceptance-type actions) or `notifyReservationActionTimeout` (Reanchor-type actions); branches on `action.ActionType` |
-| `ReservationStaleDepositWatcher` | Revealed reserved deposits whose designated wallet never reaches `Live` before the action-timeout window elapses (no live `DepositRevealed` subscription exists in M1, so this falls back to a polled `PastDepositRevealedEvents` scan) | `notifyStaleReservedDeposit` |
-| `reservationStrandingWatcher` | `WalletClosed`/wallet-termination events (`StateClosed`/`StateTerminated` only — see below), resolved to the terminated/closed wallet's reservation set | `notifyReservationStranded` for every `Active` reservation the wallet still custodies |
+ | `ReservationStaleDepositWatcher` | Every revealed reserved deposit until its wallet field reads zero on-chain (`ReservedDepositWallet(depositKey) == 0`; every release path emits the `ReservedDepositMarkedStale` event in the same transaction, so a cleared read is corroborated by that event) (no live `DepositRevealed` subscription exists in M1, so discovery falls back to a polled `PastDepositRevealedEvents` scan); each deposit's chain reads are scheduled from its snapshotted refund deadline, with no chain reads before the deadline | `notifyStaleReservedDeposit`, only once the snapshotted refund deadline has passed and the deposit's current action is not `Pending`, regardless of the designated wallet's state; the first attempt per deposit is deterministically staggered per operator by up to a ten-minute offset after the deadline (later retries back off the same interval), so many operators discovering the same overdue deposit do not collide on-chain |
+| `reservationStrandingWatcher` | `WalletClosed`/wallet-termination events (`StateClosed`/`StateTerminated` only — see below), resolved to the terminated/closed wallet's reservation set (the client-side `ChainAdapter.WalletReservations` call: derived from reservation events, since no Bridge enumeration view exists) | `notifyReservationStranded` for every `Active` reservation the wallet still custodies |
 
 All three are mandatory, permissionless, network-wide duties rather than leader-election duties:
 every process capable of driving them runs `WireReservationWatchers` once at startup, gated on its
 own reservation-enabling flag. A `Notify*` call against an already-notified or already-settled
 reservation is a no-op on the Bridge, so redundant wiring across two processes sharing a
 deployment is harmless.
+
+The action-timeout watcher's deadline boundary matches the contract's: a generation is
+considered overdue as soon as `now >= timeoutAt` (the watcher skips it only while
+ `now < timeoutAt`), so the exact deadline second is eligible. The stale-deposit watcher's
+ companion rules are the snapshotted refund deadline (no chain reads before it,
+ and the deposit retires once the `ReservedDepositWallet` read observes zero) and
+ a deterministic per-operator first-attempt stagger after the deadline, up to
+ ten minutes. Watcher-goroutine death is a decided M1
+ requirement (a clientinfo metric distinct from transient per-tick errors), not just a
+ log line; `fix/m1-cross-repo-review` implements it as the counter
+ `spv_reservation_watcher_deaths_total`, wired into both the client and
+ maintainer watcher-startup paths; the recorder tolerates a typed-nil
+ metrics recorder (`cmd/start.go` normalizes the `*clientinfo.PerformanceMetrics`
+ pointer to a true nil interface before the call, and
+ `recordReservationWatcherDeath` treats a typed-nil value as a disabled
+ recorder), so a disabled client-info pipeline cannot panic the watcher
+ goroutines.
+Restart recovery: the SPV proof loop and the stale-deposit watcher start
+their first scan at `tbtc.ReservationsActivationBlock(network)` with
+chunked event queries (a network without an activation entry, the
+`math.MaxUint64` sentinel, skips the startup scan and jumps the cursor to
+the head), instead of a fixed 30-day lookback; the action-timeout watcher's
+first pass keeps a bounded 30-day catch-up window clamped to the activation
+block when it falls within that window. The network is threaded through
+`Config.EthereumNetwork` in the maintainer and through the
+`WireReservationWatchers` parameter in the client.
 
 None of the three watchers extends to a `Closing` wallet: the stranding watcher's only trigger is
 `OnWalletClosed` (plus the equivalent startup/recheck scans in `reservation_wiring.go` and
@@ -297,8 +377,12 @@ sequenceDiagram
   Wallet->>Bitcoin: broadcast anchor tx (1-in-1-out)
   SPV->>Bridge: submitReservationAcceptanceProof (ReservationProofs.sol)
   Bridge->>Bridge: settleAcceptance, state Active
-  Bridge->>Vault: increaseBalanceAndCall (Bank)
-  Vault->>Depositor: mint TBTC minus initiation fee
+  alt reveal-time vault still trusted
+    Bridge->>Vault: increaseBalanceAndCall (Bank)
+    Vault->>Depositor: mint TBTC minus initiation fee
+  else trust revoked, or vault is zero
+    Bridge->>Depositor: increaseBalances direct credit (Bank), no initiation fee
+  end
 ```
 
 `_revealDeposit` (`Deposit.sol:198-253`) sets `isReserved` from `reveal.vault == self.reservationVault`
@@ -318,7 +402,15 @@ snapshots a `Pending` `Acceptance` action with `timeoutAt`. Settlement
 shape, writes the reservation record (`owner`, `mintedAmount = anchorAmount`, `expiresAt`,
 `dissolutionEligibleAt`), and credits the gross anchor amount through the Bank to the vault named
 at reveal time (not necessarily the live `reservationVault`, in case governance re-pointed it
-between request and a late proof). If the acceptance's target wallet has already left `Live`
+between request and a late proof). That credit is gated on the vault's trust at settlement time:
+if the reveal-time vault is still trusted, the Bridge credits it via
+`bank.increaseBalanceAndCall` and the vault mints TBTC for the depositor minus its initiation fee.
+If governance revoked that trust (`setVaultStatus(vault, false)`, `Bridge.sol:1288-1293`) after
+the acceptance was authorized but before the proof settled, the fallback credits the depositor
+directly through `bank.increaseBalances`: the vault never sees the amount, mints nothing, and no
+initiation fee is charged for that settlement (`ReservationProofs.sol:616-625`). The fallback is
+deliberate: settlement of an already-confirmed Bitcoin spend must not revert just because the
+vault lost trust in the interim. If the acceptance's target wallet has already left `Live`
 (`Closing`, `Closed`, or `Terminated`) by settlement time, the position is stranded immediately
 instead of being left briefly un-stranded (`strandLateSettlementIfTargetWalletClosed`).
 
@@ -396,12 +488,13 @@ notification races the wallet's own broadcast, it does not invalidate it.
 sequenceDiagram
   participant Chain as WalletClosedEvent
   participant Strand as StrandingWatcher
+  participant Adapter as ChainAdapter
   participant Anyone
   participant Bridge
   alt Wallet reached Closed or Terminated
     Chain->>Strand: OnWalletClosed(walletID)
     Strand->>Strand: resolve wallet public key hash
-    Strand->>Bridge: WalletReservations(walletPubKeyHash)
+    Strand->>Adapter: WalletReservations(walletPubKeyHash) (client-side, event-derived; no Bridge enumeration view exists)
     loop each Active reservation
       Strand->>Bridge: notifyReservationStranded(reservationKey)
       Bridge->>Bridge: require wallet Terminated or Closed
@@ -443,15 +536,16 @@ sequenceDiagram
   participant Gov as Governance
   Watcher->>Bridge: PastDepositRevealedEvents (poll, no live subscription)
   Watcher->>Bridge: ReservedDepositWallet(depositKey)
-  Note over Watcher,Bridge: assigned wallet not Live, past refundDeadline
-  Watcher->>Bridge: notifyStaleReservedDeposit(depositKey)
+  Note over Watcher,Bridge: deadline-aware: no chain reads before the deposit's snapshotted refund deadline
+  Watcher->>Bridge: notifyStaleReservedDeposit(depositKey) (only after the refund deadline has passed and the deposit's current action is not Pending)
   Bridge->>Bridge: clear PendingReservedDeposit, pendingReservedDeposits -= 1
   Gov->>Bridge: forceStaleReservedDeposit(depositKey) (bypasses deadline)
 ```
 
 `notifyStaleReservedDeposit` (`Reservation.sol:1127-1165`) requires a still-pending reserved
-deposit, no acceptance authorization currently `Pending` for it, and the exact Bitcoin refund
-deadline captured at reveal time to have elapsed; it clears the pending-deposit record and
+deposit, that the deposit's current action is not `Pending`, and that the exact Bitcoin refund
+deadline captured at reveal time has elapsed (regardless of the designated wallet's current
+state); it clears the pending-deposit record and
 decrements `pendingReservedDeposits`, freeing the deposit to become refundable through its own
 Bitcoin script and — not incidentally — unblocking a future `reservationVault` re-point, which is
 gated on `pendingReservedDeposits == 0` (§7). `forceStaleReservedDeposit`
@@ -574,9 +668,13 @@ the contract's design and an actual client duty.
 `Reservation.ReservationRequest` (the per-position struct) additionally carries
 `dissolutionEligibleAt` — set at acceptance/settlement time to `expiresAt +
 reservationDissolutionDelay` and, per its own doc comment, never moved retroactively by a later
-governance change to the delay — even though its only milestone-1 reader (re-anchor's
-eligibility gate) has been removed. It is a commitment recorded in storage for milestone 2 to
-honour, not dead code to drop. `cumulativeReanchorFee` and `reanchorCooldownUntil` are appended at
+governance change to the delay. The re-anchor eligibility gate the reference design keyed off it
+has been removed in milestone 1 (re-anchor is unbounded in time), but `dissolutionEligibleAt` is
+not unread: `notifyReservationStranded`'s `Closing`-wallet branch requires
+`block.timestamp >= reservation.dissolutionEligibleAt` (`Reservation.sol:1090-1115`), making that
+branch the single milestone-1 on-chain reader. It is still a commitment recorded in storage for
+milestone 2 to honour more broadly, not dead code to drop. `cumulativeReanchorFee` and
+`reanchorCooldownUntil` are appended at
 the end of the struct (safe without gap-scarcity, since a struct stored in a mapping needs no
 `__gap` of its own).
 
@@ -665,6 +763,16 @@ additionally opt in locally via `Tbtc.ReservationsEnabled` (proposal generation,
 metrics) and `Maintainer.Spv.ReservationProofsEnabled` (SPV proof submission), independently of the
 on-chain activation block (§3.5).
 
+**Activation ordering (runbook gate).** The two axes above can diverge in production: the
+governance calldata in step 5/6 activates reserved reveals on-chain at the block where
+`setVaultStatus(vault, true)` lands, while a client build whose `reservationsActivationBlocks`
+has no entry for the chosen network never proposes acceptance or re-anchor there (public
+networks without an entry fall through to `math.MaxUint64`, i.e. never). The activation
+runbook therefore couples them as discipline, not as an on-chain check: release and deploy a
+keep-core build whose `reservationsActivationBlocks` carries the network's entry **before**
+governance executes `setVaultStatus(vault, true)`, and schedule the on-chain activation no
+earlier than that block. On-chain trust follows the client, never the other way around.
+
 ---
 
 ## 9. What M2 changes
@@ -687,12 +795,16 @@ to add, per the 2026-09-24 Option B decision and the full design in `feature-spe
   positions' settlement paths until they migrate.
 - **In-kind redemption** (`requestReservedRedemption`, `notifyReservedRedemptionVeto`, and their
   settlement path), activating the already-declared-but-unreachable `ActionType.Redemption` and
-  `ActionState.Vetoed` values (§6.2) and the `retryCredit`/`retryCreditSourceNonce` fields on
-  `ReservationRequest` that milestone 1 writes nowhere and reads nowhere.
+  `ActionState.Vetoed` values (§6.2) and the `ReservationRequest.retryCredit` and
+  `ReservationAction.retryCreditSourceNonce` fields that milestone 1 writes nowhere and reads
+  nowhere.
 - **Renewal** (`extendReservation`), which will finally read `reservationRenewalWindowSeconds` —
   validated by `updateReservationParameters` in milestone 1 already, but unread until this ships.
-- **Dissolution** (`requestReservationDissolution`), which will read `dissolutionEligibleAt` for
-  the first time since milestone 1 stopped consuming it (§7), reaching the currently-unreachable
+- **Dissolution** (`requestReservationDissolution`), which will make `dissolutionEligibleAt` a
+  general custody-term field: milestone 1 reads it in exactly one place,
+  `notifyReservationStranded`'s `Closing`-wallet branch (`block.timestamp >=
+  dissolutionEligibleAt`, §5.4, §7), and re-anchor does not read it at all. Dissolution will
+  reach the currently-unreachable
   `Closed` `ReservationState` (§6.1) through `closeReservation`'s milestone-2 call sites. Milestone
   2 must independently decide whether to restore the `< dissolutionEligibleAt` gate that milestone
   1 removed from `requestReservationReanchor` (removing it is what made re-anchor unbounded in

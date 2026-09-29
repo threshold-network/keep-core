@@ -62,6 +62,16 @@ Divergences that matter to a reader coming from this doc to the M1 code
   is reservation `Active` **and** wallet `Terminated` **or** `Closed` **or**
   (`Closing` **and** `now >= dissolutionEligibleAt`) (`Reservation.sol`
   ~1073-1113).
+- **Stranded reactivation**: this doc's state diagram models `Stranded` as
+  terminal (an edge to `[*]`); M1 instead permits a settleable proof of a
+  timed-out re-anchor to restore a stranded position to `Active` on its
+  authorized target wallet.
+- **Acceptance-request permissioning**: this doc's stack (§4.1, the state
+  diagram note "permissionless request") assumes `requestReservationAcceptance`
+  can be called by any address; M1 requires the caller to be the deposit's own
+  depositor (`msg.sender == deposit.depositor`, `Reservation.sol:500-501` at
+  `9f8f5ef1`), so no operator-side request path exists and keep-core's acceptance
+  task merely consumes the depositor's pending `Acceptance` action.
 
 None of the above are errors in this document as evidence for the PR stack it
 cites — they are the gap between the full feature and what M1 actually

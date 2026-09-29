@@ -5,7 +5,8 @@ Status: implemented in the M1 code (`reservations-upgrade` @ `9f8f5ef1`) — not
 its accounting (`strandReservation`, `releaseAcceptanceCapacity`) against that code, plus
 `pkg/maintainer/spv/reservation_stranding_watch.go` in keep-core (`reservations-epic` @
 `f66f11240`) for the executor side. Under the Decision in `README.md` (2026-08-21) it is the
-reservation feature's only terminal path and the **accepted** fallback — the emergency-exit
+reservation feature's terminal path and the **accepted** fallback (terminal except that a
+settleable proof of a timed-out re-anchor restores the position, §1) — the emergency-exit
 family (`proposal.md`, `alternatives.md`, `addendum.md`) explored replacing it but is deferred
 for lack of evidence, so `Stranded` stands. Companion to `README.md` (where `Stranded` sits in
 the comparison), `../feature-spec.md` §7 H-06 (the two-paragraph original spec), and
@@ -14,9 +15,15 @@ not build).
 
 ## 1. Plain explanation
 
-`Stranded` is a write-off, not a rescue. It is the accounting step that admits a reservation's
-Bitcoin is no longer reachable through the protocol and stops pretending otherwise. It does not
-move money, does not change anyone's tBTC balance, and does not compensate anyone.
+`Stranded` is a write-off, not a rescue, in every case except one: a
+settleable proof of an already-signed, timed-out re-anchor. That proof
+atomically restores the position to `Active` on the re-anchor's authorized
+target wallet, reconstructing its accounting as it goes; it is the only way
+out of `Stranded` in M1. Otherwise, `Stranded` is terminal. The stranding
+step itself is the accounting move that admits a reservation's Bitcoin is no
+longer reachable through the protocol and stops pretending otherwise. It does
+not move money, does not change anyone's tBTC balance, and does not
+compensate anyone.
 
 **Two preconditions, both required:**
 

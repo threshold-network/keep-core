@@ -11,7 +11,7 @@ separate integration branches, tracked by tbtc-v2 #1116 and keep-core #4282
 
 ## Decision log
 
-Every doc in this folder is subordinate to these four decisions. None of
+Every doc in this folder is subordinate to these seven decisions. None of
 them is reversed by anything else here; where a doc reads otherwise, this
 table wins.
 
@@ -21,6 +21,9 @@ table wins.
 | 2026-08-21 | Milestone 1 is **variant B with a minimal router** — create, custody and re-anchor only, no dissolution, built as an essentials-only rewrite rather than by merging the eight-PR stack. | `roadmap.md` §1 |
 | 2026-09-07 | `#1122` reverted `#1121`: no reserved-redemption / veto / renewal surface in the M1 Bridge. | `docs/plans/m1-delivery.md` |
 | 2026-09-24 | **Option B.** The M1 `ReservationVault` ships minimal (as landed in `4d549e64`); redemption and renewal are delivered in m2 via a **new vault deployment and depositor migration ceremony**, not via unpause flags on the M1 vault. **Confirmed by the project owner 2026-09-28.** | `m1-b-implementation.md` §3 |
+| 2026-09-28 | **Fee-reserve floor (D-3).** `sweepFees` repays `inKindFeeDebtSat` from the vault's full current balance before comparing against `feeReserveTarget`; the target constrains only the sweepable surplus, not debt repayment. Recorded as an M1 decision; no contract change. | `m1-b-implementation.md` §3, §5; `requirements.md` §12 |
+| 2026-09-28 | **Late-settlement fallback (E-2).** If governance revokes the reveal-time vault's trust before a late acceptance proof settles, the Bridge credits the depositor directly via `Bank.increaseBalances` with no initiation fee. Settlement is never forced back through a revoked vault. | `m1-b-implementation.md` §3, §5; tbtc-v2 `solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` (Late-Settlement Fee Fallback When Vault Trust Is Revoked (E-2)) |
+| 2026-09-28 | **Client activation ordering (C-4).** Release and deploy a keep-core build whose `reservationsActivationBlocks` contains the target network's entry **before** `setVaultStatus(vault, true)` executes; the on-chain activation transaction must be scheduled at or after that block, otherwise reserved reveals settle on-chain while no client ever schedules acceptance or re-anchor. | tbtc-v2 `solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Client Activation Ordering Gate (C-4)"); `m1-b-implementation.md` §5 |
 
 **M1 code** means the two integration-branch refs above — tbtc-v2
 `reservations-upgrade` and keep-core `reservations-epic` — which are
@@ -102,9 +105,9 @@ describes the **full** feature, which is the m2 target.
 5. `m1-b-implementation.md` — what milestone 1 *builds*: router surface, the
    vault's minimal surface, launch gates (§4; §4.2 superseded), operational
    duties.
-6. `milestone-inventory.md` §1.2 and §7 — the completeness check and the
-   D-1..D-27 open decisions that gate building. `inventory/` holds the
-   line-cited evidence behind every row.
+6. `milestone-inventory.md` §1.2 and §7 — the completeness check, and the
+   D-1..D-27 decision register, including resolution history and the remaining
+   deferrable items. `inventory/` holds the line-cited evidence behind every row.
 7. `feature-spec.md` — the full feature, i.e. the m2 target (start §1-§4, skim
    the rest). Read it knowing §5 renewal, §4's redemption paths and dissolution
    are all m2.

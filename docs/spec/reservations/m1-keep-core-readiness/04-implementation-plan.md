@@ -9,7 +9,7 @@ watchtower veto.
 ## Milestone 0: Unblock ABI verification (external dependency, not a keep-core code change)
 
 **Status (2026-09-28): the immediate CI symptom is resolved by a workaround; the underlying
-dependency this milestone describes is still open.** The A-H tbtc-v2 stack (rows 1-3 below) did
+dependency this milestone describes is still open.** The A-G tbtc-v2 stack (rows 1-3 below; H is keep-core PR #4274 on the `reservations-epic` branch, not part of this Solidity stack) did
 merge into `reservations-upgrade` (`#1106`, `#1108`, `#1110`, `#1111`, `#1112`, all merged
 2026-09-03), but `reservations-upgrade` itself has not merged to `dev`/`main` (tracker PR #1116
 is still an OPEN draft), so `@keep-network/tbtc-v2@development` never republished with the
@@ -28,7 +28,7 @@ This milestone has no remaining keep-core file-level tasks.
 | :--- | :--- | :--- | :--- |
 | Rebase tbtc-v2 PRs B (`#1110`), D (`#1108`), F (`#1111`), G (`#1112`) onto merged A (`#1106`) | A already merged | 0.5-1 day per PR, parallelizable | **Done** — all merged 2026-09-03 |
 | Resolve the C/D same-path collision on `solidity/test/bridge/Reservation.test.ts` | C, D both rebased | 0.5 day | **Done** — folded into the merge above |
-| Merge the full A-H stack into `reservations-upgrade`, then promote/publish to whichever branch triggers the `@keep-network/tbtc-v2` npm publish workflow | All of the above | 1-2 days | **Partially done** — A-H merged into `reservations-upgrade`; publish to `dev`/`main` still blocked on tracker PR #1116 (OPEN draft) |
+| Merge the full A-G Solidity stack into `reservations-upgrade` (H is keep-core #4274 on `reservations-epic`, not part of this Solidity stack), then promote/publish to whichever branch triggers the `@keep-network/tbtc-v2` npm publish workflow | All of the above | 1-2 days | **Partially done** — A-G merged into `reservations-upgrade`; publish to `dev`/`main` still blocked on tracker PR #1116, which as of 2026-09-28 is OPEN, draft, and CONFLICTING with `dev` (100 ahead / 191 behind — reconcile before merge; see `docs/plans/m1-delivery.md` current status) |
 | Re-run `make generate` in keep-core against the republished package; confirm `client-build-test-publish` goes green | npm republish complete | 0.5 day | **Superseded** — worked around via commit `64d0e6937`'s vendored ABI fallback instead of waiting on the republish |
 
 ## Milestone 1: Close the functional gaps (Blocker + Major rows)
@@ -36,15 +36,18 @@ This milestone has no remaining keep-core file-level tasks.
 **Status: DONE.** Rows 1-2: implemented and tested, PR [#4276](https://github.com/threshold-network/keep-core/pull/4276)
 (branch `m1/reservation-readiness-fixes` on top of `m1/keep-core-client`). Row 2's production
 trigger is not yet live - see its caveat below; this is a pre-existing gap, not new scope creep
-from that PR. Row 3: implemented and tested, PR [#4277](https://github.com/threshold-network/keep-core/pull/4277)
-(branch `m1/reservation-protobuf-marshaling`, stacked on #4276).
+from that PR. Row 3: the JSON-to-protobuf switch itself (message definitions, generated
+bindings, `Marshal`/`Unmarshal` implementations) landed on the base branch via #4276, not in
+#4277's diff; PR [#4277](https://github.com/threshold-network/keep-core/pull/4277)
+(branch `m1/reservation-protobuf-marshaling`, stacked on #4276) added the marshaling/fuzz test
+coverage only.
 
 **Blocker found and fixed this session, outside this milestone's original three rows:**
-`pkg/tbtc/coordination.go`'s `getActionsChecklist` never included `ActionReservationAnchor`/
-`ActionReservationReanchor`, so the reservation acceptance/re-anchor proposal tasks registered in
-`pkg/tbtcpg.NewProposalGenerator` were structurally unreachable in production regardless of rows
-1-3 landing - see `01-gap-analysis.md` Blocker row 2. Fixed and tested, PR [#4278](https://github.com/threshold-network/keep-core/pull/4278)
-(stacked on #4277).
+the reservation actions were present in `getActionsChecklist` but frequency-gated (every Nth
+coordination window, the same throttle `DepositSweep`/`MovingFunds` use), so they only ran
+periodically. #4278 made them unconditional, so they now run in every coordination window.
+See `01-gap-analysis.md` Blocker row 2 (re-verified). Fixed and tested, PR
+[#4278](https://github.com/threshold-network/keep-core/pull/4278) (stacked on #4277).
 
 | File | Task | Traces to | Effort | Test-acceptance criteria |
 | :--- | :--- | :--- | :--- | :--- |
@@ -54,14 +57,15 @@ from that PR. Row 3: implemented and tested, PR [#4277](https://github.com/thres
 
 ## Milestone 2: Test-coverage backfill (Minor rows + Stories S7-S9)
 
-**Status: DONE, 7 of 8 items, plus one item upgraded to a real production-code fix.** PR [#4280](https://github.com/threshold-network/keep-core/pull/4280)
+**Status: DONE, 8 of 8 items (the last one closed on `fix/m1-cross-repo-review`), plus one item upgraded to a real production-code fix.** PR [#4280](https://github.com/threshold-network/keep-core/pull/4280)
 (branch `m1/reservation-test-coverage-backfill`, stacked on #4279). Most items are new tests only
 (confirmed by spot-checking existing test files in Phase 2; see `03-delta-changes.md` for the
 rows where this was explicitly verified against current test content, not assumed) — the one
 exception is the last row below, where the originally-planned golden-value test was superseded by
-actually extracting and exporting the shared helper. The one deferred item (Story S8) needs
-simulated-backend test infrastructure this repository doesn't have; see `01-gap-analysis.md`'s
-Minor row.
+actually extracting and exporting the shared helper. The one deferred item (Story S8) was
+closed on `fix/m1-cross-repo-review`: the in-memory EVM validator harness now exists
+(`pkg/chain/ethereum/tbtc_validator_harness_test.go`), see `01-gap-analysis.md`'s
+Minor row and `../testing-plan.md` §2.5.
 
 | File | Task | Traces to | Effort |
 | :--- | :--- | :--- | :--- |
@@ -69,8 +73,8 @@ Minor row.
 | `pkg/tbtc/reservation_test.go` | **Done.** Added a happy-path shape test for `AssembleReservationReanchorTransaction` (same `TestAssembleReservationTransactions_HappyPathShape` suite as the row above) | Gap-analysis Minor "ReservationReanchorProposal assembler logic" | S (0.25 day) |
 | `pkg/chain/ethereum/tbtc_test.go` | **Done.** Added a field-mapping test for `convertReservationParametersFromAbiType` asserting the full 10-tuple maps correctly | Gap-analysis Minor "ReservationParameters converter mapping" | S (0.25 day) |
 | `pkg/chain/ethereum/tbtc_test.go` | **Done.** Added a test documenting the intentional `CumulativeReanchorFee` drop in the `GetReservation` converter so a future accidental field restoration doesn't go unnoticed | Gap-analysis Minor "GetReservation converter fee field drop" | S (0.25 day) |
-| `pkg/tbtcpg/reservation_acceptance_test.go` | **Done.** Added explicit at-limit/one-over-limit boundary tests (6 cases) for `MaxReservationsPerWallet`, `ReservationMinAmount`, `ReservationMaxTotalAmount` — the prior `TestReservationAcceptanceTask_BoundedLookback` used these fields as fixture data only, never at the boundary | Story S7 | M (0.5 day, 3 boundary cases) |
-| `pkg/chain/ethereum/tbtc_test.go` | **Deferred.** `ValidateReservationAnchorProposal`/`ValidateReservationReanchorProposal` both call a real generated contract binding, not a pure function; `pkg/chain/ethereum` has no simulated-backend test infrastructure to reuse, and building it is well beyond this row's 0.5-day estimate. Explicitly investigated and not built this session; see `01-gap-analysis.md`'s new Minor row | Story S8 | M (0.5 day) — **infeasible at this effort; real cost is building simulated-backend infra from scratch** |
+| `pkg/tbtcpg/reservation_acceptance_test.go` | **Done.** Added explicit at-limit/one-over-limit boundary tests (6 cases) for `MaxReservationsPerWallet`, `ReservationMinAmount`, `ReservationMaxTotalAmount` — the prior `TestReservationAcceptanceTask_BoundedLookback` used these fields as fixture data only, never at the boundary. Correction (2026-09-29, `fix/m1-cross-repo-review` final): the acceptance task no longer re-checks request-time caps, so the boundary rows now exercise the snapshotted minimum and cap-fixture data only; `TestReservationAcceptanceTask_IgnoresRequestTimeCaps` pins that saturated caps no longer gate consumption. | Story S7 | M (0.5 day, 3 boundary cases) |
+| `pkg/chain/ethereum/tbtc_test.go` | **Closed on `fix/m1-cross-repo-review` (2026-09-28)** — the deferred item landed as `pkg/chain/ethereum/tbtc_validator_harness_test.go`: a go-ethereum in-memory EVM harness (`core/vm/runtime` over a shared `StateDB`) deploying the real `WalletProposalValidator` against a stub Bridge (`testdata/walletproposalvalidator/StubBridge.sol`); `TestValidateReservationAnchorProposal` / `TestValidateReservationReanchorProposal` cover both wrappers including revert-reason propagation. The in-memory EVM was chosen because `ethclient/simulated` cannot link under Go 1.24 (its `internal/debug` -> `fjl/memsize` dependency trips the Go 1.23+ linkname restriction that plain `go test` enforces). At the M1 pinned tip this row was explicitly investigated and not built; see `01-gap-analysis.md`'s Minor row and `../testing-plan.md` §2.5 | Story S8 | M (0.5 day) — **infeasible at this effort; real cost is building the validator-test infra once; now built as the shared harness** |
 | `pkg/tbtcpg/reservation_acceptance_test.go` | **Done.** Added a test running the same task twice against the same deposit, mutating `ReservationMinAmount` between calls, proving `ReservationParameters()` is fetched live, not cached | Story S9 | S (0.25 day) |
 | `pkg/tbtcpg/reservation_acceptance.go` + `pkg/tbtc/reservation.go` | **Done, via the real fix, not the cheaper option originally planned.** `AssembleReservationAnchorTransaction` was exported from `pkg/tbtc/reservation.go`, and `pkg/tbtcpg/reservation_acceptance.go:1109` now calls it directly — the duplicate `buildReservationAnchorTransaction` helper is deleted (zero grep hits in the tree), not merely golden-tested against; the underlying duplication no longer exists. | Gap-analysis Minor "Redundant anchor assembly code" (resolved) | L (1-2 days, actually spent — the shared-helper extraction originally deferred as the "real fix") |
 
@@ -97,7 +101,7 @@ merging; listed here only to show how Milestones 1-2 feed into them, not re-spec
 
 ```mermaid
 flowchart LR
-    A["M0: tbtc-v2 A-H rebase,\nC/D test-file merge,\nnpm republish"] --> B["M1: wire re-anchor trigger,\nreplace timeout-watch placeholder"]
+    A["M0: tbtc-v2 A-G rebase,\nC/D test-file merge,\nnpm republish"] --> B["M1: wire re-anchor trigger,\nreplace timeout-watch placeholder"]
     A -.CI-verified ABI only,\nnot a functional blocker.-> B
     B --> C["M2: test-coverage backfill\n(parallelizable across files)"]
     B --> D["M3: multi-signer integration test"]
@@ -112,11 +116,15 @@ flowchart LR
 - Milestone 1's two wiring tasks are prerequisites for Milestone 3's multi-signer test to exercise
   real re-anchor and timeout behavior rather than a hand-invoked code path.
 - Milestone 2 is fully parallelizable across files/engineers; no task depends on another within it.
-- **Final state (this session): Milestones 1-3 done except two explicitly deferred items** -
-  Milestone 1 row 3's protobuf switch (#4277), the checklist-wiring blocker found and fixed
-  outside the original three rows (#4278), Milestone 2's 7/8 test-coverage items (#4280, one
-  deferred - Story S8 needs simulated-backend infra this repo doesn't have), and Milestone 3's
-  multi-signer integration test (#4279, one item - the testnet drill - out of scope, operational
-  not code). PR chain: #4276 → #4277 → #4278 → #4279 → #4280, all merged 2026-09-03.
+- **Final state (this session, re-verified against `fix/m1-cross-repo-review` 2026-09-28): Milestones 1-3 done; the one deferred item is now closed** -
+  Milestone 1 row 3's protobuf switch (implementation landed via #4276; #4277 added the
+  marshaling/fuzz coverage on top), the checklist-wiring blocker found and fixed
+  outside the original three rows (#4278), Milestone 2's test-coverage items (#4280,
+  7 of 8 at that PR; the last one, Story S8, closed on `fix/m1-cross-repo-review` via
+  the in-memory EVM validator harness `pkg/chain/ethereum/tbtc_validator_harness_test.go`,
+  tracked in `../testing-plan.md` §2.5), and Milestone 3's
+  multi-signer integration test (#4279, one item - the testnet drill - out of scope,
+  operational not code). PR chain: #4276 → #4277 → #4278 → #4279 → #4280, all merged 2026-09-03, followed
+  by #4324 (review-round fixes, merged 2026-09-28 as `f66f11240`).
   Milestone 0 remains an external tbtc-v2 release-coordination
   dependency, not keep-core engineering.

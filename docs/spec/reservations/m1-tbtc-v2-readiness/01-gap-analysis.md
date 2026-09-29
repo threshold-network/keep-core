@@ -5,12 +5,22 @@
 Audit of tbtc-v2's `reservations-upgrade` branch, originally against landed
 tip `8c5a2f4d` plus queued PR F (`ReservationVault`) and PR G (`Bridge`
 activation wiring); re-verified against `reservations-upgrade` @ `9f8f5ef1`
-(2026-09-28, PRs A-H all merged into `reservations-upgrade`, see
+(2026-09-28, PRs A-G all merged into `reservations-upgrade`; H is keep-core
+PR #4274 on the `reservations-epic` branch, a separate repo and branch, see
 `../m1-keep-core-readiness/04-implementation-plan.md` Milestone 0) against
 `feature-spec.md`, `m1-b-implementation.md`, and `milestone-inventory.md`.
 Scope: does the Solidity implementation match what the spec says variant B
 ships for milestone 1 (creation, custody, re-anchor;
 redemption/dissolution/renewal/veto out of scope)?
+
+Base-tip note (2026-09-28): the M2 follow-up PR #1129's body names
+reconciliation commit `52bf2822` (post dev-reconciliation) as the base;
+that commit is still in the branch's ancestry, but the current M1 tip is
+`9f8f5ef1` and `reservations-upgrade` has diverged from `dev` again (100
+ahead / 191 behind as of this verification). Read `52bf2822` as the
+historical base, not the live one; the PR body wording is being corrected
+in-repo by the tbtc-v2 team (recorded in `docs/plans/m1-delivery.md`
+current status).
 
 Companion to `../m1-keep-core-readiness/01-gap-analysis.md` (Go client side).
 This doc covers the Solidity/Bridge side only.
@@ -44,7 +54,7 @@ these are still open.
 | :--- | :--- | :--- | :--- |
 | D-2 cap-relational-validation gap | `milestone-inventory.md` §2.6 (lines 603-604, 610-611) says `reservationMaxTotalAmount`, `maxReservationsPerWallet`, `maxReservationsAmountPerWallet`, `reservationMaxSingleAmount` are all "assigned, NO require... no validation at all," and D-2 lists this as blocking with a recommendation to add validation. | Resolved. `Reservation.sol` has `validateReservationCapsInvariant(reservationMaxTotalAmount, reservationMaxSingleAmount, maxActiveReservations)`, called from both `updateReservationParameters` and `updateReservationCaps`, enforcing `reservationMaxTotalAmount <= maxActiveReservations * reservationMaxSingleAmount` (skipped only when an operand is the sentinel disabled-value 0). Commented `// Decision 1 (option 2)` — this is the same decision already recorded in `agent-docs/m1/STATUS.md` from an earlier session. | `Reservation.sol:1324` (`validateReservationCapsInvariant`), call sites in `updateReservationParameters`/`updateReservationCaps` |
 | `ReservationRequest` struct field table incomplete | `milestone-inventory.md` §2.1 lists 12 fields for `ReservationRequest`. | Struct has 14: the 12 listed, plus `cumulativeReanchorFee` and `reanchorCooldownUntil`, both explicitly comment-marked "Appended to the end of the struct" — the fee-grinding-cap fix (`pr-review-followups.md` item 7 / PR #1088 review fix) and its accompanying re-anchor cooldown. | `Reservation.sol:224-227` |
-| `ReservationAction` struct field table incomplete | `milestone-inventory.md` §2.1 lists 17 fields for `ReservationAction`. | Struct has 19: the 17 listed, plus `termSeconds` and `dissolutionDelay`, both snapshotted at acceptance request time and consumed by `ReservationProofs.loadSettleableAction` to compute `expiresAt`/`dissolutionEligibleAt` from the generation record instead of the live governance parameter — this is the fix for the late-acceptance-settlement-uses-live-parameter bug found and closed during PR review. | `Reservation.sol:311-321` |
+| `ReservationAction` struct field table incomplete | `milestone-inventory.md` §2.1 lists 17 fields for `ReservationAction`. | Struct has 20: the 17 listed, plus `termSeconds` (consumed by `ReservationProofs.loadSettleableAction`'s late-window check at `:209` and by `settleAcceptance` at `:557` for `expiresAt`), `dissolutionDelay` (consumed by `settleAcceptance` at `:570` for `dissolutionEligibleAt`), and `minAmount` (the third late addition; consumed by the on-chain validator's minimum check — `WalletProposalValidator.validateReservationAnchorProposal` switched from the live `reservationMinAmount` to this snapshotted `action.minAmount` in tbtc-v2 `e635e229` on `fix/m1-cross-repo-review`). All three are snapshotted at acceptance request time; the fix is for the late-acceptance-settlement-uses-live-parameter bug found and closed during PR review. | `Reservation.sol:311-321` |
 | Router surface table under-counts the retained entry points | `milestone-inventory.md` §2 (router surface) enumerates 8 state-changing entry points as retained in m1. | `ReservationRouter.sol` has 11 state-changing entry points as of the current tip (`9f8f5ef1`), not 9 as an earlier revision of this row concluded: `requestReservationAcceptance`, `requestReservationReanchor`, `submitReservationAcceptanceProof`, `submitReservationReanchorProof` (the router exposes acceptance/re-anchor proof submission as two separate entry points, not a single `submitReservationProof` dispatcher — that name is only the internal `ReservationProofs` library function), `notifyReservationActionTimeout`, `notifyReservationAcceptanceTimedOut` (added during review to close a permissionless-release gap), `updateReservationParameters`, `notifyStaleReservedDeposit`, `forceStaleReservedDeposit` (governance-only, added later, paired with `notifyStaleReservedDeposit`), `notifyReservationStranded`, `updateReservationCaps`. Legitimate scope additions across multiple review rounds, not a spec deviation — the router-surface table should be updated to list 11 retained state-changing functions (plus 11 views), not 8 or 9. | `ReservationRouter.sol` (current tip `9f8f5ef1`) |
 
 ## Verified compliant

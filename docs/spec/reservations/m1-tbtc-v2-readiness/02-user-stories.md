@@ -7,8 +7,9 @@ contracts must handle, derived from direct code analysis of the
 `reservations-upgrade` branch, originally against landed tip `8c5a2f4d` plus
 queued PR F (`ReservationVault`) and PR G (Bridge activation wiring);
 re-verified against `reservations-upgrade` @ `9f8f5ef1` (2026-09-28), by
-which point the full A-H stack (PRs #1106-#1112 plus the #1120 fix and the
-#1121/#1122 revert) had landed. **Scope note:** M1 is decided variant B —
+which point the full A-G stack (PRs #1106-#1112 plus the #1120 fix and the
+#1121/#1122 revert) had landed (H is keep-core PR #4274 on the
+`reservations-epic` branch, a separate repo). **Scope note:** M1 is decided variant B —
 creation, custody and re-anchor only; redemption, dissolution, renewal and
 the watchtower veto are M2 (`feature-spec.md:9-15`, `milestone-inventory.md:7`,
 `roadmap.md` §0.1-0.2). Companion to `../m1-keep-core-readiness/02-user-stories.md`

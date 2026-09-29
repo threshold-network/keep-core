@@ -248,7 +248,7 @@ Once a retiring wallet holds no reservations and its remaining balance is below 
 
 ### 6. How a position ends in M1
 
-Stranding is M1's only terminal state. Anyone may file it when the position is Active and the custodying wallet is Terminated, Closed, or Closing with its dissolution date passed. The Bridge releases the capacity, drops the anchor from tracking, and records the position as Stranded. The owner's tBTC balance does not change; what is lost is the in-kind option - getting that specific bitcoin back, which v2 can honor. There is no compensation mechanism: if the bitcoin is really gone, the shortfall affects tBTC backing as a whole, exactly as with any terminated tBTC wallet today.
+Stranding is M1's only terminal state, with one exception: a settleable timed-out re-anchor proof. If a re-anchor request times out and the wallet is then stranded, the already-signed re-anchor transaction can still be proven later, and doing so atomically restores the position to Active on its authorized target wallet, reconstructing its accounting as it goes. Otherwise, anyone may file it when the position is Active and the custodying wallet is Terminated, Closed, or Closing with its dissolution date passed. The Bridge releases the capacity, drops the anchor from tracking, and records the position as Stranded. The owner's tBTC balance does not change; what is lost is the in-kind option - getting that specific bitcoin back, which v2 can honor. There is no compensation mechanism: if the bitcoin is really gone, the shortfall affects tBTC backing as a whole, exactly as with any terminated tBTC wallet today.
 
 ***
 
@@ -355,9 +355,10 @@ Both shapes are enforced at proof time by the Bridge: exactly one input, exactly
   | Stranded |
   +----------+
 
-  A late proof of an already-signed re-anchor can restore a Stranded
-  position onto the new wallet. Closed is v2 only (in-kind redemption
-  or dissolution); it is unreachable in M1.
+  A settleable late proof of an already-signed, timed-out re-anchor
+  restores a Stranded position to Active on its authorized target;
+  that proof is the one way out of Stranded in M1. Closed is v2 only
+  (in-kind redemption or dissolution); it is unreachable in M1.
 
   ACTION STATES (one per request): Pending, then Settled, or TimedOut
   (a late proof can still settle it), or Superseded (an older request's

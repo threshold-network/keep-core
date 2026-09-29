@@ -11,12 +11,15 @@ working scratchpad.
 
 ## Current status — 2026-09-28
 
-Re-verified against `gh` today (2026-09-28). The A–G build below ("Previous
-status — 2026-09-04") is unchanged and still fully merged; this section
-records what changed since then. **M1 code is implemented on integration
-branches only — not merged to `dev`/`main`, not audited, not deployed.**
+Re-verified against `gh` today (2026-09-28), including re-running `git
+rev-list --left-right --count dev...HEAD` in both repos. The A–G build below
+("Previous status — 2026-09-04") is unchanged and still fully merged; this
+section records what changed since then. **M1 code is implemented on
+integration branches only — both tracker branches are CONFLICTING with
+`dev` and not yet reconciled; M1 is not merged to `dev`/`main`, not
+audited, not deployed.**
 
-**tbtc-v2 (`reservations-upgrade`):**
+**tbtc-v2 (`reservations-upgrade`, tip now `9f8f5ef1`):**
 
 | PR(s) | Status (verified 2026-09-28) | Notes |
 |---|---|---|
@@ -24,18 +27,20 @@ branches only — not merged to `dev`/`main`, not audited, not deployed.**
 | [#1120](https://github.com/threshold-network/tbtc-v2/pull/1120) | **MERGED** (2026-09-03) | Unchanged since 2026-09-04. |
 | [#1102](https://github.com/threshold-network/tbtc-v2/pull/1102) | **MERGED** (2026-08-21) | Unchanged, folded into #1088's branch. |
 | [#1121](https://github.com/threshold-network/tbtc-v2/pull/1121) | **MERGED** (2026-09-04), then reverted | M2-scope reserved-redemption/veto/renewal surface; see previous status below for the full finding. |
-| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) | **MERGED** (2026-09-07) | Full revert of #1121. Milestone-1's "not enabled" behavior (`whenRedemptionsNotPaused`/`whenRenewalsNotPaused` reverts) restored. |
-| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | **OPEN**, draft (tracker) | Still not merged to `dev`. |
+| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) | **MERGED** (2026-09-07) | Full revert of #1121; the reserved-redemption, veto, and renewal Bridge surface is absent from M1. |
+| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | **OPEN**, draft (tracker), **CONFLICTING** (`mergeable: CONFLICTING`/`mergeState: DIRTY`, verified 2026-09-28) | Still not merged to `dev`. Branch is 100 commits ahead / 191 behind `dev` (`git rev-list --left-right --count dev...HEAD` at `reservations-upgrade` tip `9f8f5ef1`). |
 | [#1088](https://github.com/threshold-network/tbtc-v2/pull/1088), [#1090](https://github.com/threshold-network/tbtc-v2/pull/1090)–[#1096](https://github.com/threshold-network/tbtc-v2/pull/1096) | **OPEN**, drafts | Superseded pre-M1 chain, unchanged — reference only (see "Superseded pre-M1 chain" table below). |
 
-**keep-core (`reservations-epic`, tip now `f66f11240`):**
+The M2 follow-up PR [#1129](https://github.com/threshold-network/tbtc-v2/pull/1129) (OPEN draft, also CONFLICTING with `dev` as of 2026-09-28) is still based on an obsolete tip: it was originally based on reconciliation commit `52bf2822` (post dev-reconciliation), but the current M1 tip is `9f8f5ef1` and the branch has since diverged from `dev` again. Its PR body still names `52bf2822` as the current base tip; that statement is historical, not live status, and its body wording is the tbtc-v2 team's own to update.
+
+**keep-core (`reservations-epic`, tip now `f66f11240` = #4324, merged 2026-09-28):**
 
 | PR(s) | Status (verified 2026-09-28) | Notes |
 |---|---|---|
 | [#4274](https://github.com/threshold-network/keep-core/pull/4274), [#4276](https://github.com/threshold-network/keep-core/pull/4276), [#4277](https://github.com/threshold-network/keep-core/pull/4277), [#4278](https://github.com/threshold-network/keep-core/pull/4278), [#4279](https://github.com/threshold-network/keep-core/pull/4279), [#4280](https://github.com/threshold-network/keep-core/pull/4280), [#4283](https://github.com/threshold-network/keep-core/pull/4283), [#4284](https://github.com/threshold-network/keep-core/pull/4284) | **MERGED** (2026-09-03) | Unchanged since 2026-09-04. |
 | [#4324](https://github.com/threshold-network/keep-core/pull/4324) `fix/reservations-review-findings` → `reservations-epic` | **MERGED** (2026-09-28) — **new since 2026-09-04** | `fix(reservations): review-round fixes for reservation ABI, watcher plumbing, and lookback bounds`. Review-fix PR on the reservation-content chain, not an unrelated PR (correcting a doc gap: this row previously did not exist anywhere in this document). Is now the epic tip, 28 commits ahead of the 2026-09-04 tip `356d35bae`. |
-| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | **OPEN**, draft | Self-titled "previous end-to-end attempt — see #4282 for M1" as of 2026-09-28 — superseded, not part of the active queue. |
-| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | **OPEN**, draft (tracker) | Still not merged to `dev`. |
+| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | **OPEN**, draft | Self-titled "previous end-to-end attempt — see #4282 for M1" as of 2026-09-28 — **superseded by #4282 (recorded decision, 2026-09-28), not reconciled**: retired from the active queue, left open only for reference. |
+| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | **OPEN**, draft (tracker), **CONFLICTING** (`mergeable: CONFLICTING`/`mergeState: DIRTY`, verified 2026-09-28) | Still not merged to `dev`. Branch is 128 commits ahead / 187 behind `dev` (`git rev-list --left-right --count dev...HEAD` at `reservations-epic` tip `f66f11240`). |
 
 **Vault decision (2026-09-24, "Option B").** The M1 `ReservationVault` ships
 **minimal** (as in commit `4d549e64`); M2 delivers redemption and renewal via a
@@ -49,10 +54,34 @@ the full entry-point surface behind pause flags (`roadmap.md` §0.7/§1.3/§2.2,
 state honestly: the vault is not upgradeable, so M2 needs the migration
 ceremony the flag design was meant to avoid.
 
+**Cross-repo review of 2026-09-28 (status entry).** A cross-repo review of the
+two M1 tracker branches against the M1 spec confirmed 48 findings. The full
+P0-P3 remediation is carried by
+[keep-core #4343](https://github.com/threshold-network/keep-core/pull/4343)
+at `e28df49ba` and
+[tbtc-v2 #1161](https://github.com/threshold-network/tbtc-v2/pull/1161)
+at `e635e229`. Both are draft PRs targeting their respective epic branches;
+neither performs the separate `dev` reconciliation still required by #4282
+and #1116.
+
+The fix set covers acceptance-task pending-generation consumption and
+snapshotted-minimum validation, in-flight re-anchor receipt tracking with
+target-capacity checks, proof-loop TimedOut retention and P2PKH/P2WPKH
+matching, deadline-aware stale-deposit handling, watcher-death metrics,
+vault fee-debt gauges, activation-block recovery scans, a real-validator EVM
+harness, and an ABI drift gate that fails on every vendored reservation
+surface mismatch. The companion spec changes in this branch record the M1
+policy decisions, operational constraints, corrected status, and complete
+code-to-requirement traceability.
+
+keep-core's earlier review-fix chain #4324 merged 2026-09-28 as `f66f11240`.
+
 ## Previous status — 2026-09-04
 
 *(superseded by "Current status — 2026-09-28" above; kept for its full
-per-PR build detail, which is still accurate.)*
+per-PR build detail. The two tracker rows (#1116, #4282) below are marked
+HISTORICAL at 2026-09-07/04 as of the 2026-09-28 re-verification; the
+merge details remain accurate as of their recorded dates.)*
 
 **tbtc-v2 (`reservations-upgrade`, tip `398fcedf9`, 2026-09-04T12:51:23Z) — A–G build order fully merged:**
 
@@ -78,8 +107,8 @@ per-PR build detail, which is still accurate.)*
 
 | PR | Branch → base | Status | Notes |
 |----|---------------|--------|-------|
-| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) `fix/revert-1121-bridge-redemption-veto-surface` → `reservations-upgrade` | Revert #1121 | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` (opened 2026-09-04T14:29Z, checks still running, 0 failures so far) | Full `git revert` of `398fcedf` (12 files, matches #1121 exactly) — the vault and Bridge-side halves are one feature split across two contracts, not independently revertible, so it's an all-or-nothing revert. Claims `yarn build` clean, 277/277 reservation tests passing, no dangling references. Restores milestone-1's intended "not enabled" behavior (`whenRedemptionsNotPaused`/`whenRenewalsNotPaused` reverts) per `m1-b-implementation.md` §3. Author's stated next step: re-land as a separately-reviewed m2 PR after fixing the P0s. |
-| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | chore(bridge): milestone-1 UTXO reservations stack tracker | OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` | Diff now `+23037/-45` across 54 files (grew again after #1121 landed; will shrink back once #1122's revert lands). `dev` still ahead by commits `reservations-upgrade` lacks — reconcile before this can go green and merge. |
+| [#1122](https://github.com/threshold-network/tbtc-v2/pull/1122) `fix/revert-1121-bridge-redemption-veto-surface` → `reservations-upgrade` | Revert #1121 | **MERGED (2026-09-07)** — this row's status was recorded at open time (2026-09-04, "checks still running") and is now historical. Full `git revert` of `398fcedf` (12 files, matches #1121 exactly) — the vault and Bridge-side halves are one feature split across two contracts, not independently revertible, so it's an all-or-nothing revert. Claimed at open time: `yarn build` clean, 277/277 reservation tests passing, no dangling references. Note: at open time this row described the revert as restoring "not enabled" behavior (`whenRedemptionsNotPaused`/`whenRenewalsNotPaused` reverts); that wording is stale — the revert is full, so no reserved-redemption, veto, or renewal surface remains in the M1 Bridge (see the 2026-09-28 current-status row for #1122 above). |
+| [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) `reservations-upgrade` → `dev` | chore(bridge): milestone-1 UTXO reservations stack tracker | **HISTORICAL (2026-09-04)** — was OPEN, `mergeable: MERGEABLE`/`mergeState: UNSTABLE` with diff `+23037/-45` across 54 files. Stale as of 2026-09-28: the tracker is CONFLICTING (`mergeState: DIRTY`), 100 ahead / 191 behind `dev`; see current status above. |
 
 **keep-core (`reservations-epic`, tip `356d35bae`, 2026-09-03T16:42:49Z) — H plus full downstream chain merged:**
 
@@ -95,10 +124,10 @@ per-PR build detail, which is still accurate.)*
 
 **Open, not yet merged (keep-core):**
 
-| PR | Branch → base | Status | Notes |
+| PR | Branch → base | Status (historical — superseded by "Current status — 2026-09-28") | Notes |
 |----|---------------|--------|-------|
-| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | 22 commits, `+3779/-37` across 15 files. Base ref still pinned to the pre-H epic base (`a7ac8989`) — never rebased across 6 merged PRs since. Parallel branch, not part of the H chain. **Reconcile-or-supersede decision is a human call** (blocked, see todo). |
-| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | OPEN, `mergeable: MERGEABLE`/`mergeState: CLEAN` (re-verified 2026-09-07) | **Corrected 2026-09-07 — this row was stale.** `dev` was merged into `reservations-epic` (confirmed: `dev` is an ancestor of the branch tip), clearing the conflict recorded here on 2026-09-04. Diff now `+34417/-311` across 113 files (full epic payload plus this session's round-2 review-fix commits). 18/18 CI checks SUCCESS/SKIPPED, but those ran against pushed tip `4e2169eb7` — round-2 review-fix commit `d1697f558` (local-only, 1 commit ahead, not yet pushed) has not been through CI, only local `gofmt`/`build`/`vet` + `go test -race` (1088 tests, 27 packages). No merge/rebase decision needed — mergeable as-is. See `agent-docs/gap-inventory.md` for the fix trail. |
+| [#4238](https://github.com/threshold-network/keep-core/pull/4238) `feat/utxo-reservation-wallet-support` → `reservations-epic` | OPEN, `mergeable: CONFLICTING`/`mergeState: DIRTY` | 22 commits, `+3779/-37` across 15 files. Base ref still pinned to the pre-H epic base (`a7ac8989`) — never rebased across 6 merged PRs since. Parallel branch, not part of the H chain. **Decision recorded 2026-09-28: superseded by #4282, not reconciled** (was "a human call" at this row's time; the decision has since been made, see current status). |
+| [#4282](https://github.com/threshold-network/keep-core/pull/4282) `reservations-epic` → `dev` | **HISTORICAL (2026-09-07)** — was recorded then as OPEN, `mergeable: MERGEABLE`/`mergeState: CLEAN` | **Stale as of 2026-09-28:** the tracker is CONFLICTING (`mergeable: CONFLICTING`/`mergeState: DIRTY`), 128 ahead / 187 behind `dev` — the "mergeable as-is" claim in this row no longer holds; see the current-status row above. 2026-09-07 snapshot details retained: `dev` was merged into `reservations-epic` (confirmed: `dev` is an ancestor of the branch tip), clearing the conflict recorded on 2026-09-04. Diff at that time `+34417/-311` across 113 files (full epic payload plus this session's round-2 review-fix commits). 18/18 CI checks SUCCESS/SKIPPED against pushed tip `4e2169eb7`. |
 
 **Incidentally on the epic chain, not reservation content (keep-core):** [#4284](https://github.com/threshold-network/keep-core/pull/4284) `fix(net/local): bound release-boundary settle drain in TestReleaseBroadcastChannel` — base `reservations-epic` (not `main`), 1-file/+3-1, **MERGED** 2026-09-03T15:37:48Z (before #4280, does not change current tip). Flaky-test fix that happened to branch off the epic's working tip; unrelated to reservations logic.
 
@@ -261,11 +290,7 @@ per-PR build detail, which is still accurate.)*
     vs its own ~665 lines) — expected per §5's flat + sequential-merge design, not a defect. Each
     PR's diff shrinks automatically as its dependency merges. Review/merge in order A→C→D→E→B→F→G→H.
   - Full descriptions (now reflecting flat bases): `agent-docs/m1/pr-*-description.md`.
-- **Epic integration (step map row 12-14: review/merge A-H onto `reservations-upgrade` /
-  `reservations-epic`, full suite, final PR to `main`)** — all 8 PRs now open (see above);
-  human review and merge in order A→C→D→E→B→F→G→H is the remaining step. De-risked by the
-  2026-08-26 dry-run re-verification (all seven tbtc-v2 branches merge clean at current tips, no
-  manual conflicts, 28/28 passing, Bridge bytecode 22,791 B — see item 9 above).
+- ~~**Epic integration (step map row 12-14: review/merge A-H onto `reservations-upgrade` / `reservations-epic`, full suite, final PR to `main`)** — all 8 PRs now open; human review and merge in order A→C→D→E→B→F→G→H is the remaining step.~~ **Superseded 2026-09-28.** The component PRs (#1106-#1112, #4274, plus the follow-on chain) are all merged onto their integration branches. The **actual remaining promotion step** is: reconcile `dev` into each integration branch (`reservations-upgrade` and `reservations-epic`), rerun CI on both, then merge the two tracker PRs [#1116](https://github.com/threshold-network/tbtc-v2/pull/1116) and [#4282](https://github.com/threshold-network/keep-core/pull/4282). Both trackers are currently CONFLICTING with `dev` (see current status above) — this is the real gate, not a per-PR review sequence.
 - **Post-m1: structural bound on re-anchor fee ratio** — `roadmap.md` §7 item 5, committed for post-m1 work.
 - **Should fee revenue pay down `inKindFeeDebtSat` first?** **RESOLVED
   2026-09-07 (corrected twice).** First pass wrongly called the existing
@@ -277,8 +302,15 @@ per-PR build detail, which is still accurate.)*
   / `pr-review-followups.md` item 8 for the full trail.
 - **tbtc-v2 work decided 2026-09-07, not yet implemented** (separate repo,
   no PR opened yet):
-  1. `sweepFees`/`_burnFromReserve` — cap debt repayment at `feeReserveTarget`
-     instead of burning the full balance (item above).
+  1. ~~`sweepFees`/`_burnFromReserve` — cap debt repayment at `feeReserveTarget`
+     instead of burning the full balance (item above)~~ **Superseded as
+     decision D-3 (2026-09-28):** keep today's no-floor behavior —
+     `sweepFees` repays `inKindFeeDebtSat` from the vault's full current
+     balance before comparing against `feeReserveTarget`, so the target
+     bounds only the sweepable surplus, not debt repayment. No contract
+     logic change; the decision is recorded in `requirements.md` §12 and
+     the tbtc-v2 runbook, and `e635e229` on `fix/m1-cross-repo-review`
+     comments `sweepFees` with it.
   2. `updateReservationCaps` / `requestReservationAcceptance` — add
      `maxActiveReservations <= liveWalletsCount x maxReservationsPerWallet`,
      enforced at acceptance time, not just at cap-set time (`roadmap.md` §7
@@ -286,9 +318,7 @@ per-PR build detail, which is still accurate.)*
   3. Bridge/`ReservationVault` — add a governance-set wallet allowlist
      (`isReservationEligibleWallet`, mirroring `isVaultTrusted`), checked
      alongside the existing `Live`-state gate (`roadmap.md` §7 item 3).
-  4. `98_generate_reservation_mainnet_calldata.ts` — placeholder cap values
-     contradict the decided launch posture; needs a comment fix or a
-     hard-fail guard before real use (`roadmap.md` §7 item 2 flag).
+  4. ~~`98_generate_reservation_mainnet_calldata.ts` — placeholder cap values contradict the decided launch posture; needs a comment fix or a hard-fail guard~~ **Resolved at tbtc-v2 `9f8f5ef1` (2026-09-28):** the script now states "no numeric value may silently default", loads every cap through `requireEnvBigInt` (throws when an env var is absent) / `requireEnvNumber`, and the launch posture hard-fails unless `RESERVATION_MAX_PER_WALLET == 1`. Items 2-3 remain open.
 
 ## Key documents (read these before doing anything)
 

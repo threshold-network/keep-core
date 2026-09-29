@@ -180,6 +180,32 @@ charges an in-kind miner fee, so the fee reserve, `inKindFeeDebtSat` and
 `updateFeeReserveTarget` are all in use from the first re-anchor. Monitoring
 the debt belongs in §5.
 
+**The fee-floor decision (D-3, 2026-09-28): m1 has no floor.** The deployed
+vault already chose the no-floor policy, and the M1 decision records it
+rather than reversing it: `sweepFees` repays `inKindFeeDebtSat` from the
+vault's **full** current balance before comparing against `feeReserveTarget`
+(`ReservationVault.sol` `sweepFees`/`_burnFromReserve`, ~`:297-372` at the
+pinned snapshot). Incoming balance may therefore repay debt down to zero,
+leaving the reserve empty; `sweepFees` does not revert when the post-burn
+balance is at or below the target. There is no `require(balance >
+feeReserveTarget)` guard. No contract logic change is required.
+
+**Untrusted-vault settlement fallback (E-2, 2026-09-28): direct credit, no
+initiation fee.** When a late acceptance proof settles, `settleAcceptance`
+routes the gross anchored amount through the deposit's immutable vault **only
+if that vault is still trusted** (`ReservationProofs.sol` `settleAcceptance`,
+~`:600-624` at the pinned snapshot). If governance revokes the reveal-time
+vault's trust (`setVaultStatus(vault, false)`) before the proof settles, the
+Bridge credits the depositors **directly** through
+`Bank.increaseBalances` instead of `receiveBalanceIncrease`, so the position
+still settles but **no initiation fee is charged and no fee reserve
+accumulates** for that settlement. A confirmed Bitcoin anchor must settle
+even after the vault loses trust, so settlement is never forced back
+through the revoked vault (that would revert the already-confirmed spend).
+The branch and its fee consequence are recorded in tbtc-v2
+`solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Late-Settlement Fee
+Fallback When Vault Trust Is Revoked (E-2)").
+
 ## 4. Launch gates
 
 These are the residual risks `m1-variant-comparison.md` §5.4 identified.
@@ -290,16 +316,19 @@ could not be reconstructed.
 
 The general rule: **storage-complete means written, not merely declared.**
 
-**The deeper reason this matters: in m1 B the custody term has no on-chain
-consumer at all.** Every would-be reader of `expiresAt` and
-`dissolutionEligibleAt` belongs to functionality this milestone does not ship
-at all — redemption's `< expiresAt` check, renewal — or was deliberately
-deleted: dissolution's `>= dissolutionEligibleAt` check does not exist
-because dissolution itself is cut, and re-anchor's `< dissolutionEligibleAt`
-gate was removed to make re-anchor unbounded. So the term is not enforced by
-anything in m1; it is a **commitment held in storage for m2 to honour**. The
-storage *is* the promise, which makes dropping the write a silent
-repudiation of it rather than a code-size optimisation.
+**The deeper reason this matters: in m1 B the custody term has exactly one
+on-chain consumer: the Closing-wallet branch of `notifyReservationStranded`.**
+A `Closing` wallet's reservation can be stranded only once
+`block.timestamp >= reservation.dissolutionEligibleAt`
+(`Reservation.sol:1090-1113` in the M1 code). Every other would-be reader
+belongs to functionality this milestone does not ship at all — redemption's
+`< expiresAt` check, renewal — or was deliberately deleted: dissolution's
+`>= dissolutionEligibleAt` check does not exist because dissolution itself is
+cut, and re-anchor's `< dissolutionEligibleAt` gate was removed to make
+re-anchor unbounded. So the term is not enforced by any on-chain gate in m1;
+it is a **commitment held in storage for m2 to honour**. The storage *is* the
+promise, which makes dropping the write a silent repudiation of it rather than
+a code-size optimisation.
 
 ### 4.5 Storage layout — Met for `dissolutionEligibleAt`; the dropped fields were never M1-reachable, and M2 can recover equivalents from `__gap`
 
@@ -364,53 +393,56 @@ independent operational needs with no single corresponding launch gate.
 
 | Duty | Why B specifically | Automated in keep-core (`reservations-epic`, f66f11240)? |
 |---|---|---|
-| Re-anchor executor on `WalletMovingFunds`, with alerting | The only unpin; failure ends in slashing, not delay | **Partial** — `pkg/tbtcpg/reservation_reanchor.go` (`ReservationReanchorTask`) drains `MovingFunds` sources; the contract also accepts a `Closing` source (§2.1), but the task does not scan for or drain those (`~:139`) |
-| Free-slot monitor (`walletReservationsCount < cap` across Live wallets) | Leading indicator of the §4.1 cliff | **Partial** — gauge metric registered (`clientinfo.MetricReservationWalletReservationsCount`, gated on `reservationsEnabled`), but no production code path populates it from a chain read yet |
-| Occupancy monitor (`activeReservationsCount` vs `liveWalletsCount x cap`) | Alert well before saturation | **Partial** — same gap: `MetricReservationActiveReservationsCount` / `MetricReservationMaxActiveReservations` / `MetricReservationLiveWalletsCount` are registered, unpopulated in production |
-| Action-timeout watch | Pending acceptances and re-anchors approaching `reservationActionTimeout`, since expiry slashes | **Yes** — `pkg/maintainer/spv/reservation_action_timeout_watch.go` |
+| Re-anchor executor on `WalletMovingFunds`, with alerting | The only unpin; failure ends in slashing, not delay | **Partial** — `pkg/tbtcpg/reservation_reanchor.go` (`ReservationReanchorTask`) drains `MovingFunds` sources; the contract also accepts a `Closing` source (any caller may re-anchor off a `Closing` wallet: `requirements.md` FR-5, `architecture.md` §6.3), but the task does not scan for or drain those (`~:139`) |
+| Free-slot monitor (`walletReservationsCount < cap` across Live wallets) | Leading indicator of the §4.1 cliff | **Partial** — `wallet_reservations_count` is published by the acceptance task on each coordination pass (`reservation_acceptance.go:379`), reading `WalletReservationsCount` from the chain |
+| Occupancy monitor (`activeReservationsCount` vs `liveWalletsCount x cap`) | Alert well before saturation | **Partial** — `active_reservations_count` and `max_active_reservations` are published by the acceptance task (`:394-398`); `live_wallets_count` is published by the re-anchor task on each Run pass (`reservation_reanchor.go:136`), reading `GetLiveWalletsCount` from the chain |
+| Action-timeout watch | Pending acceptances and re-anchors approaching `reservationActionTimeout`; expiry releases reserved capacity — prompt notification prevents stale capacity and enables retry. M1 acceptance and re-anchor timeouts do not slash | **Yes** — `pkg/maintainer/spv/reservation_action_timeout_watch.go` |
 | Stranding watcher on `Terminated`/`Closed` wallets | Releases capacity; one of B's two close paths | **Partial** — `pkg/maintainer/spv/reservation_stranding_watch.go` triggers only on `StateClosed`/`StateTerminated` (`reservation_wiring.go`'s `OnWalletClosed` subscription and startup scan both gate on those two states); `notifyReservationStranded`'s own precondition also allows stranding a `Closing` wallet's reservation once `now >= dissolutionEligibleAt` (`Reservation.sol:1102-1111`), but no client path triggers that branch — permissionless `notifyReservationStranded` is the backstop |
 | **Below-dust report after the last re-anchor** | `notifyMovingFundsBelowDust` (`MovingFunds.sol:603`) is the **only remaining** route to close a wallet that proved its funds moved while still holding anchors: the Bridge's own automatic closing attempt inside `notifyWalletFundsMoved` (`Wallets.sol:405-439`) runs once, while the reservation count is still non-zero, and cannot itself be retried | **Yes** — `pkg/tbtcpg/reservation_reanchor.go`'s `ReservationReanchorTask` calls `notifyMovingFundsBelowDustIfEligible` (`:664-730`) after re-anchoring a `MovingFunds` wallet's reservations to zero, invoking `NotifyMovingFundsBelowDust` (test: `TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`). Still an operator duty if the reservation task is disabled via `tbtc.Config.ReservationsEnabled` |
 | Stale reserved-deposit cleanup | `notifyStaleReservedDeposit` | **Yes** — `pkg/maintainer/spv/reservation_stale_deposit_watch.go` |
-| In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone | **No** — zero references to `InKindFeeDebt` or `FeeReserve` anywhere in keep-core's `pkg/`; no chain-read accessor or gauge exists |
-| Cap-dial runbook | Trigger, executor and accepted blast radius agreed **before** launch | Manual by nature — a runbook, not code |
+| In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone. The 2026-09-28 D-3 decision keeps the no-floor behavior: `sweepFees` repays `inKindFeeDebtSat` from the vault's full balance before comparing against `feeReserveTarget`, so the target bounds only the sweep-out, not debt repayment | **Yes (NFR-OBS-3)** — implemented as the two fee-debt gauges `reservation_vault_fee_debt_sat` (the vault's `inKindFeeDebtSat`) and `reservation_vault_fee_reserve_tbtc` (the vault's TBTC fee-reserve balance), chain-read from the vault and published via the same `SetGauge` path; alert thresholds remain operator-side |
+| Cap-dial runbook, including client activation ordering | Trigger, executor and accepted blast radius agreed **before** launch. Activation ordering (C-4): release and deploy a keep-core build whose `reservationsActivationBlocks` contains the target network's entry **before** `setVaultStatus(vault, true)` executes; the on-chain activation transaction must be scheduled at or after that block, otherwise reserved reveals settle on-chain while no client ever schedules acceptance or re-anchor | Manual by nature — a runbook gate, not code. Recorded in tbtc-v2 `solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Client Activation Ordering Gate (C-4)") |
 | Position-age report | Nothing closes, so age is the only proxy for accumulating permanent liability | **No** — not found in keep-core |
 
 Note what B does **not** need: a dissolution executor. That saving is the
 decision's operational upside, and it is real — but it is a saving of
 ~300-500 production Go lines against the duties above.
 
-**Implementation status (2026-09-03; updated 2026-09-28 against keep-core
-f66f11240).** The free-slot and occupancy gauges have progressed since the
-2026-09-03 review but are still not complete. `pkg/clientinfo/performance.go`
-now declares and registers the four leading-indicator gauge metrics
-(`MetricReservationActiveReservationsCount`,
+**Implementation status (2026-09-03; revised 2026-09-28 against keep-core
+f66f11240, then again against `fix/m1-cross-repo-review`).** The free-slot and occupancy gauges are registered and
+populated from chain reads by the reservation tasks.
+`pkg/clientinfo/performance.go` declares and registers the six
+leading-indicator gauge metrics when reservations are enabled:
+the four occupancy gauges (`MetricReservationActiveReservationsCount`,
 `MetricReservationMaxActiveReservations`, `MetricReservationLiveWalletsCount`,
-`MetricReservationWalletReservationsCount`), gated behind
-`Config.ReservationsEnabled` so a non-reservation deployment's metric surface
-is unchanged — but no production call site sets their values from a chain
-read; only the test suite exercises `SetGauge` for them directly. The chain
-interface the gauges would read from already exists
-(`ActiveReservationsCount() (count uint32, maxActive uint32, err error)` on
-`pkg/tbtcpg/chain.go:250`, already consumed by the acceptance task's own cap
-check at `pkg/tbtcpg/reservation_acceptance.go:386`), so the remaining work
-is periodic-poll wiring from that interface (or a per-wallet equivalent for
-the wallet-level pair) into `PerformanceMetrics`, not a new chain read.
-Tracked as an open item, not a silently-dropped one.
+`MetricReservationWalletReservationsCount`) plus the two vault-fee gauges
+(`MetricReservationVaultFeeDebtSat`, `MetricReservationVaultFeeReserveTbtc`),
+all gated behind `Config.ReservationsEnabled` so a non-reservation
+deployment's metric surface is unchanged. `ReservationAcceptanceTask` publishes
+`wallet_reservations_count`, `active_reservations_count`, `max_active_reservations`,
+`reservation_vault_fee_debt_sat` (in satoshi) and `reservation_vault_fee_reserve_tbtc`
+(the vault's TBTC fee-reserve balance, in TBTC base units, 1e18 per whole
+TBTC) on each `findReservationAcceptanceCandidate` pass, and a gauge read error
+keeps the previously recorded value; `ReservationReanchorTask`
+publishes `live_wallets_count` on each `Run` pass (`reservation_reanchor.go`),
+so a coordinator running these tasks keeps the gauges current.
 
-**Implementation status (2026-09-07; confirmed still open 2026-09-28).** The
-in-kind fee reserve and `inKindFeeDebtSat` watch has no recorded deferral
-decision, unlike the free-slot/occupancy monitors above: a repo-wide search
-still finds zero references to `InKindFeeDebt` or `FeeReserve` anywhere in
-`pkg/`. The 2026-09-07 policy question this duty exists to cover — whether
-fee revenue should repay `inKindFeeDebtSat` before sweeping — is now
-**resolved on-chain**: `sweepFees` repays outstanding debt from the vault's
-current balance before computing the sweepable excess
-(`ReservationVault.sol:297-319`; decision recorded in `timeline-estimate.md`
-§7 item 6). What remains unbuilt is the keep-core-side **observability** — a
-chain-read accessor for the reserve/debt balance and a gauge, mirroring the
-shape of the free-slot/occupancy gauges above — deferred to the same
-follow-up PR for the same reason: it should get its own chain interface and
-tests, not be bolted onto an unrelated review-fix pass.
+The published values have documented limitations: (a) they are populated only
+when a task runs, so a node that is idle or whose task is gated off will
+serve stale values; (b) `wallet_reservations_count` is per-wallet for the
+last-processed candidate, not a fleet-wide minimum; the occupancy ratio
+(`activeReservationsCount / (liveWalletsCount x cap)`) is the intended
+fleet-wide leading indicator; (c) no built-in alert threshold is shipped —
+operators configure Prometheus alerts on these metrics per
+`requirements.md` §13 NFR-OBS-3; (d) neither task scans `Closing` sources,
+so a `Closing` wallet's count is only refreshed if it was the acceptance
+candidate in the immediately preceding pass — the permissionless
+`notifyReservationStranded` backstop (line 397) covers the case where no
+client path refreshes it.
+
+**Implementation status (2026-09-07; revised 2026-09-28).** The 2026-09-07 policy question — whether fee revenue should repay `inKindFeeDebtSat` before sweeping — is resolved on-chain: `sweepFees` repays outstanding debt from the vault's current balance before computing the sweepable excess (`ReservationVault.sol:303-319`). The 2026-09-28 D-3 decision records this as the M1 decision with no floor: `sweepFees` repays `inKindFeeDebtSat` from the vault's **full** current balance before comparing against `feeReserveTarget`, so the target bounds only the sweepable surplus, not debt repayment. No contract-logic change.
+
+Keep-core observability (NFR-OBS-3) is implemented on `fix/m1-cross-repo-review` as the two chain-read gauges `reservation_vault_fee_debt_sat` (the vault's `inKindFeeDebtSat`) and `reservation_vault_fee_reserve_tbtc` (the vault's TBTC fee-reserve balance), published via the same `SetGauge` path as the occupancy gauges. Remaining limitation: alert thresholds are operator-side (the gauges surface non-zero debt; an operator configures alerts on the metric).
 
 ## 6. What m2 must then build
 

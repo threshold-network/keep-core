@@ -81,9 +81,13 @@ writes them. Two knock-on effects worth stating outright:
 - **§0.6's slashing vector does not exist in m1 B.** With no
   `requestReservationDissolution`, nothing can be opened against an honest
   wallet and left to time out. This was B's headline benefit and it holds.
-- **Nothing in m1 B reads `expiresAt` or `dissolutionEligibleAt`.** Every
-  consumer is cut or deleted: redemption's strict `< expiresAt`,
-  renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's
+- **m1 B reads `dissolutionEligibleAt` in exactly one place: the
+  Closing-wallet branch of `notifyReservationStranded`.** A `Closing`
+  wallet's reservation can be stranded only once
+  `block.timestamp >= reservation.dissolutionEligibleAt` (`Reservation.sol:1090-1113`
+  in the M1 code). Every other would-be consumer is cut or deleted:
+  redemption's strict `< expiresAt`, renewal, dissolution's
+  `>= dissolutionEligibleAt`, and re-anchor's
   `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the
   custody term is **not enforced by any on-chain gate in m1** — it is a
   commitment recorded in storage for m2 to honour, which is exactly why the
@@ -217,13 +221,16 @@ turns on.
 | `ReservationVault` (plain `Ownable`, immutables in bytecode, §2.2) | Deploying v2 and re-pointing `Bridge.reservationVault`, which `updateReservationParameters` gates on `reservationTotalAmount == 0 && pendingReservedDeposits == 0` (`Reservation.sol:1263-1274`) | Total quiescence | **Yes, as of 2026-09-24** — Option B accepts the irreversibility below rather than flag-gating (see the note after item 3) |
 
 **In B the vault gate is unreachable while the product is in use.**
-`reservationTotalAmount` decrements only when a position closes, and B's close
-sites are stranding alone: redemption's (`ReservationProofs.sol:715`) and
-dissolution's (`:1140-1142`) are both cut, leaving
-`strandReservation` and `strandLateSettlementIfTargetWalletClosed`, which
-require the custodying wallet to be `Terminated`. So reaching
-`reservationTotalAmount == 0` in B means **every wallet holding a reservation
-has been terminated** — the §5.3 endgame, not a maintenance window.
+`reservationTotalAmount` decrements only when a position closes, and B's
+close sites are stranding alone: redemption's (`ReservationProofs.sol:715`)
+and dissolution's (`:1140-1142`) are both cut, leaving
+`strandReservation` (permissionless, via `notifyReservationStranded`) and
+`strandLateSettlementIfTargetWalletClosed`. Stranding needs the custodying
+wallet to be `Terminated`, `Closed`, or a `Closing` wallet once its
+`dissolutionEligibleAt` has passed (`Reservation.sol:1090-1113` in the M1
+code). So reaching `reservationTotalAmount == 0` in B means **every
+position has been stranded or otherwise released** — the §5.3 endgame, not
+a maintenance window.
 
 Three consequences, and they point in opposite directions:
 
@@ -234,11 +241,12 @@ Three consequences, and they point in opposite directions:
    is a Bridge upgrade that re-plumbs the caller gate — so §0.2's "m2 is a
    *vault-side* change" is **false under B**.
 3. **Storage must still be written, not just declared.** Acceptance sets
-   `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
-   (`ReservationProofs.sol:537-539`) and B deletes its only reader
-   (re-anchor's gate). Drop the write as dead code and m2's dissolution has no
-   eligibility date for any m1-era position, with the non-retroactive snapshot
-   semantics (`:180-184`) unreconstructable.
+  `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
+  (`ReservationProofs.sol:537-539`) and B deletes its only reader
+  (re-anchor's gate). (In M1, the Closing branch of `notifyReservationStranded`
+  is the one live reader; §0.2.) Drop the write as dead code and m2's dissolution
+  has no eligibility date for any m1-era position, with the non-retroactive
+  snapshot semantics (`:180-184`) unreconstructable.
 
 **Superseded 2026-09-24 by the Option B vault decision**
 (`m1-b-implementation.md` §4.2). This paragraph originally instructed
@@ -397,7 +405,7 @@ exists until governance flips the switch.
 
 | Parameter | m1 value | Note |
 |---|---|---|
-| `reservationTermSeconds` | **12 months** | The promise clock — and the §0.6 slashing deadline (below) |
+| `reservationTermSeconds` | **12 months** — a mainnet planning decision, not a script-enforced constant | Promise clock; contributes to the Closing-wallet stranding eligibility timestamp (`dissolutionEligibleAt`). M1 has no dissolution-timeout slashing path (§0.6's vector is unreachable in B). The calldata script only bounds the value to 90–730 days, so the launch runbook must check the supplied value against this decision (`requirements.md` §9) |
 | `reservationDissolutionDelay` | generous | Sets `dissolutionEligibleAt = expiresAt + delay`; snapshotted per term granted (:180-184) |
 | `reservationRenewalWindowSeconds` | `> 0 && < term` | **Cannot be zero** (:1232-1236); unreachable anyway since renewal is vault-gated |
 | `reservationMaxTotalAmount` | tiny | Bounds pooled-liquidity exposure (§0.3) |
@@ -1260,6 +1268,7 @@ and are recorded as resolved rather than deleted.
    cap debt repayment at the reserve target in `sweepFees` so it degrades to
    partial repayment instead of reverting. Tbtc-v2 implementation pending,
    separate repo/scope.
+   **Superseded 2026-09-28 by M1 decision D-3:** the 2026-09-07 cap-debt-at-target design was overridden. Keep the no-floor behavior: `sweepFees` repays `inKindFeeDebtSat` from the vault's full current balance before comparing against `feeReserveTarget`, so the target bounds only the sweepable surplus, not debt repayment. No contract logic change; the decision is recorded in `requirements.md` §12 and the tbtc-v2 runbook, and the `sweepFees` contract comment records it on `fix/m1-cross-repo-review` (`e635e229`).
    Scope note: this caps *repayment*, not *financing* — `financeInKindFee`
    is unchanged and still burns the reserve to zero unconditionally (how
    debt arises); if fee income stops, debt never fully clears under the
