@@ -896,6 +896,7 @@ jobs:
           && steps.compare.outcome == 'success'
         run: |
           python3 - <<'EOF'
+          import os
           import re
           content = open('benchstat-results.txt').read()
           regressions = []
@@ -909,7 +910,7 @@ jobs:
               print('::warning::Performance regressions >12% detected (advisory on pull requests):')
               for r in regressions:
                   print(f'::warning::  {r}')
-              with open(GITHUB_STEP_SUMMARY, 'a') as f:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
                   f.write('## Benchmark regression (advisory)\n\n')
                   f.write('The following benchmarks regressed >12% against the baseline. '
                           'On pull requests this is advisory; the regression is a hard '
@@ -919,7 +920,7 @@ jobs:
                       f.write(f'- `{r}`\n')
           else:
               print('No benchmark regressions >12% against baseline.')
-              with open(GITHUB_STEP_SUMMARY, 'a') as f:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
                   f.write('## Benchmark check\n\nNo regressions >12% against the baseline.\n')
           EOF
 
