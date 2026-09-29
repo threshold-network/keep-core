@@ -1,0 +1,1202 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "name": "actions",
+      "outputs": [
+        {
+          "internalType": "bytes20",
+          "name": "targetWalletPubKeyHash",
+          "type": "bytes20"
+        },
+        {
+          "internalType": "uint32",
+          "name": "requestedAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "timeoutAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "txMaxFee",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint8",
+          "name": "actionType",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint8",
+          "name": "state",
+          "type": "uint8"
+        },
+        {
+          "internalType": "bool",
+          "name": "feePaid",
+          "type": "bool"
+        },
+        {
+          "internalType": "address",
+          "name": "redeemer",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "actionDataHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "sourceAnchorUtxoHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "amount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bool",
+          "name": "usedRetryCredit",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint32",
+          "name": "watchtowerDefaultDelay",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "watchtowerLevelOneDelay",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "watchtowerLevelTwoDelay",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "retryCreditSourceNonce",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bool",
+          "name": "isPartial",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint32",
+          "name": "termSeconds",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "dissolutionDelay",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "minAmount",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "caps",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "maxReservationsAmountPerWallet",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservationMaxSingleAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "maxActiveReservations",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "deposits",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "depositor",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "amount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "revealedAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "address",
+          "name": "vault",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "treasuryFee",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "sweptAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "extraData",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "depositKey",
+          "type": "uint256"
+        }
+      ],
+      "name": "isReservedDeposit",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "params",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "reservationVault",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservationMinAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservationTxMaxFee",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reservationTermSeconds",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reservationDissolutionDelay",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservationMaxTotalAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservationTotalAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "maxReservationsPerWallet",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reservationActionTimeout",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reservationRenewalWindowSeconds",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "reservationKey",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "requestNonce",
+          "type": "uint64"
+        }
+      ],
+      "name": "reservationActions",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "bytes20",
+              "name": "targetWalletPubKeyHash",
+              "type": "bytes20"
+            },
+            {
+              "internalType": "uint32",
+              "name": "requestedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "timeoutAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "txMaxFee",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint8",
+              "name": "actionType",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint8",
+              "name": "state",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bool",
+              "name": "feePaid",
+              "type": "bool"
+            },
+            {
+              "internalType": "address",
+              "name": "redeemer",
+              "type": "address"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "actionDataHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "sourceAnchorUtxoHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "amount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bool",
+              "name": "usedRetryCredit",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerDefaultDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerLevelOneDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerLevelTwoDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "retryCreditSourceNonce",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bool",
+              "name": "isPartial",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint32",
+              "name": "termSeconds",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "dissolutionDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "minAmount",
+              "type": "uint64"
+            }
+          ],
+          "internalType": "struct StubBridge.Action",
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "reservationCaps",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "reservationParameters",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "reservations",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "mintedAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "acceptedAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes20",
+          "name": "walletPubKeyHash",
+          "type": "bytes20"
+        },
+        {
+          "internalType": "uint64",
+          "name": "anchorAmount",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "expiresAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "anchorTxHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "anchorTxOutputIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint8",
+          "name": "state",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint64",
+          "name": "requestNonce",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bool",
+          "name": "retryCredit",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint32",
+          "name": "dissolutionEligibleAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "cumulativeReanchorFee",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reanchorCooldownUntil",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "reserved",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "key",
+          "type": "uint256"
+        },
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "depositor",
+              "type": "address"
+            },
+            {
+              "internalType": "uint64",
+              "name": "amount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "revealedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "address",
+              "name": "vault",
+              "type": "address"
+            },
+            {
+              "internalType": "uint64",
+              "name": "treasuryFee",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "sweptAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "extraData",
+              "type": "bytes32"
+            }
+          ],
+          "internalType": "struct StubBridge.DepositReq",
+          "name": "req",
+          "type": "tuple"
+        }
+      ],
+      "name": "setDeposit",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "key",
+          "type": "uint256"
+        },
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            },
+            {
+              "internalType": "uint64",
+              "name": "mintedAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "acceptedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "bytes20",
+              "name": "walletPubKeyHash",
+              "type": "bytes20"
+            },
+            {
+              "internalType": "uint64",
+              "name": "anchorAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "expiresAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "anchorTxHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "anchorTxOutputIndex",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint8",
+              "name": "state",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint64",
+              "name": "requestNonce",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bool",
+              "name": "retryCredit",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint32",
+              "name": "dissolutionEligibleAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "cumulativeReanchorFee",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reanchorCooldownUntil",
+              "type": "uint32"
+            }
+          ],
+          "internalType": "struct StubBridge.ResReq",
+          "name": "req",
+          "type": "tuple"
+        }
+      ],
+      "name": "setReservation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "key",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "nonce",
+          "type": "uint64"
+        },
+        {
+          "components": [
+            {
+              "internalType": "bytes20",
+              "name": "targetWalletPubKeyHash",
+              "type": "bytes20"
+            },
+            {
+              "internalType": "uint32",
+              "name": "requestedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "timeoutAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "txMaxFee",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint8",
+              "name": "actionType",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint8",
+              "name": "state",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bool",
+              "name": "feePaid",
+              "type": "bool"
+            },
+            {
+              "internalType": "address",
+              "name": "redeemer",
+              "type": "address"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "actionDataHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "sourceAnchorUtxoHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "amount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bool",
+              "name": "usedRetryCredit",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerDefaultDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerLevelOneDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "watchtowerLevelTwoDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "retryCreditSourceNonce",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bool",
+              "name": "isPartial",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint32",
+              "name": "termSeconds",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "dissolutionDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "minAmount",
+              "type": "uint64"
+            }
+          ],
+          "internalType": "struct StubBridge.Action",
+          "name": "action",
+          "type": "tuple"
+        }
+      ],
+      "name": "setReservationAction",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint64",
+              "name": "maxReservationsAmountPerWallet",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "reservationMaxSingleAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "maxActiveReservations",
+              "type": "uint32"
+            }
+          ],
+          "internalType": "struct StubBridge.Caps",
+          "name": "c",
+          "type": "tuple"
+        }
+      ],
+      "name": "setReservationCaps",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "reservationVault",
+              "type": "address"
+            },
+            {
+              "internalType": "uint64",
+              "name": "reservationMinAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "reservationTxMaxFee",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reservationTermSeconds",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reservationDissolutionDelay",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "reservationMaxTotalAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "reservationTotalAmount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "maxReservationsPerWallet",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reservationActionTimeout",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "reservationRenewalWindowSeconds",
+              "type": "uint32"
+            }
+          ],
+          "internalType": "struct StubBridge.Parameters",
+          "name": "p",
+          "type": "tuple"
+        }
+      ],
+      "name": "setReservationParameters",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "key",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "isReserved",
+          "type": "bool"
+        }
+      ],
+      "name": "setReservedDeposit",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "pubKeyHash",
+          "type": "bytes20"
+        },
+        {
+          "components": [
+            {
+              "internalType": "bytes32",
+              "name": "ecdsaWalletID",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "mainUtxoHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "pendingRedemptionsValue",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "createdAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "movingFundsRequestedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "closingStartedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "pendingMovedFundsSweepRequestsCount",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint8",
+              "name": "state",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "movingFundsTargetWalletsCommitmentHash",
+              "type": "bytes32"
+            }
+          ],
+          "internalType": "struct StubBridge.Wallet",
+          "name": "wallet",
+          "type": "tuple"
+        }
+      ],
+      "name": "setWallet",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "pubKeyHash",
+          "type": "bytes20"
+        },
+        {
+          "internalType": "uint64",
+          "name": "amount",
+          "type": "uint64"
+        }
+      ],
+      "name": "setWalletReservationsAmount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "pubKeyHash",
+          "type": "bytes20"
+        },
+        {
+          "internalType": "uint32",
+          "name": "count",
+          "type": "uint32"
+        }
+      ],
+      "name": "setWalletReservationsCount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "pubKeyHash",
+          "type": "bytes20"
+        }
+      ],
+      "name": "walletReservationsAmount",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "",
+          "type": "bytes20"
+        }
+      ],
+      "name": "walletReservationsAmounts",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "pubKeyHash",
+          "type": "bytes20"
+        }
+      ],
+      "name": "walletReservationsCount",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "",
+          "type": "bytes20"
+        }
+      ],
+      "name": "walletReservationsCounts",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "",
+          "type": "bytes20"
+        }
+      ],
+      "name": "wallets",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "ecdsaWalletID",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "mainUtxoHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "pendingRedemptionsValue",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "createdAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "movingFundsRequestedAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "closingStartedAt",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "pendingMovedFundsSweepRequestsCount",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint8",
+          "name": "state",
+          "type": "uint8"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "movingFundsTargetWalletsCommitmentHash",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x608080604052346100165761153a908161001c8239f35b600080fdfe608080604052600436101561001357600080fd5b60003560e01c908163067cf8321461129e575080630dbfbf5d1461115057806313d79872146110db57806318e22d98146110985780631de0555a146102b057806324e320a314610ba257806348b9666f14610f7b57806348cf529514610ccd5780634a37907714610be657806353f9195e1461082357806363481e9814610ba257806363dfb29c14610b295780636db7ff7c14610ae95780637602e50f14610a965780637d4c97ce146108ab5780638f9e17b01461085457806393df529b14610823578063b02c43d0146107a8578063b95b947d1461068a578063cec8c6e914610365578063cff0ab96146102f1578063d78b84c2146102b0578063e65e19d51461020c5763f75b4b1c1461012757600080fd5b34610207576000366003190112610207576040516001600160401b03906101408101828111828210176101f1576040526101ed610120600754928460018060a01b0385169485835260a01c16948560208301526008548181169081604085015263ffffffff92838260401c16806060870152848360601c16918260808801528360801c16928360a088015260c01c938460c088015260095496868816968760e0830152808960201c16988961010084015260401c1698899101526040519a8b9a8b6113af565b0390f35b634e487b7160e01b600052604160045260246000fd5b600080fd5b34610207576020366003190112610207576001600160601b031961022e611398565b166000526002602052610120604060002080549060ff600182015491600360028201549101549260405194855260208501526001600160401b038116604085015263ffffffff808260401c166060860152808260601c166080860152808260801c1660a08601528160a01c1660c085015260c01c1660e0830152610100820152f35b34610207576020366003190112610207576001600160601b03196102d2611398565b166000526005602052602063ffffffff60406000205416604051908152f35b34610207576000366003190112610207576007546008546101ed6009549260405193849363ffffffff926001600160401b0390848460401c169480808660201c169516938060c01c93808260801c169381848460601c16948460401c169316918160a01c169060018060a01b03168b6113af565b346102075760403660031901126102075761037e611382565b600061026061038b6114e4565b8281528260208201528260408201528260608201528260808201528260a08201528260c08201528260e08201528261010082015282610120820152826101408201528261016082015282610180820152826101a0820152826101c0820152826101e0820152826102008201528261022082015282610240820152015260043560005260046020526001600160401b036040600020911660005260205261028060406000206001600160401b036102606104426114e4565b8260058554956001600160601b03198760601b16845263ffffffff8760a01c16602085015263ffffffff8760c01c1660408501526001810154838116606086015260ff8160401c16608086015260ff8160481c1660a086015260ff8160501c16151560c086015260018060a01b039060581c1660e08501526002810154610100850152600381015461012085015260ff6004820154848116610140870152818160401c16151561016087015263ffffffff8160481c1661018087015263ffffffff8160681c166101a087015263ffffffff8160881c166101c0870152848160a81c166101e087015260e81c161515610200850152015463ffffffff811661022084015263ffffffff8160201c1661024084015260401c1682820152604051936001600160601b03199060601b16845263ffffffff602082015116602085015263ffffffff604082015116604085015282606082015116606085015260ff608082015116608085015260ff60a08201511660a085015260c0810151151560c085015260018060a01b0360e08201511660e08501526101008101516101008501526101208101516101208501528261014082015116610140850152610160810151151561016085015263ffffffff6101808201511661018085015263ffffffff6101a0820151166101a085015263ffffffff6101c0820151166101c0850152826101e0820151166101e0850152610200810151151561020085015263ffffffff6102208201511661022085015263ffffffff61024082015116610240850152015116610260820152f35b3461020757610140366003190112610207576106a4611398565b610120366023190112610207576001600160601b0319166000526002602052604060002060243581556044356001820155600281016064356001600160401b0381168091036102075781549063ffffffff60401b610700611483565b60401b1660a4359163ffffffff831683036102075763ffffffff60801b6107256114d1565b60801b16936001600160601b0360a01b1617179063ffffffff60601b9060601b1617178155610775610755611496565b825463ffffffff60a01b191660a09190911b63ffffffff60a01b16178255565b6101043560ff8116810361020757815460ff60c01b191660c09190911b60ff60c01b161790556101243560039190910155005b3461020757602036600319011261020757600435600052600060205260e0604060002080549060026001820154910154906040519260018060a01b0380821685526001600160401b0391828160a01c166020870152861c6040860152821660608501528160a01c166080840152831c60a083015260c0820152f35b34610207576020366003190112610207576004356000526001602052602060ff604060002054166040519015158152f35b346102075760403660031901126102075761086d611398565b610875611382565b906001600160601b03191660005260066020526001600160401b03604060002091166001600160401b0319825416179055600080f35b34610207576101e0366003190112610207576101c03660231901126102075760043560009081526003602052604090206001600160a01b036108eb611418565b16906001600160601b0360a01b918282541617815561093361090b611444565b825467ffffffffffffffff60a01b191660a09190911b67ffffffffffffffff60a01b16178255565b61095e61093e611470565b82546001600160e01b031660e09190911b6001600160e01b031916178255565b608435600182016001600160601b031982168203610207576003936109ba9260601c9082541617815561099261090b61145a565b61099a6114d1565b81546001600160e01b031660e09190911b6001600160e01b031916179055565b60e43560028201550163ffffffff806109d16114a9565b168254916101243560ff8116810361020757610144356001600160401b0393848216820361020757610164359283151580940361020757610184359485168503610207576101a4359586168603610207576cffffffffffffffff00000000009164ff000000009063ffffffff60d01b610a486114bd565b60d01b169861ffff60f01b16179160201b16179160281b16179060ff60681b9060681b16179063ffffffff60701b9060701b1617906001600160401b0360901b9060901b1617179055600080f35b3461020757604036600319011261020757610aaf611398565b6024359063ffffffff8216809203610207576001600160601b0319166000908152600560205260409020805463ffffffff19169091179055005b346102075760403660031901126102075760243580151580910361020757600435600052600160205260406000209060ff80198354169116179055600080f35b34610207576000366003190112610207576040516001600160401b0360608201818111838210176101f1576040908152600a5482811680855281831c909316602080860182905260809290921c63ffffffff1694830185905282516001600160401b039485168152931690830152810191909152606090f35b34610207576020366003190112610207576001600160601b0319610bc4611398565b16600052600660205260206001600160401b0360406000205416604051908152f35b34610207576101003660031901126102075760e03660231901126102075760043560009081526020819052604090206001600160a01b0380610c26611418565b16906001600160601b0360a01b9182845416178355610c6e610c46611444565b845467ffffffffffffffff60a01b191660a09190911b67ffffffffffffffff60a01b16178455565b610c99610c79611470565b84546001600160e01b031660e09190911b6001600160e01b031916178455565b600183019060843590811680910361020757610cc09282541617815561099261090b61145a565b600260e435910155600080f35b34610207576102c036600319011261020757610ce7611382565b61028036604319011261020757600435600052600460205260406000206001600160401b038092166000526020526040600020906044356001600160601b0319811681036102075760601c6001600160601b0360a01b835416178255610d6e610d4e611470565b835463ffffffff60a01b191660a09190911b63ffffffff60a01b16178355565b610d76611483565b825463ffffffff60c01b191660c09190911b63ffffffff60c01b16178255600182019181610da261145a565b1692805460c43560ff811681036102075760e43560ff811681036102075761010435918215158093036102075761012435906001600160a01b03821682036102075769ff0000000000000000009168ff0000000000000000998a91600160581b600160f81b039060581b169660ff60f81b16179160401b16179160481b16179060ff60501b9060501b1617179055610144356002820155610164356003820155600481019061018435918383168093036102075780546101a43595861515809703610207576cffffffff000000000000000000610e7d6114bd565b60481b16966101e43563ffffffff9889821682036102075761020435928a841684036102075761022435948a861686036102075761024435998a1515809b036102075760059a60ff60e81b9060e81b169761ffff60f01b16179160401b1617179063ffffffff60681b9060681b16179063ffffffff60881b9060881b1617906001600160401b0360a81b9060a81b16171790550191610264359181831680930361020757835492610284359283168303610207576102a43591821682036102075767ffffffffffffffff60401b67ffffffff000000009260401b16936fffffffffffffffffffffffffffffffff1916179160201b1617179055600080f35b3461020757610140366003190112610207576004356001600160a01b03811690819003610207576007549067ffffffffffffffff60a01b610fba61142e565b60a01b169163ffffffff60e01b1617176007556001600160401b0380610fde611444565b1663ffffffff60401b9182610ff1611470565b60401b169163ffffffff60601b611006611483565b60601b169067ffffffffffffffff60801b61101f61145a565b60801b169260c4359081168103610207576001600160401b0360c01b9060c01b16931717171760085563ffffffff80611056611496565b166009549267ffffffff0000000061106c6114a9565b60201b16926101243590811681036102075760401b16926001600160601b031916171717600955600080f35b3461020757600036600319011261020757600a54604080516001600160401b03808416825283831c16602082015260809290921c63ffffffff1690820152606090f35b34610207576060366003190112610207576004356001600160401b03811680910361020757600a549067ffffffffffffffff60401b61111861142e565b60401b169060443563ffffffff81168103610207576001600160a01b0319909316171760809190911b63ffffffff60801b1617600a55005b346102075760403660031901126102075761028061116c611382565b600435600052600460205260406000206001600160401b0380921660005260205260406000209081549160018101549260ff60028301549260038101546005600483015492015494604051976001600160601b03198660601b16895263ffffffff8681809860a01c1660208c015260c01c1660408a015287811660608a0152848160401c1660808a0152848160481c1660a08a0152848160501c16151560c08a015260018060a01b039060581c1660e0890152610100880152610120870152848116610140870152818160401c161515610160870152828160481c16610180870152828160681c166101a0870152828160881c166101c0870152848160a81c166101e087015260e81c1615156102008501528082166102208501528160201c1661024084015260401c16610260820152f35b34610207576020366003190112610207576101c09060043560005260036020526040600020805490600181015490600360028201549101549160018060a01b03841685526001600160401b0393848160a01c16602087015260e01c60408601526001600160601b03198160601b166060860152838160a01c16608086015260e01c60a085015260c084015263ffffffff9182821660e085015260ff8260201c16610100850152808260281c1661012085015260ff8260681c161515610140850152828260701c166101608501528160901c1661018084015260d01c166101a0820152f35b602435906001600160401b038216820361020757565b600435906001600160601b03198216820361020757565b6001600160a01b0390911681526001600160401b039182166020820152918116604083015263ffffffff9283166060830152928216608082015292821660a0840152921660c082015291811660e083015291821661010082015291166101208201526101400190565b6024356001600160a01b03811681036102075790565b6024356001600160401b03811681036102075790565b6044356001600160401b03811681036102075790565b60a4356001600160401b03811681036102075790565b60643563ffffffff811681036102075790565b60843563ffffffff811681036102075790565b60e43563ffffffff811681036102075790565b6101043563ffffffff811681036102075790565b6101c43563ffffffff811681036102075790565b60c43563ffffffff811681036102075790565b6040519061028082018281106001600160401b038211176101f15760405256fea26469706673582212202dfafe9290e81dc41dcc3139bcb0d7e8457a6188a7071e1c7ce1608759126a1564736f6c63430008110033"
+}

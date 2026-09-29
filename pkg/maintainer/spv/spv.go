@@ -121,7 +121,14 @@ func Initialize(
 					"does not support wallet closed event subscription",
 			)
 		}
-		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true); err != nil {
+		if err := WireReservationWatchers(
+			ctx,
+			walletClosedChain,
+			spvChain,
+			true,
+			metricsRecorder,
+			config.EthereumNetwork,
+		); err != nil {
 			logger.Fatalf("failed to wire reservation watchers: [%v]", err)
 		}
 	}

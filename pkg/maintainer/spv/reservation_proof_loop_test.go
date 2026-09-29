@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
@@ -64,36 +65,60 @@ func (c *reservationProofBitcoinChain) GetTxHashesForPublicKeyHash(
 }
 
 // TestReservationProofNextScanRange covers the incremental scan-range
-// arithmetic: the very first pass (lastScannedBlock == 0) is bounded to
-// reservationDefaultLookBackBlocks behind the current block (or 0 if the
-// chain is younger than that window); every later pass starts exactly one
-// block after the previous pass's cursor, so a steady-state loop never
-// rescans the full look-back window again.
+// arithmetic for the proof loop's activation-block-aware catch-up scan.
+// The first pass (lastScannedBlock == 0) now starts at the network's
+// reservation activation block (see tbtc.ReservationsActivationBlock)
+// instead of a fixed 30-day lookback. An activation block of
+// math.MaxUint64 (unknown / inactive network) makes the first scan a
+// no-op: the cursor jumps to the chain tip and no events are fetched.
+// Steady-state passes (lastScannedBlock > 0) start exactly one block
+// after the previous cursor and are unchanged.
 func TestReservationProofNextScanRange(t *testing.T) {
 	tests := map[string]struct {
+		activationBlock  uint64
 		currentBlock     uint64
 		lastScannedBlock uint64
 		expectedStart    uint64
+		expectedSkipScan bool
 	}{
-		"first pass, current block below the look-back window": {
+		// Developer network (activation at block 0) - first scan from 0.
+		"first pass, Developer network, current block below lookback": {
+			activationBlock:  0,
 			currentBlock:     1000,
 			lastScannedBlock: 0,
 			expectedStart:    0,
+			expectedSkipScan: false,
 		},
-		"first pass, current block at the look-back window boundary": {
-			currentBlock:     reservationDefaultLookBackBlocks,
-			lastScannedBlock: 0,
-			expectedStart:    0,
-		},
-		"first pass, current block beyond the look-back window": {
+		"first pass, Developer network, current block beyond lookback": {
+			activationBlock:  0,
 			currentBlock:     reservationDefaultLookBackBlocks + 500,
 			lastScannedBlock: 0,
-			expectedStart:    500,
+			expectedStart:    0,
+			expectedSkipScan: false,
 		},
-		"later pass starts one block after the cursor, ignoring the look-back window": {
+		// Unknown network (activation = MaxUint64) - first scan skipped.
+		"first pass, unknown network": {
+			activationBlock:  math.MaxUint64,
+			currentBlock:     300_000,
+			lastScannedBlock: 0,
+			expectedStart:    300_000 + 1,
+			expectedSkipScan: true,
+		},
+		// Public network with activation ahead of current tip.
+		"first pass, activation in future": {
+			activationBlock:  500_000,
+			currentBlock:     300_000,
+			lastScannedBlock: 0,
+			expectedStart:    500_000,
+			expectedSkipScan: false,
+		},
+		// Steady-state passes are unchanged.
+		"later pass starts one block after the cursor": {
+			activationBlock:  0,
 			currentBlock:     reservationDefaultLookBackBlocks * 3,
 			lastScannedBlock: reservationDefaultLookBackBlocks * 2,
 			expectedStart:    reservationDefaultLookBackBlocks*2 + 1,
+			expectedSkipScan: false,
 		},
 	}
 
@@ -104,14 +129,22 @@ func TestReservationProofNextScanRange(t *testing.T) {
 			blockCounter.SetCurrentBlock(test.currentBlock)
 			spvChain.setBlockCounter(blockCounter)
 
-			startBlock, currentBlock, err := reservationProofNextScanRange(
+			startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
 				spvChain,
 				test.lastScannedBlock,
+				test.activationBlock,
 			)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if startBlock != test.expectedStart {
+			if skipScan != test.expectedSkipScan {
+				t.Errorf(
+					"unexpected skipScan\nexpected: %v\nactual:   %v",
+					test.expectedSkipScan,
+					skipScan,
+				)
+			}
+			if !test.expectedSkipScan && startBlock != test.expectedStart {
 				t.Errorf(
 					"unexpected start block\nexpected: %v\nactual:   %v",
 					test.expectedStart,
@@ -332,6 +365,50 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 			t.Errorf("expected isMatchingReservationAcceptanceTransaction to be false")
 		}
 	})
+
+	t.Run("accepts a P2PKH output paying the authorized wallet", func(t *testing.T) {
+		p2pkhScript, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p2pkhTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           100000,
+				PublicKeyScript: p2pkhScript,
+			}},
+		}
+		if !isMatchingReservationAcceptanceTransaction(spvChain, event, p2pkhTx) {
+			t.Error("expected a P2PKH output paying the authorized wallet to match")
+		}
+	})
+
+	t.Run("skips a P2PKH output paying a different wallet", func(t *testing.T) {
+		otherP2pkhScript, err := bitcoin.PayToPublicKeyHash(otherWalletPKH)
+		if err != nil {
+			t.Fatal(err)
+		}
+		otherP2pkhTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           100000,
+				PublicKeyScript: otherP2pkhScript,
+			}},
+		}
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, otherP2pkhTx) {
+			t.Error("expected a P2PKH output paying a different wallet to be skipped")
+		}
+	})
 }
 
 // TestFindReservationReanchorTransaction verifies the re-anchor transaction
@@ -510,6 +587,50 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 		}
 		if isMatchingReservationReanchorTransaction(event, anchorUtxo, excessFeeTx) {
 			t.Errorf("expected isMatchingReservationReanchorTransaction to be false")
+		}
+	})
+
+	t.Run("accepts a P2PKH output paying the target wallet", func(t *testing.T) {
+		p2pkhScript, err := bitcoin.PayToPublicKeyHash(targetWalletPKH)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p2pkhTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           590000,
+				PublicKeyScript: p2pkhScript,
+			}},
+		}
+		if !isMatchingReservationReanchorTransaction(event, anchorUtxo, p2pkhTx) {
+			t.Error("expected a P2PKH output paying the target wallet to match")
+		}
+	})
+
+	t.Run("skips a P2PKH output paying a different wallet", func(t *testing.T) {
+		otherP2pkhScript, err := bitcoin.PayToPublicKeyHash(otherPKH)
+		if err != nil {
+			t.Fatal(err)
+		}
+		otherP2pkhTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           590000,
+				PublicKeyScript: otherP2pkhScript,
+			}},
+		}
+		if isMatchingReservationReanchorTransaction(event, anchorUtxo, otherP2pkhTx) {
+			t.Error("expected a P2PKH output paying a different wallet to be skipped")
 		}
 	})
 }
@@ -870,6 +991,8 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 			State:                     tbtc.ReservationActionStatePending,
 			ActionType:                tbtc.ReservationActionTypeAcceptance,
 			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			TermSeconds:               100,
+			MinAmount:                 1000,
 		},
 	)
 
@@ -888,7 +1011,11 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
 	scanState := newReservationProofScanState()
 
 	if err := proveReservationAcceptanceActions(
@@ -930,6 +1057,8 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 			State:                     tbtc.ReservationActionStateSettled,
 			ActionType:                tbtc.ReservationActionTypeAcceptance,
 			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			TermSeconds:               100,
+			MinAmount:                 1000,
 		},
 	)
 
@@ -952,117 +1081,6 @@ func TestProveReservationAcceptanceActions(t *testing.T) {
 	if _, exists := scanState.pendingAcceptanceEvents[key]; exists {
 		t.Errorf("expected settled event to be evicted from pendingAcceptanceEvents")
 	}
-	// Regression test: when the reservation action for a discovered transaction
-	// is no longer Pending at submission time, zero submissions occur.
-	t.Run("skip when action no longer pending", func(t *testing.T) {
-		const proofStart = 790270
-		diff := func(d int64) *big.Int { return big.NewInt(d) }
-
-		spvChain := newLocalChain()
-		btcChain := newReservationProofBitcoinChain()
-
-		if err := populateBlockHeaders(
-			btcChain.localBitcoinChain,
-			proofStart,
-			proofStart+19,
-			func(uint) *big.Int { return diff(32) },
-		); err != nil {
-			t.Fatal(err)
-		}
-		spvChain.setTxProofDifficultyFactor(big.NewInt(6))
-		spvChain.setCurrentEpoch(392)
-		spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
-
-		blockCounter := newMockBlockCounter()
-		blockCounter.SetCurrentBlock(1000)
-		spvChain.setBlockCounter(blockCounter)
-
-		fundingTx := &bitcoin.Transaction{
-			Outputs: []*bitcoin.TransactionOutput{{Value: 150000}},
-		}
-		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
-			t.Fatal(err)
-		}
-		fundingTxHash := fundingTx.Hash()
-		reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
-		const requestNonce = 1
-
-		walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		transaction := &bitcoin.Transaction{
-			Inputs: []*bitcoin.TransactionInput{{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: fundingTxHash,
-					OutputIndex:     0,
-				},
-			}},
-			Outputs: []*bitcoin.TransactionOutput{{
-				Value:           100000,
-				PublicKeyScript: walletScript,
-			}},
-		}
-		if err := btcChain.BroadcastTransaction(transaction); err != nil {
-			t.Fatal(err)
-		}
-		if err := btcChain.addTransactionConfirmations(
-			transaction.Hash(),
-			20,
-		); err != nil {
-			t.Fatal(err)
-		}
-		btcChain.setCoinbaseTxHash(transaction.Hash())
-
-		// Set up a timed-out action (not pending)
-		spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
-			ReservationKey:      reservationKey,
-			RequestNonce:        requestNonce,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			BlockNumber:         500,
-		})
-		spvChain.setReservationAction(
-			reservationKey,
-			requestNonce,
-			&tbtc.ReservationAction{
-				State:                     tbtc.ReservationActionStateTimedOut, // Not pending!
-				ActionType:                tbtc.ReservationActionTypeAcceptance,
-				TargetWalletPublicKeyHash: walletPublicKeyHash,
-			},
-		)
-
-		submissions := 0
-		spvChain.submitReservationAcceptanceProofHook = func(
-			txInfo *tbtc.BitcoinTxInfo,
-			proof *tbtc.BitcoinTxProof,
-			reservationKey *big.Int,
-			requestNonce uint64,
-		) error {
-			submissions++
-			return nil
-		}
-
-		config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
-
-		if err := proveReservationAcceptanceActions(
-			newReservationProofScanState(),
-			config,
-			spvChain,
-			spvChain,
-			btcChain,
-			newProofInfoCache(),
-			nil,
-		); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Should have zero submissions because action is not pending
-		if submissions != 0 {
-			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
-		}
-	})
 }
 
 // TestProveReservationReanchorActions is an end-to-end test of the
@@ -1160,6 +1178,8 @@ func TestProveReservationReanchorActions(t *testing.T) {
 			State:                     tbtc.ReservationActionStatePending,
 			ActionType:                tbtc.ReservationActionTypeReanchor,
 			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TermSeconds:               100,
+			MinAmount:                 1000,
 		},
 	)
 	spvChain.setReservation(reservationKey, &tbtc.Reservation{
@@ -1181,7 +1201,11 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		return nil
 	}
 
-	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
 	scanState := newReservationProofScanState()
 
 	if err := proveReservationReanchorActions(
@@ -1214,132 +1238,6 @@ func TestProveReservationReanchorActions(t *testing.T) {
 		)
 	}
 
-	// Regression test: when the reservation action for a discovered transaction
-	// is no longer Pending at submission time, zero submissions occur.
-	t.Run("skip when action no longer pending", func(t *testing.T) {
-		const proofStart = 790270
-		diff := func(d int64) *big.Int { return big.NewInt(d) }
-
-		spvChain := newLocalChain()
-		btcChain := newReservationProofBitcoinChain()
-
-		if err := populateBlockHeaders(
-			btcChain.localBitcoinChain,
-			proofStart,
-			proofStart+19,
-			func(uint) *big.Int { return diff(32) },
-		); err != nil {
-			t.Fatal(err)
-		}
-		spvChain.setTxProofDifficultyFactor(big.NewInt(6))
-		spvChain.setCurrentEpoch(392)
-		spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
-
-		blockCounter := newMockBlockCounter()
-		blockCounter.SetCurrentBlock(1000)
-		spvChain.setBlockCounter(blockCounter)
-
-		reservationKey := big.NewInt(424242)
-		const requestNonce = 2
-
-		priorAnchorTx := &bitcoin.Transaction{
-			Outputs: []*bitcoin.TransactionOutput{
-				{Value: 10000},
-				{Value: 600000},
-			},
-		}
-		if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
-			t.Fatal(err)
-		}
-		anchorTxHash := priorAnchorTx.Hash()
-		anchorUtxo := &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: anchorTxHash,
-				OutputIndex:     1,
-			},
-			Value: 600000,
-		}
-
-		sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
-		walletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		transaction := &bitcoin.Transaction{
-			Inputs: []*bitcoin.TransactionInput{{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: anchorTxHash,
-					OutputIndex:     1,
-				},
-			}},
-			Outputs: []*bitcoin.TransactionOutput{{
-				Value:           590000,
-				PublicKeyScript: walletScript,
-			}},
-		}
-		if err := btcChain.BroadcastTransaction(transaction); err != nil {
-			t.Fatal(err)
-		}
-		if err := btcChain.addTransactionConfirmations(
-			transaction.Hash(),
-			20,
-		); err != nil {
-			t.Fatal(err)
-		}
-		btcChain.setCoinbaseTxHash(transaction.Hash())
-
-		// Set up a timed-out action (not pending)
-		spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
-			ReservationKey:            reservationKey,
-			RequestNonce:              requestNonce,
-			SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
-			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
-			BlockNumber:               500,
-		})
-		spvChain.setReservationAction(
-			reservationKey,
-			requestNonce,
-			&tbtc.ReservationAction{
-				State:                     tbtc.ReservationActionStateTimedOut, // Not pending!
-				ActionType:                tbtc.ReservationActionTypeReanchor,
-				TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
-			},
-		)
-		spvChain.setReservation(reservationKey, &tbtc.Reservation{
-			AnchorUtxo: anchorUtxo,
-		})
-
-		submissions := 0
-		spvChain.submitReservationReanchorProofHook = func(
-			txInfo *tbtc.BitcoinTxInfo,
-			proof *tbtc.BitcoinTxProof,
-			reservationKey *big.Int,
-			requestNonce uint64,
-		) error {
-			submissions++
-			return nil
-		}
-
-		config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
-
-		if err := proveReservationReanchorActions(
-			newReservationProofScanState(),
-			config,
-			spvChain,
-			spvChain,
-			btcChain,
-			newProofInfoCache(),
-			nil,
-		); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Should have zero submissions because action is not pending
-		if submissions != 0 {
-			t.Fatalf("expected zero proofs submissions when action is not pending, got %d", submissions)
-		}
-	})
 }
 
 func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.T) {
@@ -1362,7 +1260,11 @@ func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.
 	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
 
 	scanState := newReservationProofScanState()
-	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
 	key := reservationEventKey(reservationKey, requestNonce)
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.
@@ -1411,7 +1313,11 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
 
 	scanState := newReservationProofScanState()
-	config := Config{TransactionLimit: 100, MaxProofHeaders: DefaultMaxProofHeaders}
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
 	key := reservationEventKey(reservationKey, requestNonce)
 
 	// Multiple passes: event must remain pending unconditionally on read error without eviction.
@@ -1663,6 +1569,600 @@ func TestEvictStaleWalletTransactionCacheEntries(t *testing.T) {
 
 		if _, exists := state.walletTransactionCache[acceptanceWallet]; exists {
 			t.Error("expected acceptance wallet's cache entry to be evicted once its pass-boundary check finds no pending action left")
+		}
+	})
+}
+
+// reservationProofOutputEncoding selects the script encoding a fixture
+// transaction's authorized-wallet output uses.
+type reservationProofOutputEncoding int
+
+const (
+	// encodingP2WPKH encodes the authorized output as a native segwit P2WPKH
+	// script.
+	encodingP2WPKH reservationProofOutputEncoding = iota
+	// encodingP2PKH encodes the authorized output as a legacy P2PKH script.
+	encodingP2PKH
+)
+
+// authorizedWalletScript builds the output script encoding publicKeyHash in
+// the requested encoding.
+func authorizedWalletScript(
+	publicKeyHash [20]byte,
+	encoding reservationProofOutputEncoding,
+) (bitcoin.Script, error) {
+	if encoding == encodingP2PKH {
+		return bitcoin.PayToPublicKeyHash(publicKeyHash)
+	}
+
+	return bitcoin.PayToWitnessPublicKeyHash(publicKeyHash)
+}
+
+// timedOutAcceptanceFixture bundles the chains, scan state, and config needed
+// to drive one proveReservationAcceptanceActions pass against a timed-out
+// acceptance generation that has a confirmed anchor transaction.
+type timedOutAcceptanceFixture struct {
+	spvChain       *localChain
+	btcChain       *reservationProofBitcoinChain
+	state          *reservationProofScanState
+	config         Config
+	reservationKey *big.Int
+	requestNonce   uint64
+	walletPKH      [20]byte
+	submissions    int
+}
+
+// newTimedOutAcceptanceFixture builds the fixture; outputEncoding selects
+// whether the anchor transaction's authorized-wallet output is P2WPKH or
+// P2PKH encoded. Both encodings are shared by the late-window tests below,
+// so a matcher regressed to exact P2WPKH bytes fails the P2PKH variants.
+func newTimedOutAcceptanceFixture(
+	t *testing.T,
+	outputEncoding reservationProofOutputEncoding,
+) *timedOutAcceptanceFixture {
+	t.Helper()
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	fixture := &timedOutAcceptanceFixture{}
+
+	spvChain := newLocalChain()
+	btcChain := newReservationProofBitcoinChain()
+
+	if err := populateBlockHeaders(
+		btcChain.localBitcoinChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	fundingTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{{Value: 150000}},
+	}
+	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+	fundingTxHash := fundingTx.Hash()
+	reservationKey := spvChain.BuildDepositKey(fundingTxHash, 0)
+	const requestNonce = 1
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	anchorScript, err := authorizedWalletScript(walletPublicKeyHash, outputEncoding)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	anchorTx := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: anchorScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(anchorTx); err != nil {
+		t.Fatal(err)
+	}
+	if err := btcChain.addTransactionConfirmations(anchorTx.Hash(), 20); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.setCoinbaseTxHash(anchorTx.Hash())
+
+	spvChain.setDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Amount: 150000,
+	})
+
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      reservationKey,
+		RequestNonce:        requestNonce,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		DepositAmount:       150000,
+		BlockNumber:         500,
+	})
+	spvChain.setReservationAction(
+		reservationKey,
+		requestNonce,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStateTimedOut,
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			// The late acceptance window is TimeoutAt + TermSeconds, where
+			// TermSeconds is the per-action snapshot (100), so the window
+			// closes at 1100.
+			TimeoutAt:   1000,
+			TermSeconds: 100,
+			MinAmount:   1000,
+		},
+	)
+
+	spvChain.submitReservationAcceptanceProofHook = func(
+		*tbtc.BitcoinTxInfo,
+		*tbtc.BitcoinTxProof,
+		*big.Int,
+		uint64,
+	) error {
+		fixture.submissions++
+		return nil
+	}
+
+	fixture.spvChain = spvChain
+	fixture.btcChain = btcChain
+	fixture.state = newReservationProofScanState()
+	fixture.config = Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
+	fixture.reservationKey = reservationKey
+	fixture.requestNonce = requestNonce
+	fixture.walletPKH = walletPublicKeyHash
+
+	return fixture
+}
+
+// timedOutReanchorFixture is the re-anchor counterpart of
+// timedOutAcceptanceFixture.
+type timedOutReanchorFixture struct {
+	spvChain        *localChain
+	btcChain        *reservationProofBitcoinChain
+	state           *reservationProofScanState
+	config          Config
+	reservationKey  *big.Int
+	requestNonce    uint64
+	sourceWalletPKH [20]byte
+	submissions     int
+}
+
+// newTimedOutReanchorFixture builds the re-anchor fixture; outputEncoding
+// selects whether the re-anchor transaction's authorized-wallet output is
+// P2WPKH or P2PKH encoded.
+func newTimedOutReanchorFixture(
+	t *testing.T,
+	outputEncoding reservationProofOutputEncoding,
+) *timedOutReanchorFixture {
+	t.Helper()
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	fixture := &timedOutReanchorFixture{}
+
+	spvChain := newLocalChain()
+	btcChain := newReservationProofBitcoinChain()
+
+	if err := populateBlockHeaders(
+		btcChain.localBitcoinChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	reservationKey := big.NewInt(424242)
+	const requestNonce = 2
+
+	priorAnchorTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 10000},
+			{Value: 600000},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+		t.Fatal(err)
+	}
+	anchorTxHash := priorAnchorTx.Hash()
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: anchorTxHash,
+			OutputIndex:     1,
+		},
+		Value: 600000,
+	}
+
+	sourceWalletPublicKeyHash := [20]byte{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+	reanchorScript, err := authorizedWalletScript(sourceWalletPublicKeyHash, outputEncoding)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           590000,
+			PublicKeyScript: reanchorScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := btcChain.addTransactionConfirmations(transaction.Hash(), 20); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.setCoinbaseTxHash(transaction.Hash())
+
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            reservationKey,
+		RequestNonce:              requestNonce,
+		SourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+		TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+		TxMaxFee:                  20000,
+		BlockNumber:               500,
+	})
+	spvChain.setReservationAction(
+		reservationKey,
+		requestNonce,
+		&tbtc.ReservationAction{
+			State:                     tbtc.ReservationActionStateTimedOut,
+			ActionType:                tbtc.ReservationActionTypeReanchor,
+			TargetWalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TimeoutAt:                 1000,
+			TermSeconds:               100,
+			MinAmount:                 1000,
+		},
+	)
+	spvChain.setReservation(reservationKey, &tbtc.Reservation{
+		AnchorUtxo: anchorUtxo,
+	})
+
+	spvChain.submitReservationReanchorProofHook = func(
+		*tbtc.BitcoinTxInfo,
+		*tbtc.BitcoinTxProof,
+		*big.Int,
+		uint64,
+	) error {
+		fixture.submissions++
+		return nil
+	}
+
+	fixture.spvChain = spvChain
+	fixture.btcChain = btcChain
+	fixture.state = newReservationProofScanState()
+	fixture.config = Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
+	fixture.reservationKey = reservationKey
+	fixture.requestNonce = requestNonce
+	fixture.sourceWalletPKH = sourceWalletPublicKeyHash
+
+	return fixture
+}
+
+// TestProveReservationAcceptanceActions_TimedOutLateWindow verifies that a
+// timed-out acceptance generation stays a proof candidate through the
+// Bridge's late settlement window: at now <= TimeoutAt + TermSeconds the
+// proof is submitted and the generation stays tracked, and strictly past
+// the bound it is evicted with zero submissions. Both authorized-wallet
+// output encodings (P2WPKH and P2PKH) are driven through the pipeline, and
+// time is driven deterministically through
+// reservationProofScanState.nowFn.
+func TestProveReservationAcceptanceActions_TimedOutLateWindow(t *testing.T) {
+	encodings := []struct {
+		name     string
+		encoding reservationProofOutputEncoding
+	}{
+		{"p2wpkh", encodingP2WPKH},
+		{"p2pkh", encodingP2PKH},
+	}
+
+	for _, enc := range encodings {
+		t.Run(enc.name, func(t *testing.T) {
+			runPass := func(now uint32) (*timedOutAcceptanceFixture, error) {
+				fixture := newTimedOutAcceptanceFixture(t, enc.encoding)
+				fixture.state.nowFn = func() uint32 { return now }
+
+				err := proveReservationAcceptanceActions(
+					fixture.state,
+					fixture.config,
+					fixture.spvChain,
+					fixture.spvChain,
+					fixture.btcChain,
+					newProofInfoCache(),
+					nil,
+				)
+
+				return fixture, err
+			}
+
+			t.Run("within the late window submits and keeps tracking", func(t *testing.T) {
+				fixture, err := runPass(1050)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				if fixture.submissions != 1 {
+					t.Errorf("expected exactly one proof submission, got %d", fixture.submissions)
+				}
+				if _, exists := fixture.state.pendingAcceptanceEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; !exists {
+					t.Error("expected the timed-out generation to remain tracked inside the late window")
+				}
+			})
+
+			t.Run("at the exact late-window bound submits", func(t *testing.T) {
+				fixture, err := runPass(1100)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				if fixture.submissions != 1 {
+					t.Errorf("expected exactly one proof submission at the bound, got %d", fixture.submissions)
+				}
+			})
+
+			t.Run("strictly past the late-window bound evicts with zero submissions", func(t *testing.T) {
+				fixture, err := runPass(1101)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				if fixture.submissions != 0 {
+					t.Errorf("expected zero submissions past the late window, got %d", fixture.submissions)
+				}
+				if _, exists := fixture.state.pendingAcceptanceEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; exists {
+					t.Error("expected the generation past the late window to be evicted")
+				}
+			})
+		})
+	}
+}
+
+// TestProveReservationReanchorActions_TimedOutUnbounded verifies that a
+// timed-out re-anchor generation stays a proof candidate without any
+// bound, mirroring the Bridge: even at a now far past TimeoutAt +
+// TermSeconds the proof is still submitted and the generation stays
+// tracked.
+func TestProveReservationReanchorActions_TimedOutUnbounded(t *testing.T) {
+	encodings := []struct {
+		name     string
+		encoding reservationProofOutputEncoding
+	}{
+		{"p2wpkh", encodingP2WPKH},
+		{"p2pkh", encodingP2PKH},
+	}
+
+	for _, enc := range encodings {
+		t.Run(enc.name, func(t *testing.T) {
+			fixture := newTimedOutReanchorFixture(t, enc.encoding)
+
+			// 4000000000 is far past the fixture's TimeoutAt + TermSeconds
+			// (1100), so a bounded late window would evict before
+			// submitting.
+			fixture.state.nowFn = func() uint32 { return 4000000000 }
+
+			if err := proveReservationReanchorActions(
+				fixture.state,
+				fixture.config,
+				fixture.spvChain,
+				fixture.spvChain,
+				fixture.btcChain,
+				newProofInfoCache(),
+				nil,
+			); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if fixture.submissions != 1 {
+				t.Errorf("expected exactly one proof submission, got %d", fixture.submissions)
+			}
+			if _, exists := fixture.state.pendingReanchorEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; !exists {
+				t.Error("expected the timed-out re-anchor generation to remain tracked without bound")
+			}
+		})
+	}
+}
+
+// TestProveReservationActions_EvictNonSettleableStates verifies that
+// generations whose on-chain state is no longer settleable (settled,
+// superseded, vetoed, and unknown) are evicted from the pending-event map
+// with no proof submission, in both the acceptance and re-anchor scans.
+func TestProveReservationActions_EvictNonSettleableStates(t *testing.T) {
+	states := []struct {
+		name  string
+		state tbtc.ReservationActionState
+	}{
+		{"settled", tbtc.ReservationActionStateSettled},
+		{"superseded", tbtc.ReservationActionStateSuperseded},
+		{"vetoed", tbtc.ReservationActionStateVetoed},
+		{"unknown", tbtc.ReservationActionStateUnknown},
+	}
+
+	for _, s := range states {
+		t.Run("acceptance "+s.name, func(t *testing.T) {
+			fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
+			fixture.spvChain.setReservationAction(
+				fixture.reservationKey,
+				fixture.requestNonce,
+				&tbtc.ReservationAction{
+					State:                     s.state,
+					ActionType:                tbtc.ReservationActionTypeAcceptance,
+					TargetWalletPublicKeyHash: fixture.walletPKH,
+					TimeoutAt:                 1000,
+					TermSeconds:               100,
+					MinAmount:                 1000,
+				},
+			)
+
+			if err := proveReservationAcceptanceActions(
+				fixture.state,
+				fixture.config,
+				fixture.spvChain,
+				fixture.spvChain,
+				fixture.btcChain,
+				newProofInfoCache(),
+				nil,
+			); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if fixture.submissions != 0 {
+				t.Errorf("expected zero submissions for a %s generation, got %d", s.name, fixture.submissions)
+			}
+			if _, exists := fixture.state.pendingAcceptanceEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; exists {
+				t.Errorf("expected the %s generation to be evicted", s.name)
+			}
+		})
+
+		t.Run("reanchor "+s.name, func(t *testing.T) {
+			fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+			fixture.spvChain.setReservationAction(
+				fixture.reservationKey,
+				fixture.requestNonce,
+				&tbtc.ReservationAction{
+					State:                     s.state,
+					ActionType:                tbtc.ReservationActionTypeReanchor,
+					TargetWalletPublicKeyHash: fixture.sourceWalletPKH,
+					TimeoutAt:                 1000,
+					TermSeconds:               100,
+					MinAmount:                 1000,
+				},
+			)
+
+			if err := proveReservationReanchorActions(
+				fixture.state,
+				fixture.config,
+				fixture.spvChain,
+				fixture.spvChain,
+				fixture.btcChain,
+				newProofInfoCache(),
+				nil,
+			); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if fixture.submissions != 0 {
+				t.Errorf("expected zero submissions for a %s re-anchor generation, got %d", s.name, fixture.submissions)
+			}
+			if _, exists := fixture.state.pendingReanchorEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; exists {
+				t.Errorf("expected the %s re-anchor generation to be evicted", s.name)
+			}
+		})
+	}
+}
+
+// TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot verifies
+// that the late acceptance window is governed by the per-action TermSeconds
+// snapshot, not by the live ReservationParameters().ReservationTermSeconds:
+// a governance change to the live parameter neither shrinks the window for
+// a generation snapshotted with a longer term nor extends it for one
+// snapshotted with a shorter one.
+func TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot(t *testing.T) {
+	runSnapshotPass := func(
+		liveTermSeconds uint32,
+		now uint32,
+	) (*timedOutAcceptanceFixture, error) {
+		fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
+		// The fixture's action snapshot carries TermSeconds 100; the live
+		// parameter below deliberately differs from it. The production
+		// scan path never reads the live parameter, so this only pins
+		// the behavior against a regression that starts using it.
+		fixture.spvChain.setReservationParameters(&tbtc.ReservationParameters{
+			ReservationTermSeconds: liveTermSeconds,
+		})
+		fixture.state.nowFn = func() uint32 { return now }
+
+		err := proveReservationAcceptanceActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		)
+
+		return fixture, err
+	}
+
+	t.Run("live parameter lower than the snapshot does not shrink the window", func(t *testing.T) {
+		// Live 10 against snapshot 100: TimeoutAt 1000, now 1050. A live
+		// bound of 1010 would evict this generation; the snapshot bound
+		// of 1100 keeps it.
+		fixture, err := runSnapshotPass(10, 1050)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if fixture.submissions != 1 {
+			t.Errorf("expected exactly one proof submission, got %d", fixture.submissions)
+		}
+		if _, exists := fixture.state.pendingAcceptanceEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; !exists {
+			t.Error("expected the generation to stay tracked while inside the snapshot window")
+		}
+	})
+
+	t.Run("live parameter higher than the snapshot does not extend the window", func(t *testing.T) {
+		// Live 300 against snapshot 100: now 1101 is strictly past the
+		// snapshot bound of 1100 even though it is inside the live bound
+		// of 1300.
+		fixture, err := runSnapshotPass(300, 1101)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if fixture.submissions != 0 {
+			t.Errorf("expected zero submissions, got %d", fixture.submissions)
+		}
+		if _, exists := fixture.state.pendingAcceptanceEvents[reservationEventKey(fixture.reservationKey, fixture.requestNonce)]; exists {
+			t.Error("expected the generation to be evicted at the snapshot bound")
+		}
+	})
+
+	t.Run("at the exact snapshot bound with a differing live parameter submits", func(t *testing.T) {
+		// Live 300 differs from snapshot 100; now 1100 is the exact
+		// snapshot bound.
+		fixture, err := runSnapshotPass(300, 1100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if fixture.submissions != 1 {
+			t.Errorf("expected exactly one proof submission at the snapshot bound, got %d", fixture.submissions)
 		}
 	})
 }

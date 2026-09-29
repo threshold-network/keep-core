@@ -1,14 +1,20 @@
 package tbtcpg_test
 
 import (
+	"errors"
 	"math/big"
 	"testing"
+	"time"
+
+	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 	pkgtest "github.com/keep-network/keep-core/pkg/tbtcpg/internal/test"
 )
+
+var reanchorTestLogger = log.Logger("keep-tbtcpg-test")
 
 func TestReservationReanchorTask_Run(t *testing.T) {
 	scenarios, err := pkgtest.LoadReservationReanchorTestScenario()
@@ -145,14 +151,39 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 				// alongside a real action record. HasPendingAction=false
 				// scenarios use r.PendingActionState (a terminal state, not
 				// Pending) to model an already-settled prior generation.
+				// HasPendingAction=true scenarios install a Pending Reanchor
+				// action authorizing the scenario's TargetWalletPublicKeyHash
+				// (the resume path's required target) and carrying the
+				// scenario's snapshotted fee bound (so the resumed fee
+				// estimate mirrors what the original request captured).
 				if r.RequestNonce > 0 {
+					action := &tbtc.ReservationAction{
+						ActionType: tbtc.ReservationActionTypeReanchor,
+						State:      r.PendingActionState,
+						// Cancel the signer-time safety margin by default:
+						// a zero TimeoutAt makes the production resume
+						// path skip the generation (its margin gate sees
+						// now+7200 >= 0). Scenarios not exercising the
+						// gate default to far-future so they don't trip
+						// it; scenarios that exercise it set TimeoutAt
+						// explicitly.
+						TimeoutAt: r.TimeoutAt,
+					}
+					if r.TimeoutAt == 0 {
+						action.TimeoutAt = uint32(
+							time.Now().Add(24 * time.Hour).Unix(),
+						)
+					}
+					if r.HasPendingAction {
+						action.TargetWalletPublicKeyHash = scenario.TargetWalletPublicKeyHash
+						action.TxMaxFee = scenario.ReservationTxMaxFee
+						action.MinAmount = 1000
+						action.TermSeconds = 86400
+					}
 					tbtcChain.SetReservationAction(
 						r.ReservationKey,
 						r.RequestNonce,
-						&tbtc.ReservationAction{
-							ActionType: tbtc.ReservationActionTypeReanchor,
-							State:      r.PendingActionState,
-						},
+						action,
 					)
 				}
 			}
@@ -161,8 +192,18 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 				reservationKeys,
 			)
 
+			// Fall back to a non-zero MaxReservationsPerWallet when the
+			// scenario omits it: the headroom pre-check used by
+			// findTargetWallet rejects every candidate when the cap is
+			// zero (count + 1 > 0 is always true), so a zero default
+			// would silently turn every scenario into "no live target".
+			maxPerWallet := scenario.MaxReservationsPerWallet
+			if maxPerWallet == 0 {
+				maxPerWallet = 5
+			}
 			tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-				ReservationTxMaxFee: scenario.ReservationTxMaxFee,
+				ReservationTxMaxFee:      scenario.ReservationTxMaxFee,
+				MaxReservationsPerWallet: maxPerWallet,
 			})
 
 			btcChain.SetEstimateSatPerVByteFee(1, scenario.EstimateSatPerVByteFee)
@@ -344,7 +385,8 @@ func TestReservationReanchorTask_TargetWalletExclusion_SharedTask(t *testing.T) 
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee: 100000,
+		ReservationTxMaxFee:      100000,
+		MaxReservationsPerWallet: 5,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -514,7 +556,8 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee: 100000,
+		ReservationTxMaxFee:      100000,
+		MaxReservationsPerWallet: 5,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -548,6 +591,15 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 		},
 		State:        tbtc.ReservationStateActionPending,
 		RequestNonce: 1,
+	})
+	// Seed res1's prior-generation action at nonce 1 in a terminal
+	// Settled state, mirroring production: a request that has since
+	// settled leaves the action record visible but no longer Pending,
+	// and Run's resume path correctly rejects it as "not a resumable
+	// re-anchor" rather than as "action not found".
+	tbtcChain.SetReservationAction(res1Key, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStateSettled,
 	})
 
 	res2Key := big.NewInt(102)
@@ -616,10 +668,41 @@ type reservationReanchorLocalChain struct {
 	// times findTargetWallet's registration-event scan actually ran
 	// (e.g. that a cached target wallet suppressed a repeat scan).
 	pastNewWalletRegisteredEventsCalls int
+
+	// forceCapRevertFor, when non-zero, makes RequestReservationReanchor
+	// return a "wallet reservations cap exceeded" error for the given
+	// target wallet on the first invocation. It models a concurrent
+	// consumer that ate the target's capacity between the caller's
+	// headroom pre-check and the request submission -- the race Run's
+	// cap-revert branch exists to handle. Subsequent invocations fall
+	// through to the embedded LocalChain's real implementation so the
+	// retry's second candidate can succeed normally.
+	forceCapRevertFor [20]byte
+	capRevertConsumed bool
 }
 
 func newReservationReanchorLocalChain() *reservationReanchorLocalChain {
 	return &reservationReanchorLocalChain{LocalChain: tbtcpg.NewLocalChain()}
+}
+
+// RequestReservationReanchor simulates a cap-related revert race for the
+// wallet set via forceCapRevertFor on its first invocation; the
+// production task catches this with isReservationCapRevertError, evicts
+// the cached target, and retries with the next candidate, after which the
+// wrapper forwards to the embedded LocalChain's real implementation.
+func (rrlc *reservationReanchorLocalChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) ([32]byte, error) {
+	if !rrlc.capRevertConsumed &&
+		rrlc.forceCapRevertFor == targetWalletPublicKeyHash {
+		rrlc.capRevertConsumed = true
+		return [32]byte{}, errors.New("wallet reservations cap exceeded")
+	}
+	return rrlc.LocalChain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	)
 }
 
 // markReservationTouched records walletPublicKeyHash as having accepted a
@@ -816,15 +899,25 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 	})
 }
 
-// TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns is a
-// regression test for the target-wallet cache added to findTargetWallet:
-// once a re-anchor target wallet has been selected for a source wallet, a
-// subsequent Run call for the same source wallet must reuse the cached
-// target -- validating only that one wallet via GetWallet -- instead of
-// repeating the O(W) GetWallet-per-registration scan.
-func TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns(t *testing.T) {
-	walletA := hexToByte20("1111111111111111111111111111111111111111")
-	walletB := hexToByte20("2222222222222222222222222222222222222222")
+// TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns was moved
+// to reservation_reanchor_metrics_test.go, which is in package tbtcpg and
+// can therefore reach the unexported findTargetWallet method directly.
+// See that file for the test body.
+
+// TestReservationReanchorTask_CapRevertLeadsToNextCandidate is a
+// regression test for the cap-revert branch Run adds on top of
+// findTargetWallet: a request-time capacity revert (modeled here as a
+// concurrent consumer eating the cached target's headroom between the
+// headroom pre-check and the request submission) must not abort the
+// coordination window. Run must evict the reverted target, mark it as
+// tried for the rest of the pass, and retry the same reservation with
+// the next candidate -- so that the proposal surfaces for the second
+// candidate, with exactly one RequestReservationReanchor submission
+// (the successful one).
+func TestReservationReanchorTask_CapRevertLeadsToNextCandidate(t *testing.T) {
+	sourceWalletPublicKeyHash := hexToByte20("1111111111111111111111111111111111111111")
+	cappedTargetWalletPublicKeyHash := hexToByte20("2222222222222222222222222222222222222222")
+	alternateTargetWalletPublicKeyHash := hexToByte20("3333333333333333333333333333333333333333")
 
 	tbtcChain := newReservationReanchorLocalChain()
 	btcChain := tbtcpg.NewLocalBitcoinChain()
@@ -833,48 +926,399 @@ func TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns(t *testing.T)
 	blockCounter.SetCurrentBlock(1000)
 	tbtcChain.SetBlockCounter(blockCounter)
 
+	// Register the alternate target (newest), then the capped target.
 	if err := tbtcChain.AddPastNewWalletRegisteredEvent(
 		&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
-		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: walletB},
+		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: cappedTargetWalletPublicKeyHash},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: alternateTargetWalletPublicKeyHash},
 	); err != nil {
 		t.Fatal(err)
 	}
 
-	tbtcChain.SetWallet(walletA, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
-	tbtcChain.SetWallet(walletB, &tbtc.WalletChainData{State: tbtc.StateLive})
-	tbtcChain.SetLiveWalletsCount(1)
+	tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+	tbtcChain.SetWallet(cappedTargetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	tbtcChain.SetWallet(alternateTargetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	tbtcChain.SetLiveWalletsCount(2)
 
-	// A Stranded reservation is always skipped by Run's per-reservation
-	// loop without ever being mutated (RequestReservationReanchor is
-	// never called), so its state stays identical across repeated Run
-	// calls -- letting this test isolate the target-selection cache from
-	// the unrelated per-reservation proposal machinery.
-	resKey := big.NewInt(5001)
-	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
-		WalletPublicKeyHash: walletA,
-		State:               tbtc.ReservationStateStranded,
+	tbtcChain.SetMovingFundsParameters(
+		1000000,
+		1000000,
+		0,
+		0,
+		nil,
+		0,
+		0,
+		0,
+		0,
+		nil,
+		0,
+	)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationTxMaxFee:      100000,
+		MaxReservationsPerWallet: 5,
 	})
-	tbtcChain.SetWalletReservations(walletA, []*big.Int{resKey})
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	resKey := big.NewInt(7001)
+	anchorTxHash, _ := bitcoin.NewHashFromString(
+		"7777777777777777777777777777777777777777777777777777777777777777",
+		bitcoin.ReversedByteOrder,
+	)
+	sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 100000, PublicKeyScript: sourceWalletScript},
+		},
+	})
+	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 100000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: 0,
+	})
+	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, []*big.Int{resKey})
+
+	// Simulate the race: the first attempt to request a re-anchor on
+	// the alternate target reverts with "wallet reservations cap
+	// exceeded" -- a concurrent operator consumed the target's room
+	// after our headroom pre-check passed. The retry on the second
+	// candidate must proceed normally.
+	tbtcChain.forceCapRevertFor = alternateTargetWalletPublicKeyHash
 
 	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
 
-	for i := range 2 {
-		_, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: walletA,
-		})
-		if err != nil {
-			t.Fatalf("run %d: unexpected error: %v", i, err)
-		}
-		if ok {
-			t.Fatalf("run %d: expected no proposal (stranded reservation is skipped)", i)
-		}
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || proposal == nil {
+		t.Fatalf("expected a proposal for the second candidate, got ok=%v, prop=%v", ok, proposal)
+	}
+	reanchorProposal, ok := proposal.(*tbtc.ReservationReanchorProposal)
+	if !ok {
+		t.Fatalf("unexpected proposal type: %T", proposal)
+	}
+	if reanchorProposal.TargetWalletPublicKeyHash != cappedTargetWalletPublicKeyHash {
+		t.Fatalf(
+			"expected proposal target = capped target [%x] after the "+
+				"alternate target reverted, got [%x]",
+			cappedTargetWalletPublicKeyHash,
+			reanchorProposal.TargetWalletPublicKeyHash,
+		)
 	}
 
-	if got := tbtcChain.pastNewWalletRegisteredEventsCalls; got != 1 {
-		t.Errorf(
-			"expected exactly 1 registration-event scan across 2 runs "+
-				"(cached target reused on the second), got %d",
-			got,
+	submissions := tbtcChain.GetReservationReanchorRequestSubmissions()
+	if len(submissions) != 1 {
+		t.Fatalf(
+			"expected exactly 1 RequestReservationReanchor submission "+
+				"(the successful retry on the capped target), got %d",
+			len(submissions),
+		)
+	}
+	if submissions[0].TargetWalletPublicKeyHash != cappedTargetWalletPublicKeyHash {
+		t.Fatalf(
+			"expected the single submission to target the capped "+
+				"candidate [%x], got [%x]",
+			cappedTargetWalletPublicKeyHash,
+			submissions[0].TargetWalletPublicKeyHash,
+		)
+	}
+}
+
+// TestReservationReanchorTask_ResumesPendingReanchorWithoutNewRequest
+// pins the resume path's contract: a reservation already in
+// ReservationStateActionPending with a Pending Reanchor generation must
+// be picked up at its real nonce and authorized target without a second
+// RequestReservationReanchor call. An earlier design would have
+// re-requested, which on-chain would always revert because
+// requestReservationReanchor requires the Active state.
+func TestReservationReanchorTask_ResumesPendingReanchorWithoutNewRequest(t *testing.T) {
+	sourceWalletPublicKeyHash := hexToByte20("1111111111111111111111111111111111111111")
+	targetWalletPublicKeyHash := hexToByte20("92a6ec889a8fa34f731e639edede4c75e184307c")
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: targetWalletPublicKeyHash},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+	tbtcChain.SetWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	tbtcChain.SetLiveWalletsCount(1)
+
+	tbtcChain.SetMovingFundsParameters(
+		1000000,
+		1000000,
+		0,
+		0,
+		nil,
+		0,
+		0,
+		0,
+		0,
+		nil,
+		0,
+	)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationTxMaxFee:      100000,
+		MaxReservationsPerWallet: 5,
+		ReservationMinAmount:     1000,
+	})
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	resKey := big.NewInt(8001)
+	anchorTxHash, _ := bitcoin.NewHashFromString(
+		"8888888888888888888888888888888888888888888888888888888888888888",
+		bitcoin.ReversedByteOrder,
+	)
+	sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 200000, PublicKeyScript: sourceWalletScript},
+		},
+	})
+	// State ActionPending with RequestNonce = 4 mirrors production:
+	// an earlier Run issued the request, the action record was written,
+	// and the reservation advanced to ActionPending. The current Run
+	// must resume that generation without re-requesting.
+	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 200000,
+		},
+		State:        tbtc.ReservationStateActionPending,
+		RequestNonce: 4,
+	})
+	tbtcChain.SetReservationAction(resKey, 4, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeReanchor,
+		State:                     tbtc.ReservationActionStatePending,
+		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+		TxMaxFee:                  100000,
+		MinAmount:                 1000,
+		TermSeconds:               86400,
+		// Far-future TimeoutAt so the safety-margin gate does not
+		// skip the resumed generation.
+		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
+	})
+	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, []*big.Int{resKey})
+
+	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || proposal == nil {
+		t.Fatalf("expected a resumed proposal, got ok=%v, prop=%v", ok, proposal)
+	}
+	reanchorProposal, ok := proposal.(*tbtc.ReservationReanchorProposal)
+	if !ok {
+		t.Fatalf("unexpected proposal type: %T", proposal)
+	}
+	if reanchorProposal.RequestNonce != 4 {
+		t.Fatalf(
+			"expected the resumed proposal to carry the generation's real "+
+				"nonce (4), got [%d]",
+			reanchorProposal.RequestNonce,
+		)
+	}
+	if reanchorProposal.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+		t.Fatalf(
+			"expected the resumed proposal to target the authorized "+
+				"wallet [%x], got [%x]",
+			targetWalletPublicKeyHash,
+			reanchorProposal.TargetWalletPublicKeyHash,
+		)
+	}
+
+	if submissions := tbtcChain.GetReservationReanchorRequestSubmissions(); len(submissions) != 0 {
+		t.Fatalf(
+			"expected zero RequestReservationReanchor submissions on the "+
+				"resume path; the resume path must never re-request, "+
+				"got %d",
+			len(submissions),
+		)
+	}
+}
+
+// TestProposeReservationReanchor_ValidatesOnlyAfterRequestMined pins the
+// strict ordering the production task enforces: the action record at the
+// proposal's RequestNonce must already exist before validation runs, so
+// a strict fake (mirroring WalletProposalValidator.sol's precondition)
+// rejects a validate-first attempt. ProposeReservationReanchor succeeds
+// only because it issues the request and waits for it to be mined
+// before re-reading the action record.
+func TestProposeReservationReanchor_ValidatesOnlyAfterRequestMined(t *testing.T) {
+	sourceWalletPublicKeyHash := hexToByte20("1111111111111111111111111111111111111111")
+	targetWalletPublicKeyHash := hexToByte20("92a6ec889a8fa34f731e639edede4c75e184307c")
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+		&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: targetWalletPublicKeyHash},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+	tbtcChain.SetWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	tbtcChain.SetLiveWalletsCount(1)
+
+	tbtcChain.SetMovingFundsParameters(
+		1000000,
+		1000000,
+		0,
+		0,
+		nil,
+		0,
+		0,
+		0,
+		0,
+		nil,
+		0,
+	)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationTxMaxFee:      100000,
+		MaxReservationsPerWallet: 5,
+	})
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	resKey := big.NewInt(9001)
+	anchorTxHash, _ := bitcoin.NewHashFromString(
+		"9999999999999999999999999999999999999999999999999999999999999999",
+		bitcoin.ReversedByteOrder,
+	)
+	sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 200000, PublicKeyScript: sourceWalletScript},
+		},
+	})
+	// Active reservation with no action record: a validate-first
+	// attempt at the (predicted) request nonce must be rejected by the
+	// strict fake because the action at that nonce does not exist yet.
+	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 200000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: 0,
+	})
+	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, []*big.Int{resKey})
+
+	// Validate-first attempt: the strict fake rejects it because the
+	// action record at the (predicted) request nonce does not exist.
+	preProposal := &tbtc.ReservationReanchorProposal{
+		ReservationKey:            new(big.Int).Set(resKey),
+		RequestNonce:              1,
+		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+		ReanchorTxFee:             big.NewInt(550),
+	}
+	if err := tbtcChain.ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash,
+		preProposal,
+	); err == nil {
+		t.Fatalf(
+			"strict fake accepted a proposal before its action record " +
+				"existed -- the on-chain validator's action-record " +
+				"precondition must reject this",
+		)
+	}
+
+	// Production's correct order: issue the request first, wait for
+	// the mined action record, then build and validate.
+	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+	proposal, err := task.ProposeReservationReanchor(
+		reanchorTestLogger,
+		sourceWalletPublicKeyHash,
+		resKey,
+		targetWalletPublicKeyHash,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("ProposeReservationReanchor: unexpected error: %v", err)
+	}
+	if proposal == nil {
+		t.Fatalf("expected a non-nil proposal from the request-then-validate flow")
+	}
+	if proposal.RequestNonce != 1 {
+		t.Fatalf("expected proposal RequestNonce = 1, got [%d]", proposal.RequestNonce)
+	}
+
+	if submissions := tbtcChain.GetReservationReanchorRequestSubmissions(); len(submissions) != 1 {
+		t.Fatalf(
+			"expected exactly 1 RequestReservationReanchor submission, "+
+				"got %d -- the request-then-validate flow must issue "+
+				"exactly one request per Active reservation",
+			len(submissions),
+		)
+	}
+
+	// After the request is mined, a strict validator pass against the
+	// same proposal must now succeed.
+	if err := tbtcChain.ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash,
+		proposal,
+	); err != nil {
+		t.Fatalf(
+			"strict fake rejected the proposal after the request was "+
+				"mined: %v -- the action-record precondition must be "+
+				"satisfied once the request writes the Pending Reanchor "+
+				"action",
+			err,
 		)
 	}
 }

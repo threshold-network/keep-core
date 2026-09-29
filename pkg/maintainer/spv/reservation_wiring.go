@@ -9,7 +9,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -131,6 +134,30 @@ func reservationOperatorStaggerOffset(
 	return uint32(binary.BigEndian.Uint64(hash[:8]) % intervalSeconds)
 }
 
+// recordReservationWatcherDeath bumps the watcher-death counter
+// (clientinfo.MetricSpvReservationWatcherDeathsTotal) once for a
+// watcher goroutine that is no longer running (recovered panic or Run
+// error return). A nil recorder - wiring without a metrics pipeline -
+// disables the increment; the death log line at each call site stays
+// the authoritative signal.
+func recordReservationWatcherDeath(recorder MetricsRecorder) {
+	if recorder == nil {
+		return
+	}
+	// cmd/start.go hands a typed-nil *clientinfo.PerformanceMetrics
+	// through this interface when the process has no client-info
+	// pipeline (clientinfo.NewPerformanceMetrics was never called):
+	// the interface value is non-nil but the underlying pointer is
+	// nil, and a method call would dereference it. The watcher death
+	// path runs inside a deferred function in the watcher's goroutine;
+	// a panic there is not recovered again, so the whole process would
+	// crash. Treat the typed-nil pointer as a disabled recorder.
+	if pm, ok := recorder.(*clientinfo.PerformanceMetrics); ok && pm == nil {
+		return
+	}
+	recorder.IncrementCounter(clientinfo.MetricSpvReservationWatcherDeathsTotal, 1)
+}
+
 // WireReservationWatchers is the reservation watcher integration entry
 // point: it constructs the three reservation watchers (stranding,
 // stale-deposit, action-timeout), wires their Bridge-facing notifiers to
@@ -143,8 +170,8 @@ func reservationOperatorStaggerOffset(
 // Maintainer.Spv.ReservationProofsEnabled for spv.Initialize).
 // Running it from both when both processes happen to share one
 // deployment is redundant but harmless: a Notify* call against an
-// already-notified or already-settled reservation is a no-op on the
-// Bridge.
+// already-notified or already-settled reservation is a no-op on
+// the Bridge.
 //
 // `walletClosedChain` supplies the OnWalletClosed event subscription;
 // `spvChain` supplies the reservation data reads, event queries, and
@@ -155,7 +182,7 @@ func reservationOperatorStaggerOffset(
 // that the counterpart process's own reservation-enabling flag is also
 // enabled. Pass true when the caller has no reliable visibility into that
 // flag (e.g. spv.Initialize, which has no access to the client's
-// Tbtc.ReservationsEnabled flag) to skip the misconfiguration self-check below;
+// Tbtc.ReservationsEnabled flag) to skip the misconfiguration self-check;
 // pass the caller's best-effort read otherwise (e.g. cmd/start.go, which
 // can read Maintainer.Spv.ReservationProofsEnabled even though the
 // start command doesn't require that config category - see its call site
@@ -176,11 +203,33 @@ func reservationOperatorStaggerOffset(
 // together they are a strong indicator that this process is misconfigured
 // (wrong flags, wrong network, or wrong contract address) rather than
 // simply idle.
+//
+// `metricsRecorder` receives the watcher-death counter increments
+// (clientinfo.MetricSpvReservationWatcherDeathsTotal) on top of the
+// death log lines; it is typically the process's
+// *clientinfo.PerformanceMetrics instance and may be nil when the
+// process has no metrics pipeline, which disables the counter
+// increment. recordReservationWatcherDeath treats a typed-nil
+// *clientinfo.PerformanceMetrics as if it were nil, so the guard also
+// holds when callers pass the concrete nil pointer wrapped in this
+// interface.
+//
+// `ethNetwork` is the Ethereum network this wiring run targets; it
+// drives the reservation activation-block lookup shared by the proof
+// loop's startup catch-up scan and the stale-deposit watcher's startup
+// reveal scan (see tbtc.ReservationsActivationBlock). Passing
+// ethereum.Unknown (or any network without an entry in
+// reservationsActivationBlocks) returns math.MaxUint64 from the lookup,
+// which the proof loop and stale-deposit watcher treat as "reservations
+// never activate on this network" and skip their startup scans
+// accordingly.
 func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
 	spvChain Chain,
 	pairedFlagEnabled bool,
+	metricsRecorder MetricsRecorder,
+	ethNetwork ethereum.Network,
 ) error {
 	if walletClosedChain == nil {
 		return fmt.Errorf("wallet closed chain must not be nil")
@@ -188,6 +237,11 @@ func WireReservationWatchers(
 	if spvChain == nil {
 		return fmt.Errorf("spv chain must not be nil")
 	}
+
+	// A nil metricsRecorder is valid and disables the watcher-death counter
+	// increment (process without a metrics pipeline); the death log lines at
+	// each call site stay the authoritative signal. See the spv package's
+	// nil-able MetricsRecorder convention (spv.go's MetricsRecorder doc).
 
 	// operatorAddress identifies this process for
 	// reservationOperatorStaggerOffset (see WalletClosedChain.Signing's
@@ -325,7 +379,21 @@ func WireReservationWatchers(
 		}
 	}
 
-	staleDepositWatcher := NewReservationStaleDepositWatcher(spvChain, operatorAddress)
+	// Computed once here so the stale-deposit watcher (first reveal scan)
+	// and the action-timeout watcher (first action-request scan) share a
+	// single lookup. math.MaxUint64 is the sentinel from
+	// tbtc.ReservationsActivationBlock for networks without an entry
+	// (incl. ethereum.Unknown): the watchers treat it as "reservations
+	// never activate" and either skip the catch-up scan (stale-deposit
+	// watcher) or fall back to the bounded lookback window
+	// (action-timeout watcher).
+	activationBlock := tbtc.ReservationsActivationBlock(ethNetwork)
+
+	staleDepositWatcher := NewReservationStaleDepositWatcher(
+		spvChain,
+		operatorAddress,
+		activationBlock,
+	)
 
 	// Pass the stranding watcher so a successful Reanchor timeout
 	// submission schedules the custodying wallet for a stranding
@@ -337,6 +405,7 @@ func WireReservationWatchers(
 		reservationActionTimeoutPollInterval,
 		operatorAddress,
 		strandingWatcher,
+		activationBlock,
 	)
 
 	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)
@@ -394,6 +463,7 @@ func WireReservationWatchers(
 						"unmonitored until process restart",
 					r,
 				)
+				recordReservationWatcherDeath(metricsRecorder)
 			}
 			if !resultSent {
 				resultCh <- result
@@ -424,6 +494,7 @@ func WireReservationWatchers(
 					"unmonitored until process restart",
 				err,
 			)
+			recordReservationWatcherDeath(metricsRecorder)
 		}
 	}()
 
@@ -442,12 +513,12 @@ func WireReservationWatchers(
 						"unmonitored until process restart",
 					r,
 				)
+				recordReservationWatcherDeath(metricsRecorder)
 			}
 			if !resultSent {
 				resultCh <- result
 			}
 		}()
-
 		initialErr := actionTimeoutWatcher.pollPendingActions()
 		if initialErr != nil {
 			reservationWiringLogger.Errorf(
@@ -472,6 +543,7 @@ func WireReservationWatchers(
 					"until process restart",
 				err,
 			)
+			recordReservationWatcherDeath(metricsRecorder)
 		}
 	}()
 

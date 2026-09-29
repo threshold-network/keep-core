@@ -196,11 +196,22 @@ type Chain interface {
 	) error
 
 	// RequestReservationReanchor requests a reservation re-anchor action
-	// generation for the given reservation, targeting the given wallet.
+	// generation for the given reservation, targeting the given wallet. The
+	// returned bytes are the 32-byte hash of the submitted transaction;
+	// callers that submit the request track it across rounds via
+	// GetReservationReanchorRequestReceipt.
 	RequestReservationReanchor(
 		reservationKey *big.Int,
 		targetWalletPublicKeyHash [20]byte,
-	) error
+	) ([32]byte, error)
+
+	// GetReservationReanchorRequestReceipt reports the mining status of the
+	// RequestReservationReanchor transaction identified by txHash: mined
+	// successfully, mined but reverted, still pending in the mempool, or
+	// not observed.
+	GetReservationReanchorRequestReceipt(
+		txHash [32]byte,
+	) (tbtc.ReservationReanchorRequestReceiptStatus, error)
 
 	// NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
 	// main UTXO has fallen below the moving funds dust threshold, ending
@@ -248,6 +259,24 @@ type Chain interface {
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
+
+	// ReservationVaultFeeDebtSat returns the ReservationVault's
+	// outstanding in-kind fee debt in satoshi, read from the vault's
+	// inKindFeeDebtSat view. If the reservation vault address is
+	// zero (vault not configured), it returns zero with a nil
+	// error: the skip sentinel the metric side consumes, not an
+	// error.
+	ReservationVaultFeeDebtSat() (uint64, error)
+
+	// ReservationVaultFeeReserveTbtcBaseUnits returns the
+	// ReservationVault's TBTC fee-reserve balance in TBTC base
+	// units: TBTC is a 1e18 base-unit token, so the returned value
+	// is whole TBTC x 1e18. The value can exceed uint64 range, so
+	// it is returned as *big.Int. If the reservation vault address
+	// is zero (vault not configured), it returns zero with a nil
+	// error: the skip sentinel the metric side consumes, not an
+	// error.
+	ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error)
 
 	// IsReservedDeposit returns true if the given deposit was revealed
 	// with the reservation vault address and is therefore a reservation

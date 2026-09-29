@@ -3,11 +3,13 @@ package spv
 import (
 	"context"
 	"errors"
-	"github.com/ethereum/go-ethereum/common"
+	"math"
 	"math/big"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -59,7 +61,7 @@ func TestReservationActionTimeoutWatcher_NotifiesTimedOutPendingAction(t *testin
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +110,7 @@ func TestReservationActionTimeoutWatcher_NotifiesAcceptanceTimeoutViaDedicatedEn
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +156,7 @@ func TestReservationActionTimeoutWatcher_SkipsUnrecognizedActionType(t *testing.
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +196,7 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,6 +207,85 @@ func TestReservationActionTimeoutWatcher_DoesNotNotifyBeforeTimeout(t *testing.T
 			len(calls),
 		)
 	}
+}
+
+// TestReservationActionTimeoutWatcher_NotifiesAtExactDeadline is a
+// regression test for C-6: the contract accepts a timeout notification
+// at exactly action.timeoutAt (Reservation.sol's
+// notifyReservationAcceptanceTimedOut requires block.timestamp >=
+// timeoutAt, and notifyReservationActionTimeout the same), so the
+// watcher must not skip the exact-deadline tick the way the old
+// `now <= action.TimeoutAt` skip condition did.
+func TestReservationActionTimeoutWatcher_NotifiesAtExactDeadline(t *testing.T) {
+	t.Run("reanchor entry point", func(t *testing.T) {
+		spvChain := newLocalChain()
+
+		wallet := walletPKH()
+		key := reservationKey(0xC021)
+
+		seededReservation(
+			t,
+			spvChain,
+			key,
+			wallet,
+			[]*tbtc.ReservationAction{
+				{
+					ActionType: tbtc.ReservationActionTypeReanchor,
+					State:      tbtc.ReservationActionStatePending,
+					TimeoutAt:  100,
+				},
+			},
+			1,
+		)
+
+		watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
+		if err := watcher.CheckReservationActionTimeouts(key, 100); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+			t.Fatalf(
+				"expected a notification at the exact deadline (now == "+
+					"TimeoutAt), got %d calls",
+				len(calls),
+			)
+		}
+	})
+
+	t.Run("acceptance entry point", func(t *testing.T) {
+		spvChain := newLocalChain()
+
+		wallet := walletPKH()
+		key := reservationKey(0xC022)
+
+		seededReservation(
+			t,
+			spvChain,
+			key,
+			wallet,
+			[]*tbtc.ReservationAction{
+				{
+					ActionType: tbtc.ReservationActionTypeAcceptance,
+					State:      tbtc.ReservationActionStatePending,
+					TimeoutAt:  100,
+				},
+			},
+			1,
+		)
+
+		watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
+		if err := watcher.CheckReservationActionTimeouts(key, 100); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if calls := spvChain.getSubmittedAcceptanceTimeouts(); len(calls) != 1 {
+			t.Fatalf(
+				"expected a notification at the exact deadline (now == "+
+					"TimeoutAt), got %d calls",
+				len(calls),
+			)
+		}
+	})
 }
 
 func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testing.T) {
@@ -235,7 +316,7 @@ func TestReservationActionTimeoutWatcher_IgnoresSettledOlderGeneration(t *testin
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +360,7 @@ func TestReservationActionTimeoutWatcher_NotifiesCurrentGenerationOnly(t *testin
 		2,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -303,7 +384,7 @@ func TestReservationActionTimeoutWatcher_SkipsReservationWithoutWallet(t *testin
 		RequestNonce:        0,
 	})
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -341,7 +422,7 @@ func TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally(t *test
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -358,7 +439,7 @@ func TestReservationActionTimeoutWatcher_ReanchorNotifiesUnconditionally(t *test
 func TestReservationActionTimeoutWatcher_NilKeyError(t *testing.T) {
 	spvChain := newLocalChain()
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(nil, 5_000); err == nil {
 		t.Fatal("expected error for nil reservation key, got nil")
 	}
@@ -375,7 +456,7 @@ func TestReservationActionTimeoutWatcher_SkipsWalletZeroBranch(t *testing.T) {
 		RequestNonce:        1,
 	})
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	if err := watcher.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -414,7 +495,7 @@ func TestReservationActionTimeoutWatcher_NotifierErrorPropagates(t *testing.T) {
 		1,
 	)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	err := watcher.CheckReservationActionTimeouts(key, 5_000)
 	if err == nil {
 		t.Fatal("expected the notifier error to propagate, got nil")
@@ -465,7 +546,7 @@ func TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFre
 		TimeoutAt:  100,
 	}
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	notified, err := watcher.checkReservationActionTimeout(key, 5_000, stalePreload, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -495,7 +576,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_SkipsNotifiedAtStamp
 
 	wallet1 := walletPKH()
 
-	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, math.MaxUint64)
 	ratw.nowFn = func() uint32 { return 500 }
 
 	key1 := reservationKey(0x3001)
@@ -557,7 +638,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLo
 
 	wallet1 := walletPKH()
 
-	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, math.MaxUint64)
 	// now is comfortably beyond TimeoutAt (100) plus the maximum
 	// possible reservationOperatorStaggerOffset (bounded by
 	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
@@ -632,7 +713,7 @@ func TestReservationActionTimeoutWatcher_NextScanRange(t *testing.T) {
 	blockCounter := newMockBlockCounter()
 	spvChain.setBlockCounter(blockCounter)
 
-	watcher := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil)
+	watcher := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, math.MaxUint64)
 
 	// Case 1: First scan (lastScannedBlock == 0) and currentBlock > lookback.
 	blockCounter.SetCurrentBlock(300_000)
@@ -684,7 +765,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	wallet1 := walletPKH()
 
 	pollInterval := 10 * time.Millisecond
-	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil, math.MaxUint64)
 	// now is comfortably beyond every seeded TimeoutAt plus the maximum
 	// possible reservationOperatorStaggerOffset (bounded by
 	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
@@ -807,7 +888,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	wallet1 := walletPKH()
 
 	pollInterval := 10 * time.Millisecond
-	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil, math.MaxUint64)
 	// now is comfortably beyond TimeoutAt (100) plus the maximum
 	// possible reservationOperatorStaggerOffset (see the identical
 	// comment in RunLoop_IncrementalTracking above).
@@ -909,7 +990,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 	wallet1 := walletPKH()
 
 	pollInterval := 10 * time.Millisecond
-	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil, math.MaxUint64)
 
 	// initialNow is comfortably beyond TimeoutAt (100) plus the maximum
 	// possible reservationOperatorStaggerOffset (bounded by
@@ -1004,7 +1085,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_BoundedFirstScan(t *testing.T) 
 	wallet1 := walletPKH()
 
 	pollInterval := 10 * time.Millisecond
-	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil, math.MaxUint64)
 	// now is comfortably beyond every seeded TimeoutAt plus the maximum
 	// possible reservationOperatorStaggerOffset (see the identical
 	// comment in RunLoop_IncrementalTracking above).
@@ -1120,7 +1201,7 @@ func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_Noti
 		TimeoutAt:  100,
 	})
 	ratw := NewReservationActionTimeoutWatcher(
-		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64,
 	)
 
 	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
@@ -1173,7 +1254,7 @@ func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_Skip
 	})
 
 	ratw := NewReservationActionTimeoutWatcher(
-		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+		spvChain, 0, common.Address{}, nil, math.MaxUint64,
 	)
 
 	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
@@ -1218,7 +1299,7 @@ func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NilW
 		TimeoutAt:  100,
 	})
 
-	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 
 	if err := ratw.CheckReservationActionTimeouts(key, 5_000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1262,7 +1343,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 
 	wrapped := &actionCallCountingChain{Chain: spvChain}
 
-	ratw := NewReservationActionTimeoutWatcher(wrapped, 0, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(wrapped, 0, common.Address{}, nil, math.MaxUint64)
 	// now is comfortably beyond every seeded TimeoutAt plus the maximum
 	// possible reservationOperatorStaggerOffset for every one of the
 	// tracked keys (see the identical comment in
@@ -1325,7 +1406,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 // reservationActionTimeoutMaxChecksPerTick and, via its rotating cursor,
 // covers every tracked action within ceil(tracked/cap) ticks.
 func TestReservationActionTimeoutWatcher_NextActionCheckBatch_CapsAndRotates(t *testing.T) {
-	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0, common.Address{}, nil, math.MaxUint64)
 
 	total := reservationActionTimeoutMaxChecksPerTick + 10
 	for i := range total {
@@ -1377,7 +1458,7 @@ func TestReservationActionTimeoutWatcher_NextActionCheckBatch_CapsAndRotates(t *
 // beginning - preserving the pre-fix single-pass behavior for the common
 // case where the cap never actually binds.
 func TestReservationActionTimeoutWatcher_NextActionCheckBatch_NoCapNeeded(t *testing.T) {
-	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(newLocalChain(), 0, common.Address{}, nil, math.MaxUint64)
 
 	for i := range 5 {
 		key := reservationKey(uint64(0xF100 + i))
@@ -1418,7 +1499,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RenotifyBackoffSurvi
 	wallet := walletPKH()
 	key := reservationKey(0x3010)
 
-	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, math.MaxUint64)
 
 	seededReservation(
 		t,
@@ -1476,7 +1557,7 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWal
 	// No spvChain.setWallet call for this wallet: GetWallet returns "no
 	// wallet for given PKH", simulating a transient RPC failure.
 	ratw := NewReservationActionTimeoutWatcher(
-		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+		spvChain, 0, common.Address{}, nil, math.MaxUint64,
 	)
 	ratw.strandingRecheckWallets[wallet] = struct{}{}
 
@@ -1504,9 +1585,7 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnStrand
 	strandingWatcher := newReservationStrandingWatcher(spvChain)
 	strandingWatcher.retryDelay = time.Millisecond
 
-	ratw := NewReservationActionTimeoutWatcher(
-		spvChain, 0, common.Address{}, strandingWatcher,
-	)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), math.MaxUint64)
 	ratw.strandingRecheckWallets[wallet] = struct{}{}
 
 	ratw.drainStrandingRechecks()
@@ -1529,7 +1608,7 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotR
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
 
 	ratw := NewReservationActionTimeoutWatcher(
-		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain),
+		spvChain, 0, common.Address{}, nil, math.MaxUint64,
 	)
 	ratw.strandingRecheckWallets[wallet] = struct{}{}
 

@@ -44,7 +44,14 @@
       "RevealBlock": 290000,
       "Age": 7200,
       "SweptAt": 0,
-      "Vault": "0xReservationVaultAddress1234567890abcdef12345678"
+      "Vault": "0xReservationVaultAddress1234567890abcdef12345678",
+      "PendingAcceptanceAction": {
+        "RequestNonce": 1,
+        "TxMaxFee": 5000,
+        "MinAmount": 100000,
+        "TermSeconds": 86400,
+        "TargetWalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6"
+      }
     }
   ],
   "ExpectedAnchorProposal": {

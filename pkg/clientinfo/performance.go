@@ -150,6 +150,9 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricSpvProofTaskFailuresTotal,
 		MetricRedemptionProofTaskFailuresTotal,
 
+		// ----- SPV reservation watcher health counter -----
+		MetricSpvReservationWatcherDeathsTotal,
+
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
@@ -390,6 +393,8 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 			MetricReservationMaxActiveReservations,
 			MetricReservationLiveWalletsCount,
 			MetricReservationWalletReservationsCount,
+			MetricReservationVaultFeeDebtSat,
+			MetricReservationVaultFeeReserveTbtc,
 		)
 	}
 
@@ -652,8 +657,15 @@ const (
 	// lifecycle gauges)
 	// MetricSpvProofTaskFailuresTotal and MetricRedemptionProofTaskFailuresTotal
 	// cover discovery and proof-info errors, not just submission failures.
-	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
-	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvProofTaskFailuresTotal        = "spv_proof_task_failures_total"
+	MetricRedemptionProofTaskFailuresTotal = "redemption_proof_task_failures_total"
+
+	// MetricSpvReservationWatcherDeathsTotal counts reservation watcher
+	// goroutine deaths (recovered panic or Run error return) in the
+	// watcher wiring started by pkg/maintainer/spv.WireReservationWatchers
+	// in the client and maintainer processes.
+	MetricSpvReservationWatcherDeathsTotal = "spv_reservation_watcher_deaths_total"
+
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"
 	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
@@ -739,6 +751,23 @@ const (
 	MetricReservationMaxActiveReservations   = "max_active_reservations"
 	MetricReservationLiveWalletsCount        = "live_wallets_count"
 	MetricReservationWalletReservationsCount = "wallet_reservations_count"
+
+	// The reservation vault fee observability gauges track the
+	// ReservationVault's outstanding in-kind fee debt and fee-reserve
+	// TBTC balance, published by the reservation acceptance task:
+	//
+	//   - MetricReservationVaultFeeDebtSat is in satoshi, matching the
+	//     on-chain inKindFeeDebtSat view.
+	//   - MetricReservationVaultFeeReserveTbtc is in TBTC base units
+	//     (1e18 per whole TBTC): a gauge value of N means N / 1e18
+	//     whole TBTC held in reserve. The gauge API takes a float64
+	//     and the balance is a big.Int, so the base-unit figure is
+	//     published directly (float64 keeps ~15-17 significant digits,
+	//     more than enough for the TBTC scale) rather than dividing by
+	//     1e18, which would lose the sub-whole-TBTC precision the
+	//     reserve is tracked in.
+	MetricReservationVaultFeeDebtSat     = "reservation_vault_fee_debt_sat"
+	MetricReservationVaultFeeReserveTbtc = "reservation_vault_fee_reserve_tbtc"
 )
 
 // Network join request failure reasons. These are the low-cardinality

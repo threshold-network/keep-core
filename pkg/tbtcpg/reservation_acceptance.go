@@ -40,10 +40,11 @@ type ReservationAcceptanceTask struct {
 	btcChain bitcoin.Chain
 
 	// metricsRecorder is optional and used for recording performance
-	// metrics: active_reservations_count, max_active_reservations, and
-	// wallet_reservations_count, sourced from the chain calls this task
-	// already makes in findReservationAcceptanceCandidate. These are
-	// leading indicators of the reservation capacity saturation cliff.
+	// metrics: active_reservations_count, max_active_reservations,
+	// wallet_reservations_count, reservation_vault_fee_debt_sat, and
+	// reservation_vault_fee_reserve_tbtc, sourced from the chain calls
+	// this task already makes in findReservationAcceptanceCandidate.
+	// These are leading indicators of reservation capacity saturation.
 	metricsRecorder interface {
 		SetGauge(name string, value float64)
 	}
@@ -309,8 +310,17 @@ func (rat *ReservationAcceptanceTask) ActionType() tbtc.WalletActionType {
 
 // reservationAcceptanceCandidate is the bundle a candidate reserved deposit
 // for acceptance carries through the proposal builder. It captures the
-// deposit's reveal context, the derived request nonce, plus the on-chain cap
-// snapshot taken at scan time.
+// deposit's reveal context, the pending acceptance generation's real request
+// nonce and snapshotted fields, plus the on-chain cap snapshot taken at scan
+// time.
+//
+// On-chain, only the deposit's depositor may call requestReservationAcceptance,
+// and that call is what writes the Pending Acceptance action record. This
+// task consumes, rather than creates, that record: candidate selection
+// accepts only deposits whose current generation is a Pending Acceptance
+// action record targeting this wallet, and the proposal is built from that
+// record's real request nonce and snapshotted fee bound, matching the
+// on-chain validator, which validates against the same record.
 type reservationAcceptanceCandidate struct {
 	DepositKey            *big.Int
 	Deposit               *tbtc.Deposit
@@ -401,9 +411,60 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 
-	if wallet.State != tbtc.StateLive {
+	// reservation_vault_fee_debt_sat /
+	// reservation_vault_fee_reserve_tbtc publish the ReservationVault's
+	// outstanding in-kind fee debt (in satoshi) and fee-reserve balance
+	// (in TBTC base units, 1e18 per whole TBTC; a gauge value of N
+	// means N / 1e18 whole TBTC), unconditionally on every pass,
+	// next to the occupancy gauges above: a vault whose fee debt or
+	// reserve is growing is the leading indicator of reservation fee
+	// pressure. A read error is logged and the gauge keeps its
+	// previously recorded value: the gauges are observability-only,
+	// so an RPC failure here must never abort proposal generation.
+	// When the reservation vault is not configured (zero address),
+	// findReservationAcceptanceCandidate has already returned above,
+	// so the skip happens before reaching this block.
+	if rat.metricsRecorder != nil {
+		feeDebtSat, err := rat.chain.ReservationVaultFeeDebtSat()
+		if err != nil {
+			taskLogger.Warnf(
+				"failed to get reservation vault fee debt: [%v]",
+				err,
+			)
+		} else {
+			rat.metricsRecorder.SetGauge(
+				"reservation_vault_fee_debt_sat",
+				float64(feeDebtSat),
+			)
+		}
+
+		feeReserve, err :=
+			rat.chain.ReservationVaultFeeReserveTbtcBaseUnits()
+		if err != nil {
+			taskLogger.Warnf(
+				"failed to get reservation vault fee reserve: [%v]",
+				err,
+			)
+		} else if feeReserve != nil {
+			reserveFloat, _ := feeReserve.Float64()
+			rat.metricsRecorder.SetGauge(
+				"reservation_vault_fee_reserve_tbtc",
+				reserveFloat,
+			)
+		}
+	}
+
+	// Mirror WalletProposalValidator.sol's
+	// requireWalletLiveOrMovingFunds: the on-chain validator accepts an
+	// anchor proposal from a wallet in either the Live or the MovingFunds
+	// state, and both states legitimately may hold pending acceptance
+	// generations created by a depositor. Only a wallet past that
+	// transition (Closing, Closed, Terminated, or unknown) is ineligible.
+	if wallet.State != tbtc.StateLive &&
+		wallet.State != tbtc.StateMovingFunds {
 		taskLogger.Infof(
-			"wallet is not live (state=%v); cannot accept reservation",
+			"wallet is not live or moving funds (state=%v); "+
+				"cannot accept reservation",
 			wallet.State,
 		)
 		return nil, nil
@@ -421,24 +482,17 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		)
 	}
 
-	maxReservationsAmountPerWallet, reservationMaxSingleAmount, err :=
-		rat.chain.ReservationCaps()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get reservation caps: [%w]",
-			err,
-		)
-	}
-
-	walletReservationsAmount, err := rat.chain.WalletReservationsAmount(
-		walletPublicKeyHash,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get wallet reservations amount: [%w]",
-			err,
-		)
-	}
+	// Request-time capacity caps are deliberately not re-checked on this
+	// path: Solidity's requestReservationAcceptance already reserved the
+	// active count, wallet count and amount, and global total capacity
+	// when the Pending Acceptance generation this task consumes was
+	// created. Re-applying the caps at consumption time would
+	// double-count that generation against them, so only the signer-time
+	// rules the validator enforces are mirrored here (see
+	// findReservationAcceptanceCandidate and
+	// proposeReservationAcceptance). Request-time cap checks remain in
+	// place where a fresh request is made: the re-anchor task's target
+	// headroom pre-check and its request flow.
 
 	depositMinAgeSeconds, err := rat.chain.GetDepositMinAge()
 	if err != nil {
@@ -486,6 +540,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	// estimate it will never use.
 	var anchorFee int64
 	anchorFeeComputed := false
+	var lastFeeCap uint64
 	now := time.Now()
 
 	var pendingCandidates []*reservationAcceptanceFundingTxCandidate
@@ -536,16 +591,6 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		if depositRequest.Amount < reservationParameters.ReservationMinAmount {
-			taskLogger.Infof(
-				"reserved deposit [%v] amount [%d] below minimum [%d]; skipping",
-				depositKey,
-				depositRequest.Amount,
-				reservationParameters.ReservationMinAmount,
-			)
-			continue
-		}
-
 		matureAt := depositRequest.RevealedAt.Add(depositMinAge)
 		if !now.After(matureAt) {
 			taskLogger.Infof(
@@ -564,20 +609,11 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		if !checkReservationAcceptanceEligibility(
-			taskLogger,
-			depositRequest,
-			walletReservationsCount,
-			walletReservationsAmount,
-			activeReservationsCount,
-			maxActiveReservations,
-			maxReservationsAmountPerWallet,
-			reservationMaxSingleAmount,
-			reservationParameters,
-		) {
-			taskLogger.Infof("not eligible: [%v]", depositKey)
-			continue
-		}
+		// Phase one filters on liveness-only conditions; the
+		// pending-acceptance precondition, the generation's timeout
+		// safety margin, and its snapshotted minimum plus anchor fee
+		// are all enforced per candidate in the second pass below,
+		// where the generation's own record is read.
 
 		pendingCandidates = append(
 			pendingCandidates,
@@ -642,22 +678,29 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		// Determine RequestNonce and re-request eligibility from the
+		// Determine the acceptance authorization generation from the
 		// reservation's own on-chain state, which authoritatively reflects
-		// whether a prior generation is still pending -- not from acceptance-
-		// requested event history, which would still show a first generation
-		// that has since timed out and become eligible for retry again.
-		var requestNonce uint64 = 1
+		// whether the depositor has requested this deposit's acceptance --
+		// not from acceptance-requested event history, which would still
+		// show a first generation that has since timed out and become
+		// eligible for a retry.
+		//
+		// The deposit's current generation is the only one this task may
+		// anchor: on-chain, only the deposit's own depositor may call
+		// requestReservationAcceptance, and that call is what writes the
+		// Pending Acceptance action record this task validates against.
+		// Deposits whose current generation is not a Pending Acceptance
+		// record (yet unknown, a timed-out or settled prior generation, or
+		// a reservation already anchored) are skipped, because the owner
+		// has not requested this deposit's acceptance.
 		reservation, err := rat.chain.GetReservation(depositKey)
 		if err != nil {
-			// Fail safe: the production chain adapter never errors for "not
-			// found" (it returns a zero record with State == Unknown), so a
-			// non-nil error here can only be an RPC/decode failure -- not a
-			// signal that the reservation is not yet created. Treating it as
-			// "assume not yet created" would skip both the eligible-state
-			// gate and the hasPendingAction gate below. Skip this deposit for
-			// the current coordination window instead; the next window
-			// retries (mirrors the fail-safe policy in hasPendingAction).
+			// Fail safe: the production chain adapter never errors for
+			// "not found" (it returns a zero record with State ==
+			// Unknown), so a non-nil error here can only be an RPC/decode
+			// failure, not a signal that the reservation is not yet
+			// created. Skip this deposit for the current coordination
+			// window instead; the next window retries.
 			taskLogger.Errorf(
 				"cannot get reservation [%v], skipping deposit for this window: [%v]",
 				depositKey,
@@ -666,34 +709,80 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			continue
 		}
 
-		// "Not yet created" is derived only from a successful read: a zero
-		// record reports State == Unknown with RequestNonce == 0, in which
-		// case the predicted requestNonce of 1 (set above) already applies
-		// and the gates below do not apply.
-		if reservation != nil &&
-			!(reservation.State == tbtc.ReservationStateUnknown && reservation.RequestNonce == 0) {
-			if reservation.State == tbtc.ReservationStateActive ||
-				reservation.State == tbtc.ReservationStateActionPending ||
-				reservation.State == tbtc.ReservationStateClosed ||
-				reservation.State == tbtc.ReservationStateStranded {
-				taskLogger.Infof(
-					"reservation [%v] in non-eligible state [%v], skipping",
-					depositKey,
-					reservation.State,
-				)
-				continue
-			}
-
-			if hasPendingAction(depositKey, reservation, rat.chain, taskLogger) {
-				taskLogger.Infof(
-					"reservation [%v] has pending action, skipping",
-					depositKey,
-				)
-				continue
-			}
-
-			requestNonce = reservation.RequestNonce + 1
+		// The pending-generation precondition: a successful read of a
+		// generation whose record is not yet a Pending Acceptance action
+		// (RequestNonce == 0 with the zero record, or any non-acceptance
+		// / non-pending record) means the depositor has not requested this
+		// deposit's acceptance and it is not anchorable.
+		action, err := rat.chain.GetReservationAction(
+			depositKey,
+			reservation.RequestNonce,
+		)
+		if err != nil {
+			// Fail safe: a lookup error is indistinguishable from "still
+			// pending" here, and treating it as not-pending would let the
+			// task build a proposal for a generation that may already be
+			// in flight. Skip this deposit for the current coordination
+			// window instead; the next window retries.
+			taskLogger.Errorf(
+				"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
+				depositKey,
+				reservation.RequestNonce,
+				err,
+			)
+			continue
 		}
+
+		if action.ActionType != tbtc.ReservationActionTypeAcceptance ||
+			action.State != tbtc.ReservationActionStatePending {
+			taskLogger.Infof(
+				"reservation [%v] generation [%d] is not a pending "+
+					"acceptance action (type=%v, state=%v); the depositor "+
+					"has not requested acceptance, skipping",
+				depositKey,
+				reservation.RequestNonce,
+				action.ActionType,
+				action.State,
+			)
+			continue
+		}
+
+		if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
+			taskLogger.Infof(
+				"reservation [%v] pending acceptance targets another wallet "+
+					"[%x]; skipping",
+				depositKey,
+				action.TargetWalletPublicKeyHash,
+			)
+			continue
+		}
+
+		// Mirror WalletProposalValidator.validateReservationAnchorProposal's
+		// timeout safety margin gate: the validator only signs while
+		// block.timestamp < action.TimeoutAt -
+		// REQUEST_TIMEOUT_SAFETY_MARGIN, so a generation whose signing
+		// window has closed (now + margin >= TimeoutAt, using the
+		// addition form to avoid the underflow the contract guards
+		// against) is skipped rather than proposed and rejected.
+		if uint64(now.Unix())+
+			uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
+			uint64(action.TimeoutAt) {
+			taskLogger.Infof(
+				"reservation [%v] pending acceptance generation [%d] "+
+					"timeout [%d] is at or past the timeout safety "+
+					"margin; skipping",
+				depositKey,
+				reservation.RequestNonce,
+				action.TimeoutAt,
+			)
+			continue
+		}
+
+		// The action record holds the generation's real nonce and its
+		// snapshotted fee bound; the proposal and its net-of-fee check
+		// below are built from them, not from live parameter values.
+		requestNonce := reservation.RequestNonce
+		txMaxFee := action.TxMaxFee
 
 		// Check net-of-fee viability here, as part of candidate selection,
 		// rather than after a single candidate has already been chosen. A
@@ -703,11 +792,14 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		// already-selected candidate) would cause the same doomed deposit
 		// to be re-selected and abort on every subsequent Run() until it
 		// aged out of the look-back window.
-		if !anchorFeeComputed {
+		// The estimate is cached per fee cap: the cap is snapshotted per
+		// action generation, so a different generation's bound invalidates
+		// the cached estimate.
+		if !anchorFeeComputed || txMaxFee != lastFeeCap {
 			var feeErr error
 			anchorFee, feeErr = estimateReservationAcceptanceFee(
 				rat.btcChain,
-				reservationParameters.ReservationTxMaxFee,
+				txMaxFee,
 			)
 			if feeErr != nil {
 				return nil, fmt.Errorf(
@@ -716,24 +808,28 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				)
 			}
 			anchorFeeComputed = true
+			lastFeeCap = txMaxFee
 		}
 
-		anchorValue := int64(depositRequest.Amount) - anchorFee
-		if anchorValue <= 0 {
+		// Mirror WalletProposalValidator.validateReservationAnchorProposal's
+		// minimum check against this generation's own snapshotted values:
+		// the deposit amount must satisfy
+		// amount >= action.MinAmount + anchorFee before the on-chain
+		// validation can pass. The addition-based formulation avoids the
+		// underflow the contract guards against when the estimated fee
+		// exceeds a small deposit's amount. The live ReservationMinAmount
+		// is deliberately not used: the snapshot is what the validator
+		// enforces for this generation.
+		feeSats := uint64(anchorFee)
+		minPlusFee := action.MinAmount + feeSats
+		if minPlusFee < action.MinAmount || depositRequest.Amount < minPlusFee {
 			taskLogger.Infof(
-				"reserved deposit [%v] value [%d] does not cover anchor fee [%d]; skipping",
+				"reserved deposit [%v] amount [%d] below the generation's "+
+					"snapshotted minimum [%d] plus anchor fee [%d]; skipping",
 				depositKey,
 				depositRequest.Amount,
+				action.MinAmount,
 				anchorFee,
-			)
-			continue
-		}
-		if uint64(anchorValue) < reservationParameters.ReservationMinAmount {
-			taskLogger.Infof(
-				"reserved deposit [%v] net-of-fee value [%d] below minimum [%d]; skipping",
-				depositKey,
-				anchorValue,
-				reservationParameters.ReservationMinAmount,
 			)
 			continue
 		}
@@ -763,7 +859,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 			},
 			FundingTx:             fundingTx,
 			ReservationParameters: reservationParameters,
-			TxMaxFee:              reservationParameters.ReservationTxMaxFee,
+			TxMaxFee:              txMaxFee,
 			RequestNonce:          requestNonce,
 			AnchorFee:             anchorFee,
 		}, nil
@@ -934,136 +1030,14 @@ func (rat *ReservationAcceptanceTask) fetchReservationAcceptanceFundingTxs(
 	return pipeline
 }
 
-// hasPendingAction reports whether the on-chain reservation action
-// generation at the reservation's current request nonce (if any) is in a
-// pending state. This guards against duplicate acceptance requests within
-// findReservationAcceptanceCandidate: the Bridge rejects a new request
-// while the previous generation is still in flight. The caller supplies
-// the reservation record it already fetched rather than this function
-// re-reading it.
-func hasPendingAction(
-	reservationKey *big.Int,
-	reservation *tbtc.Reservation,
-	chain Chain,
-	taskLogger log.StandardLogger,
-) bool {
-	if reservation.RequestNonce == 0 {
-		return false
-	}
-
-	action, err := chain.GetReservationAction(
-		reservationKey,
-		reservation.RequestNonce,
-	)
-	if err != nil {
-		// Fail safe: a lookup error is indistinguishable from "still
-		// pending" here, and treating it as not-pending would let the
-		// caller send a duplicate acceptance request that the Bridge
-		// rejects while a real pending generation is in flight. Skip this
-		// reservation for the current coordination window instead; the
-		// next window retries.
-		taskLogger.Errorf(
-			"cannot get reservation action for [0x%x] nonce [%d]: [%v]",
-			reservationKey,
-			reservation.RequestNonce,
-			err,
-		)
-		return true
-	}
-
-	return action.State == tbtc.ReservationActionStatePending
-}
-
-func checkReservationAcceptanceEligibility(
-	taskLogger log.StandardLogger,
-	depositRequest *tbtc.DepositChainRequest,
-	walletReservationsCount uint32,
-	walletReservationsAmount uint64,
-	activeReservationsCount uint32,
-	maxActiveReservations uint32,
-	maxReservationsAmountPerWallet uint64,
-	reservationMaxSingleAmount uint64,
-	reservationParameters *tbtc.ReservationParameters,
-) bool {
-	if reservationParameters.MaxReservationsPerWallet > 0 &&
-		walletReservationsCount >= reservationParameters.MaxReservationsPerWallet {
-		taskLogger.Infof(
-			"wallet reservations count [%d] already at max [%d]",
-			walletReservationsCount,
-			reservationParameters.MaxReservationsPerWallet,
-		)
-		return false
-	}
-
-	if maxActiveReservations == 0 {
-		taskLogger.Errorf(
-			"active reservations cap (maxActiveReservations) not configured " +
-				"(is 0); failing closed rather than treating as unlimited",
-		)
-		return false
-	}
-	if activeReservationsCount >= maxActiveReservations {
-		taskLogger.Infof(
-			"active reservations count [%d] already at max [%d]",
-			activeReservationsCount,
-			maxActiveReservations,
-		)
-		return false
-	}
-
-	if reservationMaxSingleAmount > 0 &&
-		depositRequest.Amount > reservationMaxSingleAmount {
-		taskLogger.Infof(
-			"deposit amount [%d] exceeds reservation single cap [%d]",
-			depositRequest.Amount,
-			reservationMaxSingleAmount,
-		)
-		return false
-	}
-
-	newWalletTotal := walletReservationsAmount + depositRequest.Amount
-	if maxReservationsAmountPerWallet > 0 &&
-		newWalletTotal > maxReservationsAmountPerWallet {
-		taskLogger.Infof(
-			"accepting would push wallet past aggregate cap "+
-				"[current=%d, deposit=%d, cap=%d]",
-			walletReservationsAmount,
-			depositRequest.Amount,
-			maxReservationsAmountPerWallet,
-		)
-		return false
-	}
-
-	if reservationParameters.ReservationMaxTotalAmount == 0 {
-		taskLogger.Errorf(
-			"global reservation total amount cap (ReservationMaxTotalAmount) " +
-				"not configured (is 0); failing closed rather than treating as unlimited",
-		)
-		return false
-	}
-	newTotal := reservationParameters.ReservationTotalAmount +
-		depositRequest.Amount
-	if newTotal > reservationParameters.ReservationMaxTotalAmount {
-		taskLogger.Infof(
-			"global reservation total would exceed cap "+
-				"[current=%d, deposit=%d, cap=%d]",
-			reservationParameters.ReservationTotalAmount,
-			depositRequest.Amount,
-			reservationParameters.ReservationMaxTotalAmount,
-		)
-		return false
-	}
-
-	return true
-}
-
 // reservationAcceptancePreWriteError wraps a proposeReservationAcceptance
-// failure that occurred before any chain-state-mutating call (assemble or
-// validate). The caller (Run) treats this as "this deposit is doomed" and
-// skips it in favor of the next candidate instead of aborting the whole
-// coordination window -- a failure after a write (RequestReservationAcceptance
-// or the post-request GetReservation check) still aborts the window as
-// before, since a partial on-chain effect may already exist.
+// failure that occurred before any chain-state-mutating call. The pending
+// acceptance generation this proposal consumes was created on-chain by
+// the deposit's own depositor, not by this task, so candidate selection
+// and proposal building are read-only: an assemble or validation failure
+// can be retried on the next window and can never leave a partial
+// on-chain effect. The caller (Run) skips the doomed deposit in favor of
+// the next candidate instead of aborting the whole coordination window.
 type reservationAcceptancePreWriteError struct {
 	err error
 }
@@ -1097,11 +1071,11 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 
 	taskLogger.Infof("anchor transaction fee: [%d]", anchorFee)
 
-	reservationKey := rat.chain.BuildDepositKey(
-		candidate.Deposit.Utxo.Outpoint.TransactionHash,
-		candidate.Deposit.Utxo.Outpoint.OutputIndex,
-	)
-
+	// The pending acceptance generation this proposal consumes was already
+	// created on-chain by the deposit's own depositor (the only caller
+	// permitted to request acceptance); candidate selection read it, so
+	// this builder performs no chain-state-mutating call of its own and
+	// its validation is a clean pre-write check.
 	feeBoundAction := &tbtc.ReservationAction{
 		TxMaxFee: candidate.TxMaxFee,
 	}
@@ -1148,33 +1122,6 @@ func (rat *ReservationAcceptanceTask) proposeReservationAcceptance(
 			),
 		}
 	}
-
-	// RequestReservationAcceptance is called as a side effect of proposal
-	// generation itself (before coordination has agreed to anything), which
-	// is a known, accepted deviation from the read-only-during-generation
-	// pattern (also present in MovingFundsTask's SubmitMovingFundsCommitment).
-	// The guards against re-requesting acceptance for existing or pending
-	// reservations (checked in findReservationAcceptanceCandidate) are the
-	// primary mitigation for spurious repeat writes.
-	if err := rat.chain.RequestReservationAcceptance(
-		reservationKey,
-		walletPublicKeyHash,
-	); err != nil {
-		return nil, false, fmt.Errorf("cannot request reservation acceptance: [%v]", err)
-	}
-
-	updatedReservation, err := rat.chain.GetReservation(reservationKey)
-	if err != nil {
-		return nil, false, fmt.Errorf("cannot re-read reservation: [%v]", err)
-	}
-	if updatedReservation.RequestNonce != candidate.RequestNonce {
-		return nil, false, fmt.Errorf(
-			"reservation request nonce mismatch after request: predicted [%d], on-chain [%d]",
-			candidate.RequestNonce,
-			updatedReservation.RequestNonce,
-		)
-	}
-	proposal.RequestNonce = updatedReservation.RequestNonce
 
 	return proposal, true, nil
 }

@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -14,10 +13,10 @@ import (
 )
 
 // reservationProofScanState persists the incremental event-scan cursor and
-// the set of still-pending action-request events across successive passes
-// of runReservationProofLoop, so proveReservationAcceptanceActions and
-// proveReservationReanchorActions scan only the event/Bitcoin history that
-// has appeared since the previous pass instead of rescanning the full
+// the set of still-settleable action-request events across successive
+// passes of runReservationProofLoop, so proveReservationAcceptanceActions
+// and proveReservationReanchorActions scan only the event/Bitcoin history
+// that has appeared since the previous pass instead of rescanning the full
 // reservationDefaultLookBackBlocks window - and refetching Bitcoin history
 // for every wallet in it - every config.IdleBackoffTime.
 type reservationProofScanState struct {
@@ -39,6 +38,12 @@ type reservationProofScanState struct {
 	// runReservationProofLoop pass, so this cache does not grow
 	// unboundedly for the life of the process as new wallets are observed.
 	walletTransactionCache map[[20]byte]*walletTransactionCacheEntry
+
+	// nowFn returns the current UNIX timestamp the scans use to evaluate
+	// the Bridge's late-settlement window for TimedOut acceptance
+	// generations. Production runs on wall time; tests override it to
+	// drive the deadline deterministically.
+	nowFn func() uint32
 }
 
 // walletTransactionCacheEntry holds one wallet's confirmed transaction hash
@@ -54,7 +59,15 @@ func newReservationProofScanState() *reservationProofScanState {
 		pendingAcceptanceEvents: make(map[string]*tbtc.ReservationAcceptanceRequestedEvent),
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
 		walletTransactionCache:  make(map[[20]byte]*walletTransactionCacheEntry),
+		nowFn:                   defaultReservationProofNowFn,
 	}
+}
+
+// defaultReservationProofNowFn returns time.Now() as a uint32 UNIX
+// timestamp. Kept separate from the struct so tests can swap it
+// deterministically, mirroring the watcher's nowFn pattern.
+func defaultReservationProofNowFn() uint32 {
+	return uint32(time.Now().Unix())
 }
 
 // evictStaleWalletTransactionCacheEntries removes walletTransactionCache
@@ -161,33 +174,46 @@ func reservationEventKey(reservationKey *big.Int, requestNonce uint64) string {
 }
 
 // reservationProofNextScanRange returns the block range to scan for new
-// pending-action-request events this pass: the bounded
-// reservationDefaultLookBackBlocks catch-up window on the very first pass
-// (lastScannedBlock == 0), or just the delta since the previous pass's
-// cursor on every pass thereafter, so a steady-state loop no longer
-// re-fetches the full ~30-day window on every config.IdleBackoffTime tick.
+// pending-action-request events this pass. On the very first pass
+// (lastScannedBlock == 0) the range starts at the network's reservation
+// activation block (see reservationStartupScanStartBlock) so a process
+// restart that happens long after reservations activated still picks up
+// every action generation requested since activation, instead of being
+// bounded by a fixed 30-day lookback. Steady-state passes (lastScannedBlock
+// > 0) scan only the delta since the previous cursor, so no full-history
+// refetch happens on every config.IdleBackoffTime tick.
+//
+// The first pass is a no-op when activationBlock == math.MaxUint64 - the
+// network has no reservations-activation entry and the feature is
+// inactive for it - in which case startBlock is returned as 0 with no
+// currentBlock advance so the caller skips the scan and immediately
+// stores currentBlock as the new cursor.
 func reservationProofNextScanRange(
 	spvChain Chain,
 	lastScannedBlock uint64,
-) (startBlock uint64, currentBlock uint64, err error) {
+	activationBlock uint64,
+) (startBlock uint64, currentBlock uint64, skipScan bool, err error) {
 	blockCounter, err := spvChain.BlockCounter()
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
+		return 0, 0, false, fmt.Errorf("failed to get block counter: [%v]", err)
 	}
 
 	currentBlock, err = blockCounter.CurrentBlock()
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
+		return 0, 0, false, fmt.Errorf("failed to get current block: [%v]", err)
 	}
 
 	if lastScannedBlock == 0 {
-		if currentBlock > reservationDefaultLookBackBlocks {
-			return currentBlock - reservationDefaultLookBackBlocks, currentBlock, nil
+		start, active := reservationStartupScanStartBlock(
+			activationBlock, currentBlock,
+		)
+		if !active {
+			return 0, currentBlock, true, nil
 		}
-		return 0, currentBlock, nil
+		return start, currentBlock, false, nil
 	}
 
-	return lastScannedBlock + 1, currentBlock, nil
+	return lastScannedBlock + 1, currentBlock, false, nil
 }
 
 // maintainReservationProofs runs the SPV proof submission loop for
@@ -306,10 +332,11 @@ func runReservationProofLoop(
 	}
 }
 
-// proveReservationAcceptanceActions finds pending ReservationAcceptance
+// proveReservationAcceptanceActions finds settleable ReservationAcceptance
 // action generations, locates each one's already-broadcast anchor
-// transaction on the Bitcoin chain (if any), and submits its SPV proof once
-// it has accumulated enough confirmations.
+// transaction on the Bitcoin chain (if any), and submits its SPV proof
+// once it has accumulated enough confirmations. TimedOut generations
+// remain candidates through the Bridge's late settlement window.
 func proveReservationAcceptanceActions(
 	state *reservationProofScanState,
 	config Config,
@@ -319,19 +346,31 @@ func proveReservationAcceptanceActions(
 	cache *proofInfoCache,
 	metricsRecorder MetricsRecorder,
 ) error {
-	startBlock, currentBlock, err := reservationProofNextScanRange(
+	startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
 		spvChain,
 		state.acceptanceLastScannedBlock,
+		tbtc.ReservationsActivationBlock(config.EthereumNetwork),
 	)
 	if err != nil {
 		return err
 	}
 
-	newEvents, err := spvChain.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{
-			StartBlock: startBlock,
-			EndBlock:   &currentBlock,
+	if skipScan {
+		state.acceptanceLastScannedBlock = currentBlock
+		return nil
+	}
+
+	newEvents, err := fetchPastEventsInChunks[*tbtc.ReservationAcceptanceRequestedEvent](
+		func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+			return spvChain.PastReservationAcceptanceRequestedEvents(
+				&tbtc.ReservationAcceptanceRequestedEventFilter{
+					StartBlock: chunkStart,
+					EndBlock:   &chunkEnd,
+				},
+			)
 		},
+		startBlock,
+		currentBlock,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -346,8 +385,15 @@ func proveReservationAcceptanceActions(
 		state.pendingAcceptanceEvents[key] = event
 	}
 
-	// Re-check every tracked event's on-chain action state, evict settled/stale
-	// ones, and group still-pending events by wallet public key hash.
+	// Re-check every tracked event's on-chain action state, evict the
+	// non-settleable ones, and group the still-settleable events by
+	// wallet public key hash. The Bridge settles a generation while its
+	// action is Pending or TimedOut: a TimedOut acceptance generation
+	// stays settleable only through timeoutAt + termSeconds (see
+	// loadSettleableAction in ReservationProofs.sol), so the scans keep
+	// TimedOut candidates until that window has closed instead of
+	// deleting them the moment the state flips.
+	now := state.nowFn()
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationAcceptanceRequestedEvent)
 	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
@@ -364,7 +410,23 @@ func proveReservationAcceptanceActions(
 			continue
 		}
 
-		if action.State != tbtc.ReservationActionStatePending {
+		switch action.State {
+		case tbtc.ReservationActionStateTimedOut:
+			// The Bridge settles this generation while
+			// now <= timeoutAt + termSeconds, where termSeconds is the
+			// custody term snapshotted onto the action when the
+			// generation was requested. A governance change to the live
+			// reservationTermSeconds parameter does not shrink that
+			// window, so evict only once now has passed the snapshotted
+			// bound.
+			if uint64(now) > uint64(action.TimeoutAt)+uint64(action.TermSeconds) {
+				delete(state.pendingAcceptanceEvents, key)
+				continue
+			}
+		case tbtc.ReservationActionStatePending:
+		default:
+			// Settled, Superseded, Vetoed and absent generations are not
+			// settleable on the Bridge; stop tracking them.
 			delete(state.pendingAcceptanceEvents, key)
 			continue
 		}
@@ -468,10 +530,14 @@ func isMatchingReservationAcceptanceTransaction(
 		return false
 	}
 
-	expectedScript, err := bitcoin.PayToWitnessPublicKeyHash(
-		event.WalletPublicKeyHash,
+	// The output must lock the authorized wallet's 20-byte public key
+	// hash, mirroring extractPubKeyHash in BitcoinTx.sol which accepts
+	// both the P2PKH and P2WPKH encodings of that hash; the authorized
+	// signer may broadcast either encoding.
+	actualPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
+		transaction.Outputs[0].PublicKeyScript,
 	)
-	if err != nil || !bytes.Equal(transaction.Outputs[0].PublicKeyScript, expectedScript) {
+	if err != nil || actualPublicKeyHash != event.WalletPublicKeyHash {
 		return false
 	}
 
@@ -495,10 +561,12 @@ func isMatchingReservationAcceptanceTransaction(
 	return true
 }
 
-// proveReservationReanchorActions finds pending ReservationReanchor action
-// generations, locates each one's already-broadcast re-anchor transaction
-// on the Bitcoin chain (if any), and submits its SPV proof once it has
-// accumulated enough confirmations.
+// proveReservationReanchorActions finds settleable ReservationReanchor
+// action generations, locates each one's already-broadcast re-anchor
+// transaction on the Bitcoin chain (if any), and submits its SPV proof
+// once it has accumulated enough confirmations. TimedOut generations
+// remain candidates without bound, mirroring the Bridge, which settles
+// re-anchor proofs for TimedOut generations past the term.
 func proveReservationReanchorActions(
 	state *reservationProofScanState,
 	config Config,
@@ -508,19 +576,31 @@ func proveReservationReanchorActions(
 	cache *proofInfoCache,
 	metricsRecorder MetricsRecorder,
 ) error {
-	startBlock, currentBlock, err := reservationProofNextScanRange(
+	startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
 		spvChain,
 		state.reanchorLastScannedBlock,
+		tbtc.ReservationsActivationBlock(config.EthereumNetwork),
 	)
 	if err != nil {
 		return err
 	}
 
-	newEvents, err := spvChain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			StartBlock: startBlock,
-			EndBlock:   &currentBlock,
+	if skipScan {
+		state.reanchorLastScannedBlock = currentBlock
+		return nil
+	}
+
+	newEvents, err := fetchPastEventsInChunks[*tbtc.ReservationReanchorRequestedEvent](
+		func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+			return spvChain.PastReservationReanchorRequestedEvents(
+				&tbtc.ReservationReanchorRequestedEventFilter{
+					StartBlock: chunkStart,
+					EndBlock:   &chunkEnd,
+				},
+			)
 		},
+		startBlock,
+		currentBlock,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -534,8 +614,13 @@ func proveReservationReanchorActions(
 		state.pendingReanchorEvents[key] = event
 	}
 
-	// Re-check every tracked event's on-chain action state, evict settled/stale
-	// ones, and group still-pending events by source wallet public key hash.
+	// Re-check every tracked event's on-chain action state, evict the
+	// non-settleable ones, and group the still-settleable events by
+	// source wallet public key hash. The Bridge settles a re-anchor
+	// generation while its action is Pending or TimedOut, and re-anchor
+	// late settlement is unbounded (see loadSettleableAction in
+	// ReservationProofs.sol), so a TimedOut generation is kept as a
+	// candidate indefinitely.
 	walletEvents := make(map[[20]byte][]*tbtc.ReservationReanchorRequestedEvent)
 	for key, event := range state.pendingReanchorEvents {
 		action, err := spvChain.GetReservationAction(
@@ -552,7 +637,11 @@ func proveReservationReanchorActions(
 			continue
 		}
 
-		if action.State != tbtc.ReservationActionStatePending {
+		switch action.State {
+		case tbtc.ReservationActionStatePending, tbtc.ReservationActionStateTimedOut:
+		default:
+			// Settled, Superseded, Vetoed and absent generations are not
+			// settleable on the Bridge; stop tracking them.
 			delete(state.pendingReanchorEvents, key)
 			continue
 		}
@@ -667,10 +756,14 @@ func isMatchingReservationReanchorTransaction(
 		return false
 	}
 
-	expectedScript, err := bitcoin.PayToWitnessPublicKeyHash(
-		event.TargetWalletPublicKeyHash,
+	// The output must lock the authorized target wallet's 20-byte public
+	// key hash, mirroring extractPubKeyHash in BitcoinTx.sol which
+	// accepts both the P2PKH and P2WPKH encodings of that hash; the
+	// authorized signer may broadcast either encoding.
+	actualPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(
+		transaction.Outputs[0].PublicKeyScript,
 	)
-	if err != nil || !bytes.Equal(transaction.Outputs[0].PublicKeyScript, expectedScript) {
+	if err != nil || actualPublicKeyHash != event.TargetWalletPublicKeyHash {
 		return false
 	}
 

@@ -79,6 +79,8 @@ func maintainers(cmd *cobra.Command, args []string) error {
 
 	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, tbtcChain, btcChain)
 
+	clientConfig.Maintainer.Spv.EthereumNetwork = clientConfig.Ethereum.Network
+
 	maintainer.Initialize(
 		ctx,
 		clientConfig.Maintainer,

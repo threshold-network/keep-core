@@ -110,6 +110,8 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 		ActionType:                tbtc.ReservationActionTypeReanchor,
 		State:                     tbtc.ReservationActionStatePending,
 		TargetWalletPublicKeyHash: targetWalletPKH,
+		TermSeconds:               86400,
+		MinAmount:                 600000,
 	})
 
 	// Override SubmitReservationReanchorProof on the localChain to capture
@@ -151,6 +153,30 @@ func TestSubmitReservationReanchorProof(t *testing.T) {
 	// Check metrics.
 	if count := metricsRecorder.counts["reservation_reanchor_proof_submissions_total"]; count != 1 {
 		t.Errorf("unexpected metrics count: got %f, want 1", count)
+	}
+
+	// Positive path: the Bridge settles re anchor generations in
+	// TimedOut state as well (late re anchor settlement is unbounded),
+	// so a TimedOut generation must still submit; the shared
+	// submitter rejects only non-settleable states.
+	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeReanchor,
+		State:                     tbtc.ReservationActionStateTimedOut,
+		TargetWalletPublicKeyHash: targetWalletPKH,
+		TermSeconds:               86400,
+		MinAmount:                 600000,
+	})
+	if err := submitReservationReanchorProof(
+		reanchorTx.Hash(),
+		requiredConfirmations,
+		reservationKey,
+		requestNonce,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err != nil {
+		t.Fatalf("expected a TimedOut re anchor generation to submit: %v", err)
 	}
 
 	// Negative path: nil reservationKey.

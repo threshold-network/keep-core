@@ -1,5 +1,5 @@
 {
-  "Title": "action-already-pending: pending action suppresses re-anchor, no proposal emitted",
+  "Title": "resume: pending re-anchor generation is resumed at its real nonce without a second request",
   "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
   "SourceWalletState": "MovingFunds",
   "SourceWalletMainUtxoHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -10,6 +10,7 @@
   "LiveWalletsCount": 4,
   "MovingFundsDustThreshold": 1000000,
   "ReservationTxMaxFee": 100000,
+  "MaxReservationsPerWallet": 5,
   "EstimateSatPerVByteFee": 1,
   "ReanchorTxFee": 0,
   "Reservations": [
@@ -24,5 +25,11 @@
       "HasPendingAction": true,
       "PendingActionState": "Pending"
     }
-  ]
+  ],
+  "ExpectedProposal": {
+    "ReservationKey": "0xdddd04",
+    "RequestNonce": 4,
+    "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+    "ReanchorTxFee": 550
+  }
 }

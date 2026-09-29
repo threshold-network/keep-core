@@ -84,7 +84,7 @@ type localChain struct {
 	submittedMovingFundsProofs               []*submittedMovingFundsProof
 	submittedMovedFundsSweepProofs           []*submittedMovedFundsSweepProof
 	pastRedemptionRequestedEvents            map[[32]byte][]*tbtc.RedemptionRequestedEvent
-	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
+	pastDepositRevealedEvents                []*tbtc.DepositRevealedEvent
 	pastMovingFundsCommitmentSubmittedEvents map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent
 
 	// Reservation watcher state. reservations/reservationActions/
@@ -167,7 +167,7 @@ func newLocalChain() *localChain {
 		submittedMovingFundsProofs:               make([]*submittedMovingFundsProof, 0),
 		submittedMovedFundsSweepProofs:           make([]*submittedMovedFundsSweepProof, 0),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
-		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
+		pastDepositRevealedEvents:                make([]*tbtc.DepositRevealedEvent, 0),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent),
 		walletReservations:                       make(map[[20]byte][]*big.Int),
 		reservations:                             make(map[string]*tbtc.Reservation),
@@ -538,19 +538,56 @@ func (lc *localChain) PastDepositRevealedEvents(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
-	if err != nil {
-		return nil, err
+	var result []*tbtc.DepositRevealedEvent
+	for _, event := range lc.pastDepositRevealedEvents {
+		if filter != nil {
+			if event.BlockNumber < filter.StartBlock {
+				continue
+			}
+			if filter.EndBlock != nil && event.BlockNumber > *filter.EndBlock {
+				continue
+			}
+			if len(filter.WalletPublicKeyHash) > 0 {
+				matched := false
+				for _, wallet := range filter.WalletPublicKeyHash {
+					if wallet == event.WalletPublicKeyHash {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			if len(filter.Depositor) > 0 {
+				matched := false
+				for _, depositor := range filter.Depositor {
+					if depositor == event.Depositor {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+		}
+		result = append(result, event)
 	}
 
-	events, ok := lc.pastDepositRevealedEvents[eventsKey]
-	if !ok {
-		return nil, fmt.Errorf("no events for given filter")
-	}
-
-	return events, nil
+	return result, nil
 }
 
+// addPastDepositRevealedEvent installs event as a fake on-chain
+// DepositRevealed event. PastDepositRevealedEvents matches events
+// against a filter's StartBlock/EndBlock/WalletPublicKeyHash/Depositor
+// by range and set membership (mirroring production's getLogs
+// semantics), rather than by an exact filter-shape key, so a caller
+// that chunks a wide block range into several Past*Events calls still
+// finds an event seeded under one filter shape. If event.BlockNumber
+// is unset (0) it is derived from filter.EndBlock (falling back to
+// filter.StartBlock), so existing callers that don't set BlockNumber
+// explicitly still get a sensible position for range matching.
 func (lc *localChain) addPastDepositRevealedEvent(
 	filter *tbtc.DepositRevealedEventFilter,
 	event *tbtc.DepositRevealedEvent,
@@ -558,52 +595,17 @@ func (lc *localChain) addPastDepositRevealedEvent(
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
-	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
-	if err != nil {
-		return err
+	if event.BlockNumber == 0 && filter != nil {
+		if filter.EndBlock != nil {
+			event.BlockNumber = *filter.EndBlock
+		} else {
+			event.BlockNumber = filter.StartBlock
+		}
 	}
 
-	lc.pastDepositRevealedEvents[eventsKey] = append(
-		lc.pastDepositRevealedEvents[eventsKey],
-		event,
-	)
+	lc.pastDepositRevealedEvents = append(lc.pastDepositRevealedEvents, event)
 
 	return nil
-}
-
-func buildPastDepositRevealedEventsKey(
-	filter *tbtc.DepositRevealedEventFilter,
-) ([32]byte, error) {
-	if filter == nil {
-		return [32]byte{}, nil
-	}
-
-	var buffer bytes.Buffer
-
-	startBlock := make([]byte, 8)
-	binary.BigEndian.PutUint64(startBlock, filter.StartBlock)
-	buffer.Write(startBlock)
-
-	if filter.EndBlock != nil {
-		endBlock := make([]byte, 8)
-		binary.BigEndian.PutUint64(startBlock, *filter.EndBlock)
-		buffer.Write(endBlock)
-	}
-
-	for _, depositor := range filter.Depositor {
-		depositorBytes, err := hex.DecodeString(depositor.String())
-		if err != nil {
-			return [32]byte{}, err
-		}
-
-		buffer.Write(depositorBytes)
-	}
-
-	for _, walletPublicKeyHash := range filter.WalletPublicKeyHash {
-		buffer.Write(walletPublicKeyHash[:])
-	}
-
-	return sha256.Sum256(buffer.Bytes()), nil
 }
 
 func (lc *localChain) PastRedemptionRequestedEvents(
@@ -619,7 +621,7 @@ func (lc *localChain) PastRedemptionRequestedEvents(
 
 	events, ok := lc.pastRedemptionRequestedEvents[eventsKey]
 	if !ok {
-		return nil, fmt.Errorf("no events for given filter")
+		return nil, nil
 	}
 
 	return events, nil
@@ -693,7 +695,7 @@ func (lc *localChain) PastMovingFundsCommitmentSubmittedEvents(
 
 	events, ok := lc.pastMovingFundsCommitmentSubmittedEvents[eventsKey]
 	if !ok {
-		return nil, fmt.Errorf("no events for given filter")
+		return nil, nil
 	}
 
 	return events, nil
@@ -1221,7 +1223,11 @@ func (lc *localChain) IsReservedDeposit(
 }
 
 // ReservedDepositWallet returns the wallet previously assigned to the
-// deposit via setReservedDeposit.
+// deposit via setReservedDeposit. It mirrors the contract's storage
+// shape: a pendingReservedDeposit record - and so a non-zero wallet
+// field - only ever exists for a deposit that was actually reserved at
+// reveal, so a record installed with isReserved false returns the zero
+// hash regardless of the wallet value it was given.
 func (lc *localChain) ReservedDepositWallet(
 	depositKey *big.Int,
 ) ([20]byte, error) {
@@ -1233,7 +1239,7 @@ func (lc *localChain) ReservedDepositWallet(
 	}
 
 	record, ok := lc.reservedDeposits[bigIntKey(depositKey)]
-	if !ok {
+	if !ok || !record.isReserved {
 		return [20]byte{}, nil
 	}
 	return record.walletPublicKeyHash, nil

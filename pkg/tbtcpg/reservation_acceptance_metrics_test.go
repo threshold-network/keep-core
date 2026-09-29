@@ -108,6 +108,242 @@ func TestReservationAcceptanceTask_RecordsSaturationGauges(t *testing.T) {
 	if _, ok := recorder.calls["max_active_reservations"]; !ok {
 		t.Error("expected max_active_reservations gauge to be recorded")
 	}
+
+	// The fee-observability gauges are published alongside the
+	// occupancy gauges on the same pass; the embedded LocalChain
+	// reports no debt and no reserve by default, so their presence
+	// (not their value) is the assertion here.
+	if _, ok := recorder.calls["reservation_vault_fee_debt_sat"]; !ok {
+		t.Error(
+			"expected reservation_vault_fee_debt_sat gauge to be recorded",
+		)
+	}
+	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
+		t.Error(
+			"expected reservation_vault_fee_reserve_tbtc gauge to be recorded",
+		)
+	}
+}
+
+// feeObservabilityChain wraps LocalChain to configure the two
+// ReservationVault fee-observability methods the acceptance task
+// publishes, mirroring the activeReservationsCapChain override pattern.
+type feeObservabilityChain struct {
+	*LocalChain
+
+	feeDebtSat    uint64
+	feeDebtErr    error
+	feeReserve    *big.Int
+	feeReserveErr error
+}
+
+func (c *feeObservabilityChain) ReservationVaultFeeDebtSat() (uint64, error) {
+	return c.feeDebtSat, c.feeDebtErr
+}
+
+func (c *feeObservabilityChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
+	return c.feeReserve, c.feeReserveErr
+}
+
+// TestReservationAcceptanceTask_RecordsVaultFeeGauges asserts the two
+// ReservationVault fee-observability gauges are published with the
+// chain's values: fee debt in satoshi, fee reserve in TBTC base
+// units (the raw big.Int value, 1e18 per whole TBTC).
+func TestReservationAcceptanceTask_RecordsVaultFeeGauges(t *testing.T) {
+	lc := NewLocalChain()
+	btcChain := NewLocalBitcoinChain()
+
+	feeChain := &feeObservabilityChain{
+		LocalChain: lc,
+		feeDebtSat: 12345,
+		// 2 TBTC in base units (2 x 1e18).
+		feeReserve: new(big.Int).Lsh(big.NewInt(2), 18),
+	}
+
+	task := NewReservationAcceptanceTask(feeChain, btcChain)
+
+	// Configure the wallet/vault/event fixture on the underlying
+	// LocalChain (the feeObservabilityChain embeds it), then drive an
+	// empty scan through the real task path.
+	runFeeGaugeFixture(t, lc)
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+
+	recorder := newFakeMetricsRecorder()
+	task.setMetricsRecorder(recorder)
+
+	if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got, ok := recorder.calls["reservation_vault_fee_debt_sat"]; !ok {
+		t.Error("expected reservation_vault_fee_debt_sat gauge to be recorded")
+	} else if got != 12345 {
+		t.Errorf("expected reservation_vault_fee_debt_sat = 12345, got %v", got)
+	}
+
+	// Compute the expected value the same way production does (the
+	// task's big.Int -> float64 conversion), so the assertion tracks
+	// the exact value the recorder would have received.
+	wantReserve, _ := new(big.Int).Lsh(big.NewInt(2), 18).Float64()
+	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
+		t.Error("expected reservation_vault_fee_reserve_tbtc gauge to be recorded")
+	} else if got != wantReserve {
+		t.Errorf(
+			"expected reservation_vault_fee_reserve_tbtc = %v, got %v",
+			wantReserve,
+			got,
+		)
+	}
+}
+
+// TestReservationAcceptanceTask_VaultFeeReadErrorKeepsGauges asserts
+// a fee-read error is logged and the gauges keep their previous
+// (registered zero) value instead of being published with a garbage
+// default, while proposal generation itself still completes.
+func TestReservationAcceptanceTask_VaultFeeReadErrorKeepsGauges(t *testing.T) {
+	lc := NewLocalChain()
+	btcChain := NewLocalBitcoinChain()
+
+	feeChain := &feeObservabilityChain{
+		LocalChain:    lc,
+		feeDebtErr:    errors.New("in-kind fee debt read failed"),
+		feeReserveErr: errors.New("fee reserve read failed"),
+	}
+
+	runFeeGaugeFixture(t, lc)
+
+	task := NewReservationAcceptanceTask(feeChain, btcChain)
+	recorder := newFakeMetricsRecorder()
+	task.setMetricsRecorder(recorder)
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("fee read errors must not abort proposal generation: %v", err)
+	}
+	if proposal != nil || shouldExecute {
+		t.Errorf("expected no proposal, got shouldExecute=%v", shouldExecute)
+	}
+
+	if _, ok := recorder.calls["reservation_vault_fee_debt_sat"]; ok {
+		t.Error(
+			"reservation_vault_fee_debt_sat must not be published on read error",
+		)
+	}
+	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; ok {
+		t.Error(
+			"reservation_vault_fee_reserve_tbtc must not be published on read error",
+		)
+	}
+
+	// The occupancy gauges are published unconditionally and are
+	// unaffected by the fee-read errors.
+	if _, ok := recorder.calls["wallet_reservations_count"]; !ok {
+		t.Error("expected wallet_reservations_count gauge to still be recorded")
+	}
+}
+
+// TestReservationAcceptanceTask_ZeroVaultAddressSkipsFeeGauges asserts
+// an unconfigured (zero-address) reservation vault short-circuits
+// findReservationAcceptanceCandidate before any fee-gauge read
+// happens: no gauges are published for the run.
+func TestReservationAcceptanceTask_ZeroVaultAddressSkipsFeeGauges(t *testing.T) {
+	lc := NewLocalChain()
+	btcChain := NewLocalBitcoinChain()
+
+	feeChain := &feeObservabilityChain{LocalChain: lc}
+
+	runZeroVaultFixture(t, lc)
+
+	task := NewReservationAcceptanceTask(feeChain, btcChain)
+	recorder := newFakeMetricsRecorder()
+	task.setMetricsRecorder(recorder)
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proposal != nil || shouldExecute {
+		t.Errorf("expected no proposal, got shouldExecute=%v", shouldExecute)
+	}
+
+	if len(recorder.calls) != 0 {
+		t.Errorf(
+			"expected no gauges to be published for an unconfigured "+
+				"vault, got %v",
+			recorder.calls,
+		)
+	}
+}
+
+// runFeeGaugeFixture configures a LocalChain with a live wallet, a
+// configured (non-zero) reservation vault, a block counter, and one
+// DepositRevealed event targeting a different vault so the scan
+// completes with no candidate. Shared by the fee-gauge tests.
+func runFeeGaugeFixture(t *testing.T, lc *LocalChain) {
+	t.Helper()
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+
+	lc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: chain.Address(
+			"0xReservationVaultAddress1234567890abcdef12345678",
+		),
+		ReservationMinAmount:      1000,
+		ReservationTxMaxFee:       5000,
+		MaxReservationsPerWallet:  5,
+		ReservationMaxTotalAmount: 100000000,
+	})
+	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	lc.SetDepositMinAge(3600)
+
+	blockCounter := NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(300000)
+	lc.SetBlockCounter(blockCounter)
+
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - ReservationAcceptanceLookBackBlocks
+	if err := lc.AddPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{
+			StartBlock:          filterStartBlock,
+			EndBlock:            &currentBlock,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:         filterStartBlock,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Vault: &[]chain.Address{chain.Address(
+				"0xOtherVaultAddress1234567890abcdef123456789012",
+			)}[0],
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runZeroVaultFixture configures a LocalChain with a live wallet and a
+// zero-address reservation vault, so
+// findReservationAcceptanceCandidate returns at the "reservation
+// vault not configured" gate before any chain read (including the
+// fee reads) or any gauge publication.
+func runZeroVaultFixture(t *testing.T, lc *LocalChain) {
+	t.Helper()
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+
+	lc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: chain.Address(
+			"0x0000000000000000000000000000000000000000",
+		),
+	})
+	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
 }
 
 // --- fetchReservationAcceptanceFundingTxs pipeline tests --------------
@@ -570,6 +806,24 @@ func TestFindReservationAcceptanceCandidate_SkippedCandidatesDoNotConsumeCap(t *
 	lc.SetReservation(eligibleDepositKey, &tbtc.Reservation{
 		State:        tbtc.ReservationStateUnknown,
 		RequestNonce: 0,
+	})
+	// Seed a Pending Acceptance action at nonce 0 targeting the wallet
+	// so the candidate clears findReservationAcceptanceCandidate's
+	// action-record gate -- the precondition the production validator
+	// enforces -- and the cap-vs-skip ordering being tested is the only
+	// thing that can keep this candidate from being returned.
+	lc.SetReservationAction(eligibleDepositKey, 0, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeAcceptance,
+		State:                     tbtc.ReservationActionStatePending,
+		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:                  5000,
+		MinAmount:                 1000,
+		TermSeconds:               86400,
+		// Far-future TimeoutAt so the validator's timeout safety-margin
+		// gate (REQUEST_TIMEOUT_SAFETY_MARGIN, 2 hours) does not skip
+		// this candidate; the cap-vs-skip ordering is the only thing
+		// under test here.
+		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
 	})
 
 	task := NewReservationAcceptanceTask(lc, btcChain)

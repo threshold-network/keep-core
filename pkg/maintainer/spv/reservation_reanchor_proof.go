@@ -265,12 +265,17 @@ func submitReservationActionProof(
 		}
 		return fmt.Errorf("reservation action generation is not expected type")
 	}
-
-	if action.State != tbtc.ReservationActionStatePending {
+	// The Bridge settles generations in Pending or TimedOut state (see
+	// loadSettleableAction in ReservationProofs.sol): a TimedOut
+	// generation may still be proven late, so the submitter must accept
+	// it instead of rejecting it the moment the state flips.
+	switch action.State {
+	case tbtc.ReservationActionStatePending, tbtc.ReservationActionStateTimedOut:
+	default:
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
 		}
-		return fmt.Errorf("reservation action generation is not pending")
+		return fmt.Errorf("reservation action generation is not settleable")
 	}
 
 	txInfo := buildReservationProofTxInfo(transaction)

@@ -406,6 +406,7 @@ func (rrts *ReservationReanchorTestScenario) UnmarshalJSON(data []byte) error {
 
 		MovingFundsDustThreshold uint64
 		ReservationTxMaxFee      uint64
+		MaxReservationsPerWallet uint32
 		EstimateSatPerVByteFee   int64
 		ReanchorTxFee            int64
 
@@ -444,6 +445,7 @@ func (rrts *ReservationReanchorTestScenario) UnmarshalJSON(data []byte) error {
 
 	rrts.MovingFundsDustThreshold = unmarshaled.MovingFundsDustThreshold
 	rrts.ReservationTxMaxFee = unmarshaled.ReservationTxMaxFee
+	rrts.MaxReservationsPerWallet = unmarshaled.MaxReservationsPerWallet
 	rrts.EstimateSatPerVByteFee = unmarshaled.EstimateSatPerVByteFee
 	rrts.ReanchorTxFee = unmarshaled.ReanchorTxFee
 

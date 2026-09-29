@@ -241,11 +241,26 @@ func start(cmd *cobra.Command) error {
 					"ensure the paired Maintainer.Spv.ReservationProofsEnabled flag is also " +
 					"enabled in the maintainer config for end-to-end operation")
 			}
+			// perfMetrics is a *clientinfo.PerformanceMetrics that is nil
+			// when the client info pipeline is disabled (see its
+			// declaration above). Passed directly, that nil pointer would
+			// still satisfy the spv.MetricsRecorder interface parameter as
+			// a non-nil, typed-nil interface value, and
+			// WireReservationWatchers's watcher-death counter would
+			// dereference it. Normalize to a true nil interface here so a
+			// disabled metrics pipeline reads as "metrics off", per the
+			// spv package's documented MetricsRecorder convention.
+			var reservationMetricsRecorder spv.MetricsRecorder
+			if perfMetrics != nil {
+				reservationMetricsRecorder = perfMetrics
+			}
 			if err := spv.WireReservationWatchers(
 				ctx,
 				tbtcChain,
 				tbtcChain,
 				pairedFlagEnabled,
+				reservationMetricsRecorder,
+				clientConfig.Ethereum.Network,
 			); err != nil {
 				return fmt.Errorf(
 					"failed to wire reservation watchers: [%v]",

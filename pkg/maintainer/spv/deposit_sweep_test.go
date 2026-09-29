@@ -630,19 +630,19 @@ func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 	events := []*tbtc.DepositRevealedEvent{
 		{
 			WalletPublicKeyHash: wallets[0].walletPublicKeyHash,
-			BlockNumber:         100,
+			BlockNumber:         996,
 		},
 		{
 			WalletPublicKeyHash: wallets[0].walletPublicKeyHash,
-			BlockNumber:         200,
+			BlockNumber:         997,
 		},
 		{
 			WalletPublicKeyHash: wallets[1].walletPublicKeyHash,
-			BlockNumber:         300,
+			BlockNumber:         998,
 		},
 		{
 			WalletPublicKeyHash: wallets[1].walletPublicKeyHash,
-			BlockNumber:         400,
+			BlockNumber:         999,
 		},
 	}
 

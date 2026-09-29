@@ -218,6 +218,15 @@ type ReservationAction struct {
 	// IsPartial indicates a redemption spends only Amount and must re-anchor
 	// the remaining reservation value back to the custodying wallet.
 	IsPartial bool
+	// TermSeconds is the custody term snapshotted when the generation was
+	// requested. It also bounds the late-acceptance settlement window
+	// (timeoutAt + termSeconds), so proof submitters must read it from the
+	// action, not from the live governance parameter.
+	TermSeconds uint32
+	// MinAmount is the minimum reservation amount snapshotted when the
+	// generation was requested. Settlement and signer validation both
+	// enforce this snapshot, not the live governance parameter.
+	MinAmount uint64
 }
 
 // ReservationParameters represents the on-chain values of the Bridge

@@ -10,6 +10,7 @@
   "LiveWalletsCount": 4,
   "MovingFundsDustThreshold": 1000000,
   "ReservationTxMaxFee": 100000,
+  "MaxReservationsPerWallet": 5,
   "EstimateSatPerVByteFee": 1,
   "ReanchorTxFee": 0,
   "Reservations": [
