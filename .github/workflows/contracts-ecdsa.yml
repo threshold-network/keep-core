@@ -35,6 +35,14 @@ on:
 permissions:
   contents: read
 
+# One concurrency group per PR: re-pushing a PR cancels the superseded
+# run (only the newest commit's run gates the PR). workflow_dispatch runs
+# get their own group per run id with cancellation disabled, so manual
+# runs are never cancelled by a concurrent run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
@@ -463,3 +471,81 @@ jobs:
           upstream_builds: ${{ github.event.inputs.upstream_builds }}
           upstream_ref: dapp-development
           version: ${{ steps.npm-version-bump.outputs.version }}
+
+
+  # R8 aggregator gate for the Solidity ECDSA workflow: closes the
+  # fail-open edge of the dorny/paths-filter stub pattern - a
+  # `dorny/paths-filter` crash in `contracts-detect-changes` would
+  # otherwise propagate as a Success on every downstream required
+  # context (skipped jobs report Success), letting a PR reach main with
+  # the contract checks never run. This job runs on every outcome and
+  # FAILS unless `contracts-detect-changes` succeeded AND each gated
+  # job succeeded, or was skipped only because the path filter was
+  # 'false' on a pull request; on non-PR events every gated job must
+  # have succeeded. The required-check context swap is time-gated by
+  # decision D2 and lands in a follow-up on protected main; the original
+  # required contexts stay in place.
+  contracts-gate-ecdsa:
+    if: always()
+    needs:
+      - contracts-detect-changes
+      - contracts-build-and-test
+      - contracts-lint
+      - contracts-deployment-dry-run
+      - contracts-slither
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate contracts gate
+        env:
+          EVENT: ${{ github.event_name }}
+          PATH_FILTER: ${{ needs.contracts-detect-changes.outputs.path-filter }}
+          DETECT: ${{ needs.contracts-detect-changes.result }}
+          BUILD_TEST: ${{ needs.contracts-build-and-test.result }}
+          LINT: ${{ needs.contracts-lint.result }}
+          DRY_RUN: ${{ needs.contracts-deployment-dry-run.result }}
+          SLITHER: ${{ needs.contracts-slither.result }}
+        run: |
+          # Skipped jobs report Success for required-check purposes, so
+          # this aggregator is the only place where a skip can be told
+          # apart from a genuine success.
+          normalize() {
+            case "$1" in
+              success) echo success ;;
+              skipped) echo skipped ;;
+              *) echo failed ;;
+            esac
+          }
+          echo "gate: detect=$DETECT build-test=$BUILD_TEST lint=$LINT dry-run=$DRY_RUN slither=$SLITHER"
+          if [ "$(normalize "$DETECT")" != "success" ]; then
+            echo "::error::contracts-gate: contracts-detect-changes did not succeed ($DETECT); required contract checks cannot be trusted"
+            exit 1
+          fi
+          skip_allowed="false"
+          if [ "$EVENT" = "pull_request" ] && [ "$PATH_FILTER" = "false" ]; then
+            skip_allowed="true"
+          fi
+          for pair in "contracts-build-and-test:$BUILD_TEST" \
+                     "contracts-lint:$LINT" \
+                     "contracts-deployment-dry-run:$DRY_RUN" \
+                     "contracts-slither:$SLITHER"; do
+            name="${pair%%:*}"
+            state="$(normalize "${pair#*:}")"
+            case "$state" in
+              success)
+                echo "contracts-gate: $name succeeded"
+                ;;
+              skipped)
+                if [ "$skip_allowed" = "true" ]; then
+                  echo "contracts-gate: $name skipped by path-filter (allowed on pull_request)"
+                else
+                  echo "::error::contracts-gate: $name was skipped but no path-filter skip is allowed (event=$EVENT, path-filter=$PATH_FILTER)"
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "::error::contracts-gate: $name did not succeed (${pair#*:})"
+                exit 1
+                ;;
+            esac
+          done
+          echo "contracts-gate: all required contract checks succeeded"

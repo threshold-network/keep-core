@@ -29,6 +29,15 @@ on:
 
 # Automatic releases are now handled by the dedicated release.yml workflow
 
+# One concurrency group per PR: re-pushing a PR cancels the superseded
+# run (only the newest commit's run gates the PR). push / schedule /
+# workflow_dispatch runs get their own group per run id with cancellation
+# disabled, so main/dev pushes and the nightly schedule are never
+# cancelled by a concurrent run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   client-detect-changes:
     runs-on: ubuntu-latest
@@ -173,7 +182,7 @@ jobs:
                 -printf '%P\n' | sort )
           }
           filelist /tmp/electrum-upstream > /tmp/up_files.txt
-          filelist third_party/go-electrum/electrum > /tmp/vend_files.txt
+          filelist third_party/go-electrum/electrum | sort > /tmp/vend_files.txt
           if ! diff -q /tmp/up_files.txt /tmp/vend_files.txt > /dev/null; then
             echo '::error::File set mismatch between upstream and vendored go-electrum (outside allowed patches):'
             diff /tmp/up_files.txt /tmp/vend_files.txt
@@ -213,7 +222,11 @@ jobs:
           ./pkg/bitcoin/electrum ./config
           github.com/checksum0/go-electrum/electrum
 
-  client-build-test-publish:
+  # R2: the `go-build-env` Docker image is built once, up front, so the
+  # two test shards below can run against it in parallel and
+  # `client-build-test-publish` / `client-build-artifacts` consume it as
+  # an artifact without rebuilding. Same path-filter gating as before.
+  client-build-image:
     needs: client-detect-changes
     if: |
       github.event_name != 'pull_request'
@@ -239,13 +252,47 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      # R3 - per-branch Docker layer cache, one stable entry per push:
+      #   save key   = <os>-buildx-<ref_name>-<deps-hash>-<sha> (immutable,
+      #                no restore-keys on save - each sha is a fresh entry)
+      #   deps hash  = first 16 hex chars of sha256(Dockerfile, go.mod, go.sum,
+      #                third_party/*/go.mod, third_party/*/go.sum)
+      #
+      # Restore (actions/cache/restore, `if: always()`) runs on every event.
+      # Save (actions/cache/save) runs only after a successful `Move cache`,
+      # gated to push / workflow_dispatch, so ephemeral PR refs and the
+      # nightly run never write to the branch pool, and a build or move
+      # failure can never publish a stale/incomplete cache under the
+      # immutable sha key - the save step simply does not run.
+      - name: Compute buildx deps hash
+        id: deps-hash
+        run: |
+          set -eu
+          # Recurse into third_party (btcsuite/btcec is nested two
+          # levels deep, go-electrum only one - `find` catches both).
+          files="Dockerfile go.mod go.sum"
+          if [ -d third_party ]; then
+            files="$files $(find third_party \( -name go.mod -o -name go.sum \) | LC_ALL=C sort)"
+          fi
+          # shellcheck disable=SC2086  # intentional word splitting
+          deps="$(sha256sum $files | sha256sum | awk '{print $1}' | cut -c1-16)"
+          echo "hash=${deps}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Docker layer cache
+        if: always()
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          key: ${{ runner.os }}-buildx-${{ github.ref_name }}-${{ steps.deps-hash.outputs.hash }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-buildx-${{ github.event.pull_request.base.ref && github.event.pull_request.base.ref || github.ref_name }}-${{ steps.deps-hash.outputs.hash }}-
+            ${{ runner.os }}-buildx-${{ github.event.pull_request.base.ref && github.event.pull_request.base.ref || github.ref_name }}-
+            ${{ runner.os }}-buildx-${{ github.sha }}
             ${{ runner.os }}-buildx-
+
+      - name: Ensure cache directory exists
+        if: always()
+        run: mkdir -p /tmp/.buildx-cache
 
       - name: Build Docker Build Image
         uses: docker/build-push-action@v5
@@ -277,30 +324,160 @@ jobs:
           name: go-build-env-image
           path: /tmp/go-build-env-image.tar
 
-      - name: Run Go tests
+      - # Temp fix - move cache instead of copying (added below step and
+        # modified value of `cache-to`).
+        # https://github.com/docker/build-push-action/issues/252
+        # https://github.com/moby/buildkit/issues/1896
+        # Without the change some jobs were failing with `no space left on device`.
+        # On pull_request / schedule the cache step is restore-only, so the
+        # move is a no-op. On push / workflow_dispatch the move stages the
+        # freshly-built layers at /tmp/.buildx-cache for the `Save Docker
+        # layer cache` step below.
+        name: Move cache
+        if: success()
         run: |
-          mkdir -p ${{ github.workspace }}/coverage
+          rm -rf /tmp/.buildx-cache
+          if [ -d /tmp/.buildx-cache-new ]; then
+            mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          fi
+
+      # Explicit save, placed after a successful `Move cache` rather than
+      # relying on the combined actions/cache@v4's implicit end-of-job
+      # save: with the combined action the save fires from a post-job
+      # hook regardless of whether the build or move failed, which could
+      # publish the pre-build (stale/incomplete) restored layers under
+      # this run's immutable sha key - a dead entry that can never be
+      # corrected once written. actions/cache/save has no restore-keys
+      # (it is write-only) and only runs here, in-line, after Move cache
+      # has already succeeded.
+      - name: Save Docker layer cache
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.ref_name }}-${{ steps.deps-hash.outputs.hash }}-${{ github.sha }}
+
+  # R2: 2-way sharded `go test ./...`. Both shards run in parallel on
+  # the `go-build-env` image; each executes a deterministic half of the
+  # sorted package list and uploads its own coverage profile. The
+  # merged 14% coverage gate runs in `client-build-test-publish`
+  # (the required-check context), which aggregates both shards.
+  client-go-tests:
+    needs: [client-detect-changes, client-build-image]
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download Docker Build Image
+        uses: actions/download-artifact@v4
+        with:
+          name: go-build-env-image
+          path: /tmp
+
+      - name: Load Docker Build Image
+        run: |
+          docker load --input /tmp/go-build-env-image.tar
+
+      # Deterministic 2-way split: `go list ./...` output is sorted
+      # (LC_ALL=C) and halved by index - shard 1 takes the first half,
+      # shard 2 the second - so the two shards together cover exactly
+      # the package set of the previous unsharded `./...` run. Both
+      # shards compute the split independently from the same image and
+      # checkout, so the split is stable across the two runs.
+      - name: Run Go tests (shard ${{ matrix.shard }}/2)
+        run: |
+          set -euo pipefail
+          packages="$(docker run \
+            --workdir /go/src/github.com/keep-network/keep-core \
+            go-build-env \
+            sh -c 'go list ./... | LC_ALL=C sort')"
+          total="$(printf '%s\n' "$packages" | grep -c . || true)"
+          if [ "$total" -lt 2 ]; then
+            echo "::error::Package list too short to shard (${total:-0} packages); refusing to run an incomplete test suite"
+            exit 1
+          fi
+          half=$(( (total + 1) / 2 ))
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            start=1
+            end=$half
+          else
+            start=$(( half + 1 ))
+            end=$total
+          fi
+          shard_packages="$(printf '%s\n' "$packages" | sed -n "${start},${end}p")"
+          echo "::notice::Shard ${{ matrix.shard }}/2: packages ${start}-${end} of ${total}"
           docker run \
             --workdir /go/src/github.com/keep-network/keep-core \
-            -v ${{ github.workspace }}/coverage:/coverage \
+            -e SHARD_PACKAGES="$(echo "$shard_packages" | tr '\n' ' ')" \
+            -v "${{ github.workspace }}/coverage:/coverage" \
             go-build-env \
-            gotestsum -- -timeout 15m -coverprofile=/coverage/coverage.out ./...
+            sh -c 'gotestsum -- -timeout 15m -coverprofile=/coverage/coverage.out $SHARD_PACKAGES'
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: go-coverage
+          name: go-coverage-shard-${{ matrix.shard }}
           path: coverage/coverage.out
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  # R2: aggregator behind the required `client-build-test-publish`
+  # check context. Fails whenever either test shard fails (via
+  # `needs`), or when the merged coverage gate below fails - the 14%
+  # total-coverage threshold is unchanged and is applied to the merged
+  # profile of both shards, exactly as before.
+  client-build-test-publish:
+    needs: [client-detect-changes, client-go-tests]
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Download coverage report (shard 1)
+        uses: actions/download-artifact@v4
+        with:
+          name: go-coverage-shard-1
+          path: coverage/shard-1
+
+      - name: Download coverage report (shard 2)
+        uses: actions/download-artifact@v4
+        with:
+          name: go-coverage-shard-2
+          path: coverage/shard-2
 
       # Coverage gate: 14% minimum total. Baseline measured at PR #4256
       # (2026-08-19); no automated baseline-update mechanism exists.
+      # Merges the two shard profiles into one (the shards' per-package
+      # blocks do not overlap, so a set-union over the block records is
+      # equivalent to the single unsharded profile) and applies the
+      # original 14% gate to the merged total.
       - name: Check coverage gate
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/coverage:/coverage" \
-            go-build-env \
-            go tool cover -func /coverage/coverage.out > /tmp/cover-func.txt
+          set -eu
+          for f in coverage/shard-1/coverage.out coverage/shard-2/coverage.out; do
+            if [ ! -s "$f" ]; then
+              echo "::error::Missing or empty shard coverage profile $f; the coverage gate cannot run"
+              exit 1
+            fi
+          done
+          { echo 'mode: set'
+            grep -hv '^mode:' coverage/shard-1/coverage.out coverage/shard-2/coverage.out \
+              | LC_ALL=C sort -u
+          } > coverage/coverage.merged.out
+          go tool cover -func coverage/coverage.merged.out > /tmp/cover-func.txt
           TOTAL=$(grep '^total:' /tmp/cover-func.txt | awk '{print $3}' | tr -d '%')
           echo "Total coverage: ${TOTAL}%"
           PASS=$(awk -v t="$TOTAL" 'BEGIN { print (t+0 >= 14) ? "yes" : "no" }')
@@ -308,6 +485,91 @@ jobs:
             echo "::error::Coverage ${TOTAL}% is below the 14% minimum threshold"
             exit 1
           fi
+
+      - name: Upload merged coverage report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage/coverage.merged.out
+          if-no-files-found: warn
+
+  # R1: runtime image, client binaries and their archive moved off the
+  # PR critical path. This job runs in parallel with
+  # `client-integration-test` / `client-bench` and consumes the
+  # `go-build-env-image` artifact; the GCR publish and CI-notify steps
+  # keep their original `workflow_dispatch`-only gating. A failure here
+  # still red-lights the run.
+  client-build-artifacts:
+    needs: [client-detect-changes, client-build-image]
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch the whole history for the `git describe` command to work.
+          fetch-depth: 0
+
+      - name: Resolve versions
+        run: |
+          echo "version=$(git describe --tags --match "v[0-9]*" HEAD)" >> $GITHUB_ENV
+          echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Load environment variables
+        uses: keep-network/ci/actions/load-env-variables@v2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          environment: ${{ github.event.inputs.environment }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # R3 consumer of the per-branch Docker layer cache written by
+      # `client-build-image`.  This job is the second buildx user in a
+      # run and is restore-only - it never writes the branch's primary
+      # cache entry.  The same deps-hash step is duplicated here
+      # because the two jobs run on separate runners.
+      - name: Compute buildx deps hash
+        id: deps-hash
+        run: |
+          set -eu
+          # Recurse into third_party (btcsuite/btcec is nested two
+          # levels deep, go-electrum only one - `find` catches both).
+          files="Dockerfile go.mod go.sum"
+          if [ -d third_party ]; then
+            files="$files $(find third_party \( -name go.mod -o -name go.sum \) | LC_ALL=C sort)"
+          fi
+          # shellcheck disable=SC2086  # intentional word splitting
+          deps="$(sha256sum $files | sha256sum | awk '{print $1}' | cut -c1-16)"
+          echo "hash=${deps}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Docker layer cache
+        if: always()
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.ref_name }}-${{ steps.deps-hash.outputs.hash }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ github.event.pull_request.base.ref && github.event.pull_request.base.ref || github.ref_name }}-${{ steps.deps-hash.outputs.hash }}-
+            ${{ runner.os }}-buildx-${{ github.event.pull_request.base.ref && github.event.pull_request.base.ref || github.ref_name }}-
+            ${{ runner.os }}-buildx-${{ github.sha }}
+            ${{ runner.os }}-buildx-
+
+      - name: Ensure cache directory exists
+        if: always()
+        run: mkdir -p /tmp/.buildx-cache
+
+      - name: Download Docker Build Image
+        uses: actions/download-artifact@v4
+        with:
+          name: go-build-env-image
+          path: /tmp
+
+      - name: Load Docker Build Image
+        run: |
+          docker load --input /tmp/go-build-env-image.tar
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
@@ -318,6 +580,7 @@ jobs:
             version=${{ env.version }}
             revision=${{ env.revision }}
           push: false
+          cache-from: type=local,src=/tmp/.buildx-cache
           context: .
 
       - name: Login to Google Container Registry
@@ -348,6 +611,7 @@ jobs:
             VERSION=${{ env.version }}
             REVISION=${{ env.revision }}
           push: true
+          cache-from: type=local,src=/tmp/.buildx-cache
           context: .
 
       - name: Build Client Binaries
@@ -360,6 +624,7 @@ jobs:
             VERSION=${{ env.version }}
             REVISION=${{ env.revision }}
           push: false
+          cache-from: type=local,src=/tmp/.buildx-cache
           context: .
 
       - name: Archive Client Binaries
@@ -394,16 +659,6 @@ jobs:
           upstream_builds: ${{ github.event.inputs.upstream_builds }}
           upstream_ref: ${{ github.event.inputs.upstream_ref }}
           version: ${{ env.version }}
-
-      - # Temp fix - move cache instead of copying (added below step and
-        # modified value of `cache-to`).
-        # https://github.com/docker/build-push-action/issues/252
-        # https://github.com/moby/buildkit/issues/1896
-        # Without the change some jobs were failing with `no space left on device`
-        name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
   client-scan:
     needs: client-detect-changes
@@ -549,16 +804,18 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
-      # Benchmark regression gate: >12% slower than the baseline established
-      # by the most recent successful push run on the target/current branch
-      # (main/dev pushes seed their own branch's baseline as they land), or,
-      # for workflow_dispatch runs, the most recent successful
-      # workflow_dispatch run on the selected ref. A pull request's own
-      # `go-bench` artifact is never used as a baseline and never seeds its
-      # base branch. Benchmarks with no matching baseline yet are reported
-      # explicitly, both here and per-metric below, and begin gating once a
-      # qualifying run uploads a matching artifact.
+      # Benchmark regression check: >12% slower than the baseline
+      # established by the most recent successful push run on the
+      # target/current branch (main/dev pushes seed their own branch's
+      # baseline as they land), or, for workflow_dispatch runs, the
+      # most recent successful workflow_dispatch run on the selected
+      # ref. A pull request's own `go-bench` artifact is never used as
+      # a baseline and never seeds its base branch.
+      #
+      # R5/D4: the comparison is always computed and posted; only the
+      # gate is event-dependent (below).
       - name: Compare benchmarks
+        id: compare
         if: steps.download-prev.outputs.found_artifact == 'true' && hashFiles('bench-prev/**') != ''
         run: |
           python3 - <<'EOF'
@@ -597,6 +854,20 @@ jobs:
           EOF
 
           benchstat bench-prev/*.txt bench.txt | tee benchstat-results.txt
+
+      # D4: hard regression gate, enforced on pushes to the
+      # development trunk (`dev`) and on the nightly schedule (which
+      # runs the full suite on `main`), plus manual dispatch runs.
+      # A regression can only reach `main` after passing the `dev`
+      # gate, so pushes to `main` are not re-gated.
+      - name: Fail on benchmark regression
+        if: |
+          !cancelled()
+          && steps.compare.outcome == 'success'
+          && (github.event_name == 'schedule'
+            || github.event_name == 'workflow_dispatch'
+            || (github.event_name == 'push' && github.ref_name == 'dev'))
+        run: |
           python3 - <<'EOF'
           import sys, re
           content = open('benchstat-results.txt').read()
@@ -612,6 +883,44 @@ jobs:
               for r in regressions:
                   print(' ', r)
               sys.exit(1)
+          print('No benchmark regressions >12% against baseline.')
+          EOF
+
+      # D4: on pull requests the same regression is advisory - reported
+      # in the job log, the job summary, and the PR comment, but the
+      # check reports success so a PR is never blocked by it.
+      - name: Report benchmark regression (advisory on pull_request)
+        if: |
+          !cancelled()
+          && github.event_name == 'pull_request'
+          && steps.compare.outcome == 'success'
+        run: |
+          python3 - <<'EOF'
+          import re
+          content = open('benchstat-results.txt').read()
+          regressions = []
+          for line in content.splitlines():
+              if '~' in line or not line.strip():
+                  continue
+              m = re.search(r'\+(\d+\.\d+)%', line)
+              if m and float(m.group(1)) > 12:
+                  regressions.append(line)
+          if regressions:
+              print('::warning::Performance regressions >12% detected (advisory on pull requests):')
+              for r in regressions:
+                  print(f'::warning::  {r}')
+              with open(GITHUB_STEP_SUMMARY, 'a') as f:
+                  f.write('## Benchmark regression (advisory)\n\n')
+                  f.write('The following benchmarks regressed >12% against the baseline. '
+                          'On pull requests this is advisory; the regression is a hard '
+                          'failure on the push to dev that lands it and on the nightly '
+                          'schedule run.\n\n')
+                  for r in regressions:
+                      f.write(f'- `{r}`\n')
+          else:
+              print('No benchmark regressions >12% against baseline.')
+              with open(GITHUB_STEP_SUMMARY, 'a') as f:
+                  f.write('## Benchmark check\n\nNo regressions >12% against the baseline.\n')
           EOF
 
       # Publish the same comparison that already gates the job into the PR
@@ -632,7 +941,7 @@ jobs:
             const marker = '<!-- client-bench -->';
             const header = '### `client-bench` results';
             const baselineNote = process.env.HAS_BASELINE === 'true'
-              ? 'Baseline: latest successful push on the target branch.'
+              ? 'Baseline: latest successful push on the target branch. Regressions >12% are advisory on pull requests (hard-fail on push to dev and on the nightly schedule).'
               : 'No baseline yet — the next push on the target branch will seed it.';
             let benchSection;
             try {
@@ -712,3 +1021,98 @@ jobs:
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
             gotestsum -- -timeout 20m -tags=integration ./pkg/bitcoin/electrum
+
+  # R8 aggregator gate: closes the fail-open edge of the dorny/paths-filter
+  # stub pattern - a `dorny/paths-filter` crash in `client-detect-changes`
+  # would otherwise propagate as a Success on every downstream required
+  # context (skipped jobs report Success), letting a PR reach main with the
+  # client checks never run. This job runs on every outcome and FAILS
+  # unless `client-detect-changes` succeeded AND each gated job
+  # succeeded, or was skipped only because the path filter was 'false' on
+  # a pull request; on non-PR events every gated job must have succeeded.
+  # The required-check context swap (client-build-test-publish ->
+  # client-gate) is time-gated by decision D2 and lands in a follow-up on
+  # protected main; the original required contexts stay in place.
+  client-gate:
+    if: always()
+    needs:
+      - client-detect-changes
+      - client-build-test-publish
+      - client-scan
+      - client-format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate client gate
+        env:
+          EVENT: ${{ github.event_name }}
+          PATH_FILTER: ${{ needs.client-detect-changes.outputs.path-filter }}
+          DETECT: ${{ needs.client-detect-changes.result }}
+          BTP: ${{ needs.client-build-test-publish.result }}
+          SCAN: ${{ needs.client-scan.result }}
+          FORMAT: ${{ needs.client-format.result }}
+        run: |
+          # Skipped jobs report Success for required-check purposes, so
+          # this aggregator is the only place where a skip can be told
+          # apart from a genuine success.
+          normalize() {
+            case "$1" in
+              success) echo success ;;
+              skipped) echo skipped ;;
+              *) echo failed ;;
+            esac
+          }
+          detect="$(normalize "$DETECT")"
+          btp="$(normalize "$BTP")"
+          scan="$(normalize "$SCAN")"
+          format="$(normalize "$FORMAT")"
+
+          # A `client-detect-changes` crash (dorny/paths-filter error)
+          # propagates as skipped success on every downstream required
+          # context; that is the fail-open edge this gate closes.
+          # detect-changes must succeed on every event.
+          if [ "$detect" != success ]; then
+            echo "::error::client-gate: client-detect-changes did not succeed ($DETECT); required client checks cannot be trusted"
+            exit 1
+          fi
+
+          # Was this gated job expected to run on this event? Derived
+          # directly from each job`s own `if:` condition:
+          #   client-build-test-publish: event != pull_request || filter == true
+          #   client-scan, client-format:   event == push             || filter == true
+          # A job that was expected to run must be `success`. A job that
+          # was not expected to run is fine as `skipped` (its own `if:`
+          # was false) or `success` (it ran anyway - never an error).
+          expected_run() {
+            case "$1" in
+              client-build-test-publish)
+                # event != pull_request || filter == true
+                [ "$EVENT" != "pull_request" ] || [ "$PATH_FILTER" = "true" ]
+                ;;
+              client-scan|client-format)
+                # event == push || filter == true
+                [ "$EVENT" = "push" ] || [ "$PATH_FILTER" = "true" ]
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          for pair in "client-build-test-publish:$BTP" \
+                     "client-scan:$SCAN" \
+                     "client-format:$FORMAT"; do
+            name="${pair%%:*}"
+            state="$(normalize "${pair#*:}")"
+            if [ "$state" = failed ]; then
+              echo "::error::client-gate: $name did not succeed (${pair#*:})"
+              exit 1
+            fi
+            if expected_run "$name"; then
+              if [ "$state" != success ]; then
+                echo "::error::client-gate: $name was expected to run on event=$EVENT but was $state (path-filter=$PATH_FILTER)"
+                exit 1
+              fi
+            fi
+            # Not expected to run and state is `skipped` or `success`: fine.
+          done
+          echo "client-gate: all required client checks succeeded (build-test-publish=${btp}, scan=${scan}, format=${format})"
