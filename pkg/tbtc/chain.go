@@ -606,15 +606,6 @@ const (
 // routes through the Bridge's storage rather than the router's empty
 // standalone storage.
 type ReservationChain interface {
-	// RequestReservationAcceptance requests a reservation acceptance action
-	// generation for the given reservation. The reservation must be in a
-	// state that allows acceptance.
-	// Eligibility is checked by the reservation proposal builder and enforced by the Bridge.
-	RequestReservationAcceptance(
-		reservationKey *big.Int,
-		walletPublicKeyHash [20]byte,
-	) error
-
 	// RequestReservationReanchor requests a reservation re-anchor action
 	// generation for the given reservation, targeting the given wallet.
 	// The returned bytes are the 32-byte hash of the submitted

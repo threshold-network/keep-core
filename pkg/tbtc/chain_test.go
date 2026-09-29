@@ -1566,13 +1566,6 @@ func (lc *localChain) setValidateReservationReanchorProposalErr(err error) {
 	lc.validateReservationReanchorProposalErr = err
 }
 
-func (lc *localChain) RequestReservationAcceptance(
-	reservationKey *big.Int,
-	walletPublicKeyHash [20]byte,
-) error {
-	panic("unsupported")
-}
-
 func (lc *localChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,

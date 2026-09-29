@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	hostchain "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -685,8 +686,7 @@ func convertReservationFromAbiType(
 //
 // Field omissions (intentional):
 //
-//   - `SourceAnchorUtxoHash`, `UsedRetryCredit`,
-//     `Watchtower{Default,LevelOne,LevelTwo}Delay`,
+//   - `UsedRetryCredit`, `Watchtower{Default,LevelOne,LevelTwo}Delay`,
 //     `RetryCreditSourceNonce`: written for governance / late-settlement
 //     reconciliation but not read by the operator client in m1.
 //
@@ -735,6 +735,7 @@ func convertReservationActionFromAbiType(
 		ActionType:                actionType,
 		State:                     state,
 		FeePaid:                   abiAction.FeePaid,
+		SourceAnchorUtxoHash:      abiAction.SourceAnchorUtxoHash,
 		Redeemer:                  chain.Address(abiAction.Redeemer.String()),
 		Amount:                    abiAction.Amount,
 		RedeemerOutputScriptHash:  redeemerOutputScriptHash,
@@ -840,35 +841,6 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 	}
 }
 
-// RequestReservationAcceptance calls the Bridge (via reservationRouter binding,
-// see reservationRouterBinding) to start a new reservation acceptance action
-// generation for the given reservation.
-func (tc *TbtcChain) RequestReservationAcceptance(
-	reservationKey *big.Int,
-	walletPublicKeyHash [20]byte,
-) error {
-	gasEstimate, err := tc.reservationRouter.RequestReservationAcceptanceGasEstimate(
-		reservationKey,
-		walletPublicKeyHash,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
-
-	_, err = tc.reservationRouter.RequestReservationAcceptance(
-		reservationKey,
-		walletPublicKeyHash,
-		ethutil.TransactionOptions{
-			GasLimit: uint64(gasEstimateWithMargin),
-		},
-	)
-
-	return err
-}
-
 // RequestReservationReanchor asks the Bridge (via its ReservationRouter
 // delegatecall target) to start a new reservation re-anchor action generation
 // for the given reservation, targeting the given wallet. The returned
@@ -907,19 +879,39 @@ func (tc *TbtcChain) RequestReservationReanchor(
 
 // GetReservationReanchorRequestReceipt reports the mining status of a
 // previously submitted RequestReservationReanchor transaction, as defined
-// by the tbtc.ReservationReanchorRequestReceiptStatus values. Any lookup
-// failure (including a not-found receipt, which go-ethereum reports as an
-// error for unknown or unmined hashes) maps to NotFound: the caller treats
-// NotFound and Pending identically, bounded by the block the submission
-// happened in.
+// by the tbtc.ReservationReanchorRequestReceiptStatus values. The receipt
+// lookup is bounded by a 30-second deadline, matching the baseChain header
+// helpers.
+//
+// A receipt that does not exist yet - which go-ethereum reports as
+// ethereum.NotFound for unknown or unmined hashes - maps to NotFound: the
+// caller treats NotFound and Pending identically, bounded by the block the
+// submission happened in. Every other lookup error (RPC outage, timeout,
+// transport failure) is returned to the caller so an in-flight request is
+// not mistaken for a dropped one.
 func (tc *TbtcChain) GetReservationReanchorRequestReceipt(
 	txHash [32]byte,
 ) (tbtc.ReservationReanchorRequestReceiptStatus, error) {
-	receipt, err := tc.baseChain.client.TransactionReceipt(
+	ctx, cancelCtx := context.WithTimeout(
 		context.Background(),
+		30*time.Second,
+	)
+	defer cancelCtx()
+
+	receipt, err := tc.baseChain.client.TransactionReceipt(
+		ctx,
 		common.BytesToHash(txHash[:]),
 	)
-	if err != nil || receipt == nil {
+	if err != nil {
+		if errors.Is(err, hostchain.NotFound) {
+			return tbtc.ReservationReanchorRequestReceiptNotFound, nil
+		}
+		return tbtc.ReservationReanchorRequestReceiptNotFound, fmt.Errorf(
+			"cannot fetch transaction receipt: %w",
+			err,
+		)
+	}
+	if receipt == nil {
 		return tbtc.ReservationReanchorRequestReceiptNotFound, nil
 	}
 	if receipt.Status == 0 {
@@ -1753,7 +1745,7 @@ func (tc *TbtcChain) reservationVaultBindings(vaultAddress common.Address) (*res
 
 // reservationVaultAddress resolves the on-chain reservation vault address
 // from the Bridge's reservation parameters. It returns the zero address
-// when the vault is not configured (empty parameters address) and an
+// when the vault is not configured (zero address in the parameters) and an
 // error only when the configured address cannot be decoded as a valid
 // 20-byte address, so callers can distinguish "no vault" (a skip, not
 // an error) from a genuinely malformed configuration.
@@ -1766,9 +1758,6 @@ func (tc *TbtcChain) reservationVaultAddress() (common.Address, error) {
 		)
 	}
 	vaultAddressString := string(reservationParameters.ReservationVault)
-	if vaultAddressString == "" {
-		return common.Address{}, nil
-	}
 	vaultAddressBytes, err := hexutil.Decode(vaultAddressString)
 	if err != nil || len(vaultAddressBytes) != common.AddressLength {
 		if err == nil {

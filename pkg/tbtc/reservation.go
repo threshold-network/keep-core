@@ -204,6 +204,11 @@ type ReservationAction struct {
 	// FeePaid indicates the generation was created through a fee-paying vault
 	// entry point.
 	FeePaid bool
+	// SourceAnchorUtxoHash is the keccak256 hash of the reservation anchor
+	// outpoint snapshotted when a re-anchor generation was requested,
+	// matching the Bridge's anchorUtxoHash (Reservation.sol). It is zero
+	// for other action types.
+	SourceAnchorUtxoHash [32]byte
 	// Redeemer is the address that can reclaim escrow after a redemption
 	// timeout. It is empty for other action types.
 	Redeemer chain.Address

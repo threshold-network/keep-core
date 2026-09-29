@@ -199,6 +199,7 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 		Redeemer:               redeemerAddress,
 		Amount:                 50000,
 		ActionDataHash:         actionDataHash,
+		SourceAnchorUtxoHash:   [32]byte{0x99, 0x88, 0x77, 0x66},
 		IsPartial:              true,
 	}
 
@@ -250,6 +251,7 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 				ActionType:                test.expectedActionType,
 				State:                     tbtc.ReservationActionStatePending,
 				FeePaid:                   true,
+				SourceAnchorUtxoHash:      [32]byte{0x99, 0x88, 0x77, 0x66},
 				Redeemer:                  chain.Address(redeemerAddress.String()),
 				Amount:                    50000,
 				RedeemerOutputScriptHash:  test.expectedRedeemerOutputScriptHash,
