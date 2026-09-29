@@ -128,14 +128,16 @@ jobs:
     # real reservation contracts under the `development` npm tag (see
     # threshold-network/keep-core#4281). Those vendored copies can silently
     # drift from the ABI compiled from the pinned upstream tbtc-v2 commit
-    # (TBTC_V2_REF below) with no build failure. This job compiles the
-    # real tbtc-v2 Solidity contracts at that commit and compares the
-    # vendored copies against the compiled artifacts, failing loudly on
-    # any divergence. The comparisons are whole-function/whole-event
-    # entries (name, inputs including struct components, outputs,
-    # stateMutability) canonicalized with jq -S, so they catch
+    # (TBTC_V2_REF below) with no build failure, and the same drift can
+    # accumulate in the committed Go bindings themselves. This job
+    # compiles the real tbtc-v2 Solidity contracts at that commit and
+    # compares both the vendored copies and the ABI embedded in the
+    # committed generated Go bindings against the compiled artifacts,
+    # failing loudly on any divergence. The comparisons are whole-function/
+    # whole-event entries (name, inputs including struct components,
+    # outputs, stateMutability) canonicalized with jq -S, so they catch
     # missing/renamed functions, added/removed/reordered parameters, and
-    # type changes alike:
+    # type changes alike, on each side:
     #   - the full canonicalized .abi array of
     #     ReservationRouter.fallback-artifact.json against the compiled
     #     ReservationRouter artifact,
@@ -148,8 +150,23 @@ jobs:
     #     against the compiled WalletProposalValidator artifact,
     #   - the inKindFeeDebtSat and tbtcToken entries of
     #     ReservationVault.fallback-artifact.json against the compiled
-    #     ReservationVault artifact.
-    # Cheap (checkout + yarn install + hardhat compile + jq diffs) and
+    #     ReservationVault artifact,
+    # and, extracted from the <Name>MetaData.ABI string in
+    # pkg/chain/ethereum/tbtc/gen/abi/<Name>.go with
+    # `go run ./checkabi`,
+    #   - the full canonicalized ABI of the committed ReservationRouter
+    #     binding against the compiled ReservationRouter artifact,
+    #   - the isReservedDeposit entry of the committed Bridge binding
+    #     against the compiled Bridge artifact,
+    #   - the validateReservationAnchorProposal /
+    #     validateReservationReanchorProposal entries of the committed
+    #     WalletProposalValidator binding against the compiled
+    #     WalletProposalValidator artifact,
+    #   - the inKindFeeDebtSat and tbtcToken entries of the committed
+    #     ReservationVault binding against the compiled ReservationVault
+    #     artifact.
+    # Cheap (checkout + yarn install + hardhat compile + a go-run ABI
+    # extraction + jq diffs) and
     # runs whenever the Client workflow runs, without an additional
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
@@ -184,6 +201,11 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+
       - name: Compile tbtc-v2 Solidity contracts
         working-directory: tbtc-v2-upstream/solidity
         run: |
@@ -206,7 +228,7 @@ jobs:
           yarn install
           yarn build
 
-      - name: Verify vendored reservation fallbacks match the real compiled ABIs
+      - name: Verify vendored reservation fallbacks and committed Go bindings match the real compiled ABIs
         run: |
           set -e
           BASE_BRIDGE="tbtc-v2-upstream/solidity/build/contracts/bridge"
