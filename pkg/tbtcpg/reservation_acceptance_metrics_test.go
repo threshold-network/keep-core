@@ -247,15 +247,24 @@ func TestReservationAcceptanceTask_VaultFeeReadErrorKeepsGauges(t *testing.T) {
 	}
 }
 
-// TestReservationAcceptanceTask_ZeroVaultAddressSkipsFeeGauges asserts
+// TestReservationAcceptanceTask_ZeroVaultAddressZeroesFeeGauges asserts
 // an unconfigured (zero-address) reservation vault short-circuits
-// findReservationAcceptanceCandidate before any fee-gauge read
-// happens: no gauges are published for the run.
-func TestReservationAcceptanceTask_ZeroVaultAddressSkipsFeeGauges(t *testing.T) {
+// findReservationAcceptanceCandidate before any fee-gauge read chain
+// call (the wrapper's nonzero fee values below are tripwires:
+// publishing them would mean the fee methods ran on the unconfigured
+// path), while the two fee gauges are still published as zero: a
+// stale nonzero reading carried over from an earlier pass with a
+// configured vault is indistinguishable from a real fee debt.
+func TestReservationAcceptanceTask_ZeroVaultAddressZeroesFeeGauges(t *testing.T) {
 	lc := NewLocalChain()
 	btcChain := NewLocalBitcoinChain()
 
-	feeChain := &feeObservabilityChain{LocalChain: lc}
+	feeChain := &feeObservabilityChain{
+		LocalChain: lc,
+		feeDebtSat: 12345,
+		// 2 TBTC in base units (2 x 1e18).
+		feeReserve: new(big.Int).Lsh(big.NewInt(2), 18),
+	}
 
 	runZeroVaultFixture(t, lc)
 
@@ -274,11 +283,92 @@ func TestReservationAcceptanceTask_ZeroVaultAddressSkipsFeeGauges(t *testing.T) 
 		t.Errorf("expected no proposal, got shouldExecute=%v", shouldExecute)
 	}
 
-	if len(recorder.calls) != 0 {
+	if len(recorder.calls) != 2 {
 		t.Errorf(
-			"expected no gauges to be published for an unconfigured "+
+			"expected only the two zeroed fee gauges for an unconfigured "+
 				"vault, got %v",
 			recorder.calls,
+		)
+	}
+	if got, ok := recorder.calls["reservation_vault_fee_debt_sat"]; !ok {
+		t.Error("expected reservation_vault_fee_debt_sat gauge to be recorded")
+	} else if got != 0 {
+		t.Errorf("expected reservation_vault_fee_debt_sat = 0, got %v", got)
+	}
+	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
+		t.Error("expected reservation_vault_fee_reserve_tbtc gauge to be recorded")
+	} else if got != 0 {
+		t.Errorf("expected reservation_vault_fee_reserve_tbtc = 0, got %v", got)
+	}
+}
+
+// TestReservationAcceptanceTask_UnconfiguredVaultZeroesFeeGauges is a
+// regression test for the stale-gauge leak when the reservation vault
+// is cleared: a pass with a configured vault publishes nonzero fee
+// gauges, and a later pass with the vault unconfigured must reset both
+// gauges to zero rather than leave the last nonzero readings
+// published forever.
+func TestReservationAcceptanceTask_UnconfiguredVaultZeroesFeeGauges(t *testing.T) {
+	lc := NewLocalChain()
+	btcChain := NewLocalBitcoinChain()
+
+	task := NewReservationAcceptanceTask(lc, btcChain)
+	recorder := newFakeMetricsRecorder()
+	task.setMetricsRecorder(recorder)
+
+	walletPublicKeyHash := [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+
+	// Pass 1: configured vault, nonzero fee gauges published.
+	runFeeGaugeFixture(t, lc)
+	lc.SetReservationVaultFeeDebtSat(12345, nil)
+	// 2 TBTC in base units (2 x 1e18).
+	lc.SetReservationVaultFeeReserveBalance(
+		new(big.Int).Lsh(big.NewInt(2), 18),
+		nil,
+	)
+
+	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("pass 1: unexpected error: %v", err)
+	}
+	if proposal != nil || shouldExecute {
+		t.Fatalf("pass 1: expected no proposal, got shouldExecute=%v", shouldExecute)
+	}
+	if got := recorder.calls["reservation_vault_fee_debt_sat"]; got != 12345 {
+		t.Fatalf("pass 1: expected fee-debt gauge 12345, got %v", got)
+	}
+	if got := recorder.calls["reservation_vault_fee_reserve_tbtc"]; got == 0 {
+		t.Fatalf("pass 1: expected a nonzero fee-reserve gauge, got 0")
+	}
+
+	// Pass 2: the vault address is cleared (zero params -> ""
+	// vault), so the unconfigured path must zero both gauges again
+	// instead of holding pass 1's readings.
+	lc.SetReservationParameters(tbtc.ReservationParameters{})
+
+	proposal, shouldExecute, err = task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("pass 2: unexpected error: %v", err)
+	}
+	if proposal != nil || shouldExecute {
+		t.Fatalf("pass 2: expected no proposal, got shouldExecute=%v", shouldExecute)
+	}
+	if got := recorder.calls["reservation_vault_fee_debt_sat"]; got != 0 {
+		t.Errorf(
+			"pass 2: expected the fee-debt gauge zeroed for an "+
+				"unconfigured vault, got %v",
+			got,
+		)
+	}
+	if got := recorder.calls["reservation_vault_fee_reserve_tbtc"]; got != 0 {
+		t.Errorf(
+			"pass 2: expected the fee-reserve gauge zeroed for an "+
+				"unconfigured vault, got %v",
+			got,
 		)
 	}
 }

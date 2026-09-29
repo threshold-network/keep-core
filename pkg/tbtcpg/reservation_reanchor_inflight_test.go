@@ -402,6 +402,136 @@ func TestReservationReanchorTask_InFlight_Mined_ResumesWithoutNewRequest(t *test
 	}
 }
 
+// TestReservationReanchorTask_InFlight_ReservationLeftWallet_ForgottenOnNextRun
+// pins the in-flight reconciliation: a submission still unconfirmed when
+// its reservation's custody has since moved away from the source wallet
+// (the wallet's reservation list no longer names it) must be forgotten on
+// the next Run rather than tracked for the task's lifetime, while a
+// concurrently unconfirmed submission for a different wallet must survive
+// the same pass untouched.
+func TestReservationReanchorTask_InFlight_ReservationLeftWallet_ForgottenOnNextRun(t *testing.T) {
+	tbtcChain, btcChain, _, task, sourceWalletPublicKeyHash, _, reservationKey :=
+		newInFlightReanchorFixture(t)
+
+	// A second MovingFunds wallet with its own active reservation, so
+	// its own in-flight entry can be checked for survival.
+	secondSourceWalletPublicKeyHash := [20]byte{
+		6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+	}
+	secondReservationKey := big.NewInt(7002)
+	tbtcChain.SetWallet(
+		secondSourceWalletPublicKeyHash,
+		&tbtc.WalletChainData{State: tbtc.StateMovingFunds},
+	)
+	secondAnchorTxHash, err := bitcoin.NewHashFromString(
+		"8888888888888888888888888888888888888888888888888888888888888888"[:64],
+		bitcoin.ReversedByteOrder,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSourceScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		secondSourceWalletPublicKeyHash,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetTransaction(secondAnchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 200000, PublicKeyScript: secondSourceScript},
+		},
+	})
+	tbtcChain.SetReservation(secondReservationKey, &tbtc.Reservation{
+		WalletPublicKeyHash: secondSourceWalletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: secondAnchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 200000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: 0,
+	})
+	tbtcChain.SetWalletReservations(
+		secondSourceWalletPublicKeyHash,
+		[]*big.Int{secondReservationKey},
+	)
+
+	// Round 1 for both wallets: each submits a request that stays
+	// unconfirmed (Pending receipt, no generation written), so both are
+	// tracked in-flight by their transaction hashes.
+	tbtcChain.SetNextReservationReanchorRequestPending()
+	if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	}); err != nil {
+		t.Fatalf("round 1 (first wallet): unexpected error: %v", err)
+	}
+	if _, ok := task.getReanchorRequestInFlight(reservationKey); !ok {
+		t.Fatalf(
+			"round 1: expected the first wallet's unconfirmed request to be " +
+				"tracked in-flight",
+		)
+	}
+
+	tbtcChain.SetNextReservationReanchorRequestPending()
+	if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: secondSourceWalletPublicKeyHash,
+	}); err != nil {
+		t.Fatalf("round 1 (second wallet): unexpected error: %v", err)
+	}
+	if _, ok := task.getReanchorRequestInFlight(secondReservationKey); !ok {
+		t.Fatalf(
+			"round 1: expected the second wallet's unconfirmed request to be " +
+				"tracked in-flight",
+		)
+	}
+
+	// The first wallet's reservation moves custody elsewhere between
+	// rounds: it no longer appears in the wallet's reservation list.
+	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, nil)
+
+	// Round 2 for the first wallet: the wallet's list is now empty, so
+	// the departure must be reconciled -- the first wallet's in-flight
+	// entry is forgotten, while the second wallet's entry (a different
+	// source wallet, untouched by this pass) survives.
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("round 2: unexpected error: %v", err)
+	}
+	if ok || proposal != nil {
+		t.Fatalf(
+			"round 2: expected no proposal for a drained wallet, got "+
+				"ok=%v proposal=%v",
+			ok,
+			proposal,
+		)
+	}
+	if _, found := task.getReanchorRequestInFlight(reservationKey); found {
+		t.Error(
+			"round 2: expected the departed reservation's in-flight " +
+				"entry to be forgotten, but it was still tracked",
+		)
+	}
+	if _, found := task.getReanchorRequestInFlight(secondReservationKey); !found {
+		t.Error(
+			"round 2: expected another wallet's in-flight entry to " +
+				"survive the reconciliation pass",
+		)
+	}
+	if got := len(tbtcChain.GetReservationReanchorRequestSubmissions()); got != 2 {
+		t.Fatalf(
+			"round 2: expected no new re-anchor request submissions, "+
+				"got %d",
+			got,
+		)
+	}
+}
+
 // TestReservationReanchorTask_ResumeMarginGate pins the resume path's
 // timeout safety margin gate: a Pending Reanchor generation whose
 // TimeoutAt sits inside REQUEST_TIMEOUT_SAFETY_MARGIN (2 hours, mirrored

@@ -355,6 +355,21 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 	reservationVault := reservationParameters.ReservationVault
 	if reservationVault == "" || reservationVault == chain.Address(zeroAddressHex) {
+		// An unconfigured vault has no fee ledger, so the vault fee
+		// gauges must be published as zero rather than left at whatever
+		// a configured vault published on an earlier pass: a gauge that
+		// retains a stale nonzero reading is indistinguishable from a
+		// real debt/reserve.
+		if rat.metricsRecorder != nil {
+			rat.metricsRecorder.SetGauge(
+				"reservation_vault_fee_debt_sat",
+				0,
+			)
+			rat.metricsRecorder.SetGauge(
+				"reservation_vault_fee_reserve_tbtc",
+				0,
+			)
+		}
 		taskLogger.Info("reservation vault not configured")
 		return nil, nil
 	}
@@ -423,7 +438,8 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	// so an RPC failure here must never abort proposal generation.
 	// When the reservation vault is not configured (zero address),
 	// findReservationAcceptanceCandidate has already returned above,
-	// so the skip happens before reaching this block.
+	// publishing the fee gauges as zero, so this block is unreachable
+	// for that pass.
 	if rat.metricsRecorder != nil {
 		feeDebtSat, err := rat.chain.ReservationVaultFeeDebtSat()
 		if err != nil {

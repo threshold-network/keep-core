@@ -1747,27 +1747,6 @@ func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T
 				anchorProposal.RequestNonce,
 			)
 		}
-
-		if recorded := ralc.GetReservationAcceptanceRequests(); len(recorded) != 0 {
-			t.Fatalf(
-				"expected zero RequestReservationAcceptance submissions, "+
-					"got %d -- the operator-side path was removed and "+
-					"production must consume, not create, the depositor's "+
-					"pending action",
-				len(recorded),
-			)
-		}
-
-		// The reservation's RequestNonce stays at 1 across repeated runs:
-		// production never bumps it itself, only the depositor's
-		// requestReservationAcceptance call does (and the operator no
-		// longer invokes it).
-		if reservations := ralc.GetReservationAcceptanceRequests(); len(reservations) != 0 {
-			// Already covered above; keep the assertion here as a belt-
-			// and-suspenders marker that the next Run on the same
-			// fixture observes the same nonce.
-			_ = reservations
-		}
 	})
 }
 
@@ -2508,6 +2487,37 @@ func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing
 		// strict-nonce precondition is the only gate under test.
 		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
 	})
+	// Seed the remaining state the strict fake mirrors from the
+	// on-chain validator: a Live wallet, a reserved deposit revealed
+	// through the reservation vault, and the configured parameters.
+	vault := testReservationVaultAddress
+	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	lc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: vault,
+	})
+	lc.SetDepositRequest(
+		fundingTxHash,
+		fundingOutputIndex,
+		&tbtc.DepositChainRequest{
+			Amount:     2000000,
+			RevealedAt: time.Now().Add(-48 * time.Hour),
+			Vault:      &vault,
+		},
+	)
+	lc.SetReservedDeposit(depositKey, true)
+	lc.SetDepositMinAge(3600)
+
+	depositExtraInfo := struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	}{
+		Deposit: &tbtc.Deposit{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			// Far-future refund locktime, little-endian as stored on
+			// chain, so the 24-hour refund safety margin holds.
+			RefundLocktime: [4]byte{0x00, 0x79, 0xf7, 0x77},
+		},
+	}
 
 	proposalOK := &tbtc.ReservationAnchorProposal{
 		DepositFundingTxHash:      fundingTxHash,
@@ -2518,10 +2528,7 @@ func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing
 	if err := lc.ValidateReservationAnchorProposal(
 		walletPublicKeyHash,
 		proposalOK,
-		struct {
-			*tbtc.Deposit
-			FundingTx *bitcoin.Transaction
-		}{},
+		depositExtraInfo,
 	); err != nil {
 		t.Fatalf(
 			"strict fake rejected a proposal at the seeded action's nonce "+
@@ -2540,10 +2547,7 @@ func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing
 	if err := lc.ValidateReservationAnchorProposal(
 		walletPublicKeyHash,
 		proposalOff,
-		struct {
-			*tbtc.Deposit
-			FundingTx *bitcoin.Transaction
-		}{},
+		depositExtraInfo,
 	); err == nil {
 		t.Fatalf(
 			"strict fake accepted a proposal at nonce + 1 -- the " +
@@ -2582,8 +2586,9 @@ func TestReservationAcceptanceTask_DepositWithoutPendingActionIsSkipped(t *testi
 
 	// Deliberately no seedPendingAcceptanceAction call: the deposit's
 	// current generation is the zero record (no reservation, no action).
-	// The acceptance task must skip it -- never call
-	// RequestReservationAcceptance to create one -- and return nil.
+	// The acceptance task must skip it -- it consumes the depositor's
+	// pending action, never requests one on the operator's behalf -- and
+	// return nil.
 	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
 
 	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
@@ -2597,14 +2602,6 @@ func TestReservationAcceptanceTask_DepositWithoutPendingActionIsSkipped(t *testi
 	}
 	if proposal != nil {
 		t.Errorf("expected nil proposal, got %v", proposal)
-	}
-	if recorded := ralc.GetReservationAcceptanceRequests(); len(recorded) != 0 {
-		t.Errorf(
-			"expected zero RequestReservationAcceptance submissions; the "+
-				"task must not create an action record -- the depositor "+
-				"is the only party that may request acceptance (got %d)",
-			len(recorded),
-		)
 	}
 }
 
@@ -2755,6 +2752,39 @@ func TestLocalChain_ValidateReservationAnchorProposal_RejectsInsideTimeoutMargin
 		TermSeconds:               86400,
 		TimeoutAt:                 uint32(time.Now().Add(24 * time.Hour).Unix()),
 	})
+	// Seed the state the strict fake mirrors from the on-chain
+	// validator so the far-future call below can pass every gate
+	// except the timeout margin: a Live wallet, a reserved deposit
+	// revealed through the reservation vault, and the configured
+	// parameters.
+	vault := testReservationVaultAddress
+	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+	lc.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationVault: vault,
+	})
+	lc.SetDepositRequest(
+		fundingTxHash,
+		fundingOutputIndex,
+		&tbtc.DepositChainRequest{
+			Amount:     2000000,
+			RevealedAt: time.Now().Add(-48 * time.Hour),
+			Vault:      &vault,
+		},
+	)
+	lc.SetReservedDeposit(depositKey, true)
+	lc.SetDepositMinAge(3600)
+
+	depositExtraInfo := struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	}{
+		Deposit: &tbtc.Deposit{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			// Far-future refund locktime, little-endian as stored on
+			// chain, so the 24-hour refund safety margin holds.
+			RefundLocktime: [4]byte{0x00, 0x79, 0xf7, 0x77},
+		},
+	}
 
 	proposal := &tbtc.ReservationAnchorProposal{
 		DepositFundingTxHash:      fundingTxHash,
@@ -2767,10 +2797,7 @@ func TestLocalChain_ValidateReservationAnchorProposal_RejectsInsideTimeoutMargin
 	if err := lc.ValidateReservationAnchorProposal(
 		walletPublicKeyHash,
 		proposal,
-		struct {
-			*tbtc.Deposit
-			FundingTx *bitcoin.Transaction
-		}{},
+		depositExtraInfo,
 	); err != nil {
 		t.Fatalf("far-future TimeoutAt should pass: %v", err)
 	}
@@ -2789,10 +2816,7 @@ func TestLocalChain_ValidateReservationAnchorProposal_RejectsInsideTimeoutMargin
 	if err := lc.ValidateReservationAnchorProposal(
 		walletPublicKeyHash,
 		proposal,
-		struct {
-			*tbtc.Deposit
-			FundingTx *bitcoin.Transaction
-		}{},
+		depositExtraInfo,
 	); err == nil {
 		t.Fatal(
 			"expected timeout margin rejection for TimeoutAt = now + 7198, got nil",
@@ -2820,6 +2844,15 @@ func TestLocalChain_ValidateReservationReanchorProposal_RejectsInsideTimeoutMarg
 		MinAmount:                 1000,
 		TermSeconds:               86400,
 		TimeoutAt:                 uint32(time.Now().Add(24 * time.Hour).Unix()),
+	})
+
+	// Seed the reservation record the source wallet custodies so the
+	// fake's custody check and the rest of the validator's
+	// preconditions hold; only the timeout margin is under test.
+	lc.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		State:               tbtc.ReservationStateActive,
+		RequestNonce:        0,
 	})
 
 	lc.SetWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})

@@ -3,6 +3,7 @@ package tbtcpg_test
 import (
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -679,17 +680,31 @@ type reservationReanchorLocalChain struct {
 	// retry's second candidate can succeed normally.
 	forceCapRevertFor [20]byte
 	capRevertConsumed bool
+	// forceAmountCapRevertFor, when non-zero, makes
+	// RequestReservationReanchor return a "wallet reserved amount cap
+	// exceeded" error for the given target wallet on the first
+	// invocation. It models a concurrent consumer filling the target's
+	// reserved amount up to (or past) the per-wallet amount cap between
+	// the caller's headroom pre-check and the request submission -- the
+	// race Run's amount-cap-revert branch exists to handle. Subsequent
+	// invocations fall through to the embedded LocalChain's real
+	// implementation so the retry's next candidate can succeed.
+	forceAmountCapRevertFor [20]byte
+	amountCapRevertConsumed bool
 }
 
 func newReservationReanchorLocalChain() *reservationReanchorLocalChain {
 	return &reservationReanchorLocalChain{LocalChain: tbtcpg.NewLocalChain()}
 }
 
-// RequestReservationReanchor simulates a cap-related revert race for the
-// wallet set via forceCapRevertFor on its first invocation; the
-// production task catches this with isReservationCapRevertError, evicts
-// the cached target, and retries with the next candidate, after which the
-// wrapper forwards to the embedded LocalChain's real implementation.
+// RequestReservationReanchor simulates capacity-revert races: for the
+// wallet set via forceCapRevertFor it returns a "wallet reservations cap
+// exceeded" error on its first invocation, and for the wallet set via
+// forceAmountCapRevertFor it returns a "wallet reserved amount cap
+// exceeded" error on its first invocation. The production task catches
+// either with isReservationCapRevertError, evicts the cached target,
+// and retries with the next candidate, after which the wrapper forwards
+// to the embedded LocalChain's real implementation.
 func (rrlc *reservationReanchorLocalChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
@@ -698,6 +713,11 @@ func (rrlc *reservationReanchorLocalChain) RequestReservationReanchor(
 		rrlc.forceCapRevertFor == targetWalletPublicKeyHash {
 		rrlc.capRevertConsumed = true
 		return [32]byte{}, errors.New("wallet reservations cap exceeded")
+	}
+	if !rrlc.amountCapRevertConsumed &&
+		rrlc.forceAmountCapRevertFor == targetWalletPublicKeyHash {
+		rrlc.amountCapRevertConsumed = true
+		return [32]byte{}, errors.New("wallet reserved amount cap exceeded")
 	}
 	return rrlc.LocalChain.RequestReservationReanchor(
 		reservationKey,
@@ -1041,6 +1061,188 @@ func TestReservationReanchorTask_CapRevertLeadsToNextCandidate(t *testing.T) {
 			submissions[0].TargetWalletPublicKeyHash,
 		)
 	}
+}
+
+// TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate is a
+// regression test for Run's amount-capacity branch on the re-anchor
+// request path: a first candidate target that passes the headroom
+// pre-check but whose reserved amount fills up to the per-wallet cap
+// before the request must be evicted and replaced by the next
+// eligible candidate -- and the fake chain itself must reject a
+// request whose target's reserved amount plus the anchor value
+// exceeds a configured cap, so the capacity gate is enforced on the
+// fake, not only by the wrapper's forced revert.
+func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T) {
+	sourceWalletPublicKeyHash := hexToByte20("4444444444444444444444444444444444444444")
+	filledTargetWalletPublicKeyHash := hexToByte20("5555555555555555555555555555555555555555")
+	alternateTargetWalletPublicKeyHash := hexToByte20("6666666666666666666666666666666666666666")
+
+	t.Run("fake chain enforces the target amount cap", func(t *testing.T) {
+		lc := tbtcpg.NewLocalChain()
+		// Configure a per-wallet reserved-amount cap the filled target
+		// (250000 reserved + 100000 anchor = 350000) breaches.
+		lc.SetReservationCaps(300000, 1000000)
+
+		resKey := big.NewInt(8001)
+		anchorTxHash, _ := bitcoin.NewHashFromString(
+			"8888888888888888888888888888888888888888888888888888888888888888",
+			bitcoin.ReversedByteOrder,
+		)
+		lc.SetReservation(resKey, &tbtc.Reservation{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+				Value: 100000,
+			},
+			State:        tbtc.ReservationStateActive,
+			RequestNonce: 0,
+		})
+
+		// The filled target already custodies a 250000 reservation, so
+		// its reserved amount plus this anchor value (350000) is over
+		// the 300000 cap.
+		fillKey := big.NewInt(8002)
+		lc.SetReservation(fillKey, &tbtc.Reservation{
+			WalletPublicKeyHash: filledTargetWalletPublicKeyHash,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     0,
+				},
+				Value: 250000,
+			},
+			State: tbtc.ReservationStateActive,
+		})
+		lc.SetWalletReservations(filledTargetWalletPublicKeyHash, []*big.Int{fillKey})
+
+		if _, err := lc.RequestReservationReanchor(
+			resKey,
+			filledTargetWalletPublicKeyHash,
+		); err == nil ||
+			!strings.Contains(err.Error(), "wallet reserved amount cap exceeded") {
+			t.Fatalf(
+				"expected the fake to reject the re-anchor request with "+
+					"the amount-cap revert when the target's reserved "+
+					"amount plus the anchor value exceeds the cap, got "+
+					"[%v]",
+				err,
+			)
+		}
+	})
+
+	t.Run("run evicts the filled target and proposes the alternate", func(t *testing.T) {
+		tbtcChain := newReservationReanchorLocalChain()
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+
+		blockCounter := tbtcpg.NewMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		tbtcChain.SetBlockCounter(blockCounter)
+
+		// Register the alternate target (oldest), then the filled
+		// target (newest): findTargetWallet scans registration events
+		// newest-first, so the filled target is the first candidate
+		// examined -- it passes the headroom pre-check and its request
+		// reverts on the amount cap, forcing eviction to the alternate.
+		if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+			&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+			&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: alternateTargetWalletPublicKeyHash},
+		); err != nil {
+			t.Fatal(err)
+		}
+		if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+			&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+			&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: filledTargetWalletPublicKeyHash},
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+		tbtcChain.SetWallet(filledTargetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+		tbtcChain.SetWallet(alternateTargetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
+		tbtcChain.SetLiveWalletsCount(2)
+
+		tbtcChain.SetMovingFundsParameters(
+			1000000,
+			1000000,
+			0,
+			0,
+			nil,
+			0,
+			0,
+			0,
+			0,
+			nil,
+			0,
+		)
+		tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+			ReservationTxMaxFee:      100000,
+			MaxReservationsPerWallet: 5,
+		})
+		btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+		resKey := big.NewInt(8101)
+		anchorTxHash, _ := bitcoin.NewHashFromString(
+			"8888888888888888888888888888888888888888888888888888888888888888",
+			bitcoin.ReversedByteOrder,
+		)
+		sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+			Version: 1,
+			Outputs: []*bitcoin.TransactionOutput{
+				{Value: 1},
+				{Value: 100000, PublicKeyScript: sourceWalletScript},
+			},
+		})
+		tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+				Value: 100000,
+			},
+			State:        tbtc.ReservationStateActive,
+			RequestNonce: 0,
+		})
+		tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, []*big.Int{resKey})
+
+		// Simulate the amount-cap race: the filled target's headroom
+		// pre-check passes, but a concurrent consumer pushes its
+		// reserved amount past the per-wallet cap between the pre-check
+		// and the request submission, so the first request reverts.
+		tbtcChain.forceAmountCapRevertFor = filledTargetWalletPublicKeyHash
+
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok || proposal == nil {
+			t.Fatalf("expected a proposal for the alternate target, got ok=%v, prop=%v", ok, proposal)
+		}
+		reanchorProposal, ok := proposal.(*tbtc.ReservationReanchorProposal)
+		if !ok {
+			t.Fatalf("unexpected proposal type: %T", proposal)
+		}
+		if reanchorProposal.TargetWalletPublicKeyHash != alternateTargetWalletPublicKeyHash {
+			t.Fatalf(
+				"expected proposal target = alternate [%x] after the "+
+					"filled target reverted on the amount cap, got [%x]",
+				alternateTargetWalletPublicKeyHash,
+				reanchorProposal.TargetWalletPublicKeyHash,
+			)
+		}
+	})
 }
 
 // TestReservationReanchorTask_ResumesPendingReanchorWithoutNewRequest

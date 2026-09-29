@@ -39,6 +39,13 @@ const reservationReanchorRequestWaitBlocks = uint64(6)
 // validator reject them.
 const reservationRequestTimeoutSafetyMarginSeconds = 2 * 60 * 60
 
+// reservationDepositRefundSafetyMarginSeconds mirrors
+// WalletProposalValidatorConstants.DEPOSIT_REFUND_SAFETY_MARGIN
+// (24 hours): the on-chain acceptance validator refuses to sign an
+// anchor whose refund becomes available less than a day from now, so a
+// wallet signing later cannot race the depositor's refund.
+const reservationDepositRefundSafetyMarginSeconds = 24 * 60 * 60
+
 // reservationReanchorInFlightRequest tracks a RequestReservationReanchor
 // submission that has not yet been resolved by its receipt, keyed by the
 // reservation key in the task's inFlightReanchorRequests map.
@@ -49,6 +56,13 @@ type reservationReanchorInFlightRequest struct {
 	// submittedAtBlock is the current block observed when the submission
 	// was recorded.
 	submittedAtBlock uint64
+	// sourceWalletPublicKeyHash is the wallet that hosted the reservation
+	// when the submission was recorded. It identifies the entry to
+	// forgetInFlightReanchorRequests if that wallet's reservation list no
+	// longer contains the key: a custody move that happened before the
+	// next Run round means nothing left to resolve there and the chain
+	// state alone drives any resume.
+	sourceWalletPublicKeyHash [20]byte
 }
 
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
@@ -204,6 +218,13 @@ func (rrt *ReservationReanchorTask) Run(
 			err,
 		)
 	}
+
+	// A reservation that left the wallet since the entry was recorded
+	// has nothing left to resolve under it: drop the in-flight entries
+	// that no longer appear in the wallet's reservation list before any
+	// path below (including the empty-list early return) can settle
+	// them.
+	rrt.forgetInFlightReanchorRequestsNotIn(walletPublicKeyHash, reservationKeys)
 
 	if len(reservationKeys) == 0 {
 		taskLogger.Info("wallet has no reservations to re-anchor")
@@ -611,7 +632,12 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		// sees this entry and resolves the request via its receipt
 		// (mined -> resume, reverted/dropped -> allow a new request,
 		// pending -> skip this round).
-		rrt.recordReanchorRequestInFlight(taskLogger, reservationKey, txHash)
+		rrt.recordReanchorRequestInFlight(
+			taskLogger,
+			sourceWalletPublicKeyHash,
+			reservationKey,
+			txHash,
+		)
 
 		// Same-round fast path: wait for the request to mine so this
 		// round builds the proposal directly rather than waiting for
@@ -943,12 +969,14 @@ func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 }
 
 // recordReanchorRequestInFlight records the just-submitted
-// RequestReservationReanchor transaction hash for the reservation. The
-// current block (or 0 if the block counter is unavailable) bounds the
-// receipt check's "not observed for this many blocks means dropped"
-// logic.
+// RequestReservationReanchor transaction hash for the reservation under
+// sourceWalletPublicKeyHash, the wallet that hosted the reservation when
+// the submission was recorded. The current block (or 0 if the block
+// counter is unavailable) bounds the receipt check's "not observed for
+// this many blocks means dropped" logic.
 func (rrt *ReservationReanchorTask) recordReanchorRequestInFlight(
 	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
 	reservationKey *big.Int,
 	txHash [32]byte,
 ) {
@@ -979,8 +1007,37 @@ func (rrt *ReservationReanchorTask) recordReanchorRequestInFlight(
 	defer rrt.inFlightReanchorRequestsMutex.Unlock()
 
 	rrt.inFlightReanchorRequests[reservationKey.Text(16)] = reservationReanchorInFlightRequest{
-		txHash:           txHash,
-		submittedAtBlock: submittedBlock,
+		txHash:                    txHash,
+		submittedAtBlock:          submittedBlock,
+		sourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
+	}
+}
+
+// forgetInFlightReanchorRequestsNotIn drops the in-flight entries for
+// sourceWalletPublicKeyHash whose reservation key is not in currentKeys,
+// called at the top of Run, just after the wallet's reservation list is
+// read: a reservation that has since left the wallet (moved to another
+// custody) has nothing left to resume under this wallet, so the chain
+// state alone drives any follow-up and the tracking entry would otherwise
+// leak for the task's lifetime. Entries hosted by any other wallet are
+// left untouched.
+func (rrt *ReservationReanchorTask) forgetInFlightReanchorRequestsNotIn(
+	sourceWalletPublicKeyHash [20]byte,
+	currentKeys []*big.Int,
+) {
+	present := make(map[string]bool, len(currentKeys))
+	for _, key := range currentKeys {
+		present[key.Text(16)] = true
+	}
+
+	rrt.inFlightReanchorRequestsMutex.Lock()
+	defer rrt.inFlightReanchorRequestsMutex.Unlock()
+
+	for key, entry := range rrt.inFlightReanchorRequests {
+		if entry.sourceWalletPublicKeyHash == sourceWalletPublicKeyHash &&
+			!present[key] {
+			delete(rrt.inFlightReanchorRequests, key)
+		}
 	}
 }
 
