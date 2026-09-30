@@ -42,7 +42,7 @@ func main() {
 	if !ok {
 		fmt.Fprintf(
 			os.Stderr,
-			"checkabi: unknown contract %q (known: Bridge, ReservationRouter, ReservationVault, WalletProposalValidator)",
+			"checkabi: unknown contract %q (known: Bridge, ReservationRouter, ReservationVault, WalletProposalValidator)\n",
 			name,
 		)
 		os.Exit(2)
@@ -130,10 +130,13 @@ func restoreParams(v any) {
 
 // internalTypeWithSpace re-inserts the space between the struct/enum/
 // contract prefix and the qualified type name that abigen's packer
-// strips. Non-prefixed internalType values pass through unchanged, so
-// an entry that already has the space is a no-op.
+// strips. Non-prefixed values and values that already have the space
+// pass through unchanged.
 func internalTypeWithSpace(v string) string {
 	for _, prefix := range []string{"struct", "enum", "contract"} {
+		if strings.HasPrefix(v, prefix+" ") {
+			return v
+		}
 		if strings.HasPrefix(v, prefix) {
 			return prefix + " " + strings.TrimPrefix(v, prefix)
 		}

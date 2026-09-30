@@ -1,9 +1,9 @@
 {
-  "Title": "cap rejection - wallet already at max active reservations count",
+  "Title": "boundary - deposit amount exactly the snapshotted minimum plus max fee is accepted",
   "ChainParameters": {
     "AverageBlockTime": 12,
     "CurrentBlock": 300000,
-    "DepositMinAge": 3600
+    "DepositMinAge": 7200
   },
   "WalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6",
   "ReservationVault": "0xReservationVaultAddress1234567890abcdef12345678",
@@ -11,7 +11,7 @@
     "State": "Live"
   },
   "ReservationParameters": {
-    "ReservationMinAmount": 100000,
+    "ReservationMinAmount": 1000000,
     "ReservationTxMaxFee": 5000,
     "ReservationMaxTotalAmount": 100000000,
     "ReservationTotalAmount": 0,
@@ -22,31 +22,43 @@
     "ReservationMaxSingleAmount": 5000000
   },
   "WalletCustody": {
-    "Count": 1,
-    "Amount": 2000000
+    "Count": 0,
+    "Amount": 0
   },
   "Global": {
-    "ActiveCount": 100,
+    "ActiveCount": 0,
     "MaxActive": 100
   },
   "PendingReservedDeposits": 0,
   "ReservedDeposits": [
     {
-      "FundingTxHash": "b1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f00",
+      "FundingTxHash": "c1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f02",
       "FundingOutputIndex": 0,
       "FundingTxConfirmations": 6,
       "WalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6",
       "Depositor": "934b98637ca318a4d6e7ca6ffd1690b8e77df637",
-      "BlindingFactor": "f9f0c90d00039524",
+      "BlindingFactor": "f9f0c90d00039523",
       "RefundPublicKeyHash": "e257eccafbc07c381642ce6e7e55120fb077fbed",
-      "RefundLocktime": "e0250162",
-      "Amount": 2000000,
+      "RefundLocktime": "80d8db70",
+      "Amount": 1005000,
       "RevealBlock": 290000,
-      "Age": 7200,
+      "Age": 10800,
       "SweptAt": 0,
-      "Vault": "0xReservationVaultAddress1234567890abcdef12345678"
+      "Vault": "0xReservationVaultAddress1234567890abcdef12345678",
+      "PendingAcceptanceAction": {
+        "RequestNonce": 1,
+        "TxMaxFee": 5000,
+        "MinAmount": 1000000,
+        "TermSeconds": 7776000,
+        "TargetWalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6"
+      }
     }
   ],
-  "ExpectedAnchorProposal": null,
+  "ExpectedAnchorProposal": {
+    "DepositFundingTxHash": "c1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f02",
+    "DepositFundingOutputIndex": 0,
+    "RequestNonce": 1,
+    "AnchorTxFee": 710
+  },
   "ExpectedErr": ""
 }

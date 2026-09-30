@@ -19,7 +19,7 @@
       "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
       "AnchorTxHash": "3333333333333333333333333333333333333333333333333333333333333333",
       "AnchorTxOutputIndex": 1,
-      "AnchorValue": 100000,
+      "AnchorValue": 200000,
       "State": "Active",
       "RequestNonce": 0,
       "HasPendingAction": false,

@@ -9,21 +9,9 @@
 // the per-concern files and reintroduce the old tbtc.go, silently dropping
 // whatever those later commits changed. Reconstructing the pre-split state
 // requires a manual merge, not a mechanical revert.
-// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for
-// per-concern implementations (tbtc_deposit.go, tbtc_dkg.go, tbtc_moving_funds.go,
-// tbtc_redemption.go, tbtc_wallet.go, tbtc_sortition.go, tbtc_inactivity.go).
-//
-// These files were split out of a single monolithic tbtc.go with no rename
-// markers git can detect (each file is a fresh addition, not a tracked move),
-// so a plain `git revert` of the split commit cannot be applied cleanly on
-// top of any later commit that also touches this package: it would re-delete
-// the per-concern files and reintroduce the old tbtc.go, silently dropping
-// whatever those later commits changed. Reconstructing the pre-split state
-// requires a manual merge, not a mechanical revert.
 package ethereum
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"encoding/binary"
 	"errors"
@@ -35,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	hostchain "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -677,6 +664,7 @@ func convertReservationFromAbiType(
 		RequestNonce:          abiReservation.RequestNonce,
 		RetryCredit:           abiReservation.RetryCredit,
 		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
+		ReanchorCooldownUntil: abiReservation.ReanchorCooldownUntil,
 	}, nil
 }
 
@@ -689,6 +677,8 @@ func convertReservationFromAbiType(
 //   - `UsedRetryCredit`, `Watchtower{Default,LevelOne,LevelTwo}Delay`,
 //     `RetryCreditSourceNonce`: written for governance / late-settlement
 //     reconciliation but not read by the operator client in m1.
+//   - `DissolutionDelay`: snapshotted by acceptance generations for the
+//     dissolution path, which the operator client does not drive in m1.
 //
 // The on-chain `actionDataHash` field is polymorphic across action types:
 // it carries the keccak256 of the redeemer output script for redemptions,
@@ -843,81 +833,31 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 
 // RequestReservationReanchor asks the Bridge (via its ReservationRouter
 // delegatecall target) to start a new reservation re-anchor action generation
-// for the given reservation, targeting the given wallet. The returned
-// transaction hash lets the caller track the submission across coordination
-// rounds via GetReservationReanchorRequestReceipt; the submission launches
-// mining and gas bumping in the background and returns before the
-// transaction is mined.
+// for the given reservation, targeting the given wallet.
 func (tc *TbtcChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
-) ([32]byte, error) {
+) error {
 	gasEstimate, err := tc.reservationRouter.RequestReservationReanchorGasEstimate(
 		reservationKey,
 		targetWalletPublicKeyHash,
 	)
 	if err != nil {
-		return [32]byte{}, err
+		return err
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
-	tx, err := tc.reservationRouter.RequestReservationReanchor(
+	_, err = tc.reservationRouter.RequestReservationReanchor(
 		reservationKey,
 		targetWalletPublicKeyHash,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},
 	)
-	if err != nil {
-		return [32]byte{}, err
-	}
 
-	return [32]byte(tx.Hash().Bytes()), nil
-}
-
-// GetReservationReanchorRequestReceipt reports the mining status of a
-// previously submitted RequestReservationReanchor transaction, as defined
-// by the tbtc.ReservationReanchorRequestReceiptStatus values. The receipt
-// lookup is bounded by a 30-second deadline, matching the baseChain header
-// helpers.
-//
-// A receipt that does not exist yet - which go-ethereum reports as
-// ethereum.NotFound for unknown or unmined hashes - maps to NotFound: the
-// caller treats NotFound and Pending identically, bounded by the block the
-// submission happened in. Every other lookup error (RPC outage, timeout,
-// transport failure) is returned to the caller so an in-flight request is
-// not mistaken for a dropped one.
-func (tc *TbtcChain) GetReservationReanchorRequestReceipt(
-	txHash [32]byte,
-) (tbtc.ReservationReanchorRequestReceiptStatus, error) {
-	ctx, cancelCtx := context.WithTimeout(
-		context.Background(),
-		30*time.Second,
-	)
-	defer cancelCtx()
-
-	receipt, err := tc.baseChain.client.TransactionReceipt(
-		ctx,
-		common.BytesToHash(txHash[:]),
-	)
-	if err != nil {
-		if errors.Is(err, hostchain.NotFound) {
-			return tbtc.ReservationReanchorRequestReceiptNotFound, nil
-		}
-		return tbtc.ReservationReanchorRequestReceiptNotFound, fmt.Errorf(
-			"cannot fetch transaction receipt: %w",
-			err,
-		)
-	}
-	if receipt == nil {
-		return tbtc.ReservationReanchorRequestReceiptNotFound, nil
-	}
-	if receipt.Status == 0 {
-		return tbtc.ReservationReanchorRequestReceiptReverted, nil
-	}
-	return tbtc.ReservationReanchorRequestReceiptMined, nil
+	return err
 }
 
 // SubmitReservationAcceptanceProof submits an SPV proof for the given
@@ -1681,18 +1621,19 @@ func (tc *TbtcChain) ActiveReservationsCount() (uint32, uint32, error) {
 	return activeReservationsCount.Count, activeReservationsCount.MaxActive, nil
 }
 
-// reservationVaultBindings returns the cached, per-vault-address bindings
-// (the ReservationVault itself and the TBTC token it holds its fee
-// reserve in) constructed against a vault address read from the Bridge's
-// on-chain reservation parameters. Successful constructions are cached per
-// vault address. Failures are not cached: they are usually transient RPC
-// errors (for example reading tbtcToken()), and caching them would disable
-// the fee gauges until the process restarts.
+// reservationVaultBindings holds the ReservationVault contract and the TBTC
+// token contract the vault keeps its fee reserve in.
 type reservationVaultBindings struct {
 	vault *tbtccontract.ReservationVault
 	tbtc  *tbtccontract.TBTC
 }
 
+// reservationVaultBindings returns the cached, per-vault-address bindings
+// (the ReservationVault itself and the TBTC token it holds its fee
+// reserve in) for the given vault address. Successful constructions are
+// cached per vault address. Failures are not cached: they are usually
+// transient RPC errors (for example reading tbtcToken()), and caching them
+// would disable the fee gauges until the process restarts.
 func (tc *TbtcChain) reservationVaultBindings(vaultAddress common.Address) (*reservationVaultBindings, error) {
 	if bindings, ok := tc.vaultBindings.Load(vaultAddress); ok {
 		return bindings.(*reservationVaultBindings), nil
@@ -1743,21 +1684,16 @@ func (tc *TbtcChain) reservationVaultBindings(vaultAddress common.Address) (*res
 	return bindings, nil
 }
 
-// reservationVaultAddress resolves the on-chain reservation vault address
+// decodeReservationVaultAddress decodes a reservation vault address read
 // from the Bridge's reservation parameters. It returns the zero address
 // when the vault is not configured (zero address in the parameters) and an
-// error only when the configured address cannot be decoded as a valid
-// 20-byte address, so callers can distinguish "no vault" (a skip, not
-// an error) from a genuinely malformed configuration.
-func (tc *TbtcChain) reservationVaultAddress() (common.Address, error) {
-	reservationParameters, err := tc.ReservationParameters()
-	if err != nil {
-		return common.Address{}, fmt.Errorf(
-			"cannot get reservation parameters: [%v]",
-			err,
-		)
-	}
-	vaultAddressString := string(reservationParameters.ReservationVault)
+// error only when the address cannot be decoded as a valid 20-byte
+// address, so callers can distinguish "no vault" (a skip, not an error)
+// from a genuinely malformed configuration.
+func decodeReservationVaultAddress(
+	reservationVault chain.Address,
+) (common.Address, error) {
+	vaultAddressString := string(reservationVault)
 	vaultAddressBytes, err := hexutil.Decode(vaultAddressString)
 	if err != nil || len(vaultAddressBytes) != common.AddressLength {
 		if err == nil {
@@ -1775,14 +1711,16 @@ func (tc *TbtcChain) reservationVaultAddress() (common.Address, error) {
 	return common.BytesToAddress(vaultAddressBytes), nil
 }
 
-// ReservationVaultFeeDebtSat returns the ReservationVault's outstanding
-// in-kind fee debt in satoshi, read from the vault's inKindFeeDebtSat
-// view. The vault address is resolved from the on-chain reservation
-// parameters; when it is the zero address the vault is not configured
-// and the method returns 0 with a nil error: the skip sentinel the
-// metrics side consumes, not a chain error.
-func (tc *TbtcChain) ReservationVaultFeeDebtSat() (uint64, error) {
-	vaultAddress, err := tc.reservationVaultAddress()
+// ReservationVaultFeeDebtSat returns the given ReservationVault's
+// outstanding in-kind fee debt in satoshi, read from the vault's
+// inKindFeeDebtSat view. The caller passes the vault address it already
+// read from the reservation parameters; when it is the zero address the
+// vault is not configured and the method returns 0 with a nil error: the
+// skip sentinel the metrics side consumes, not a chain error.
+func (tc *TbtcChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
+	vaultAddress, err := decodeReservationVaultAddress(reservationVault)
 	if err != nil {
 		return 0, err
 	}
@@ -1800,14 +1738,16 @@ func (tc *TbtcChain) ReservationVaultFeeDebtSat() (uint64, error) {
 	return debtSat, nil
 }
 
-// ReservationVaultFeeReserveTbtcBaseUnits returns the ReservationVault's
-// TBTC fee-reserve balance in TBTC base units (whole TBTC x 1e18). The
-// value is a token balance of a 1e18-scale token, which can exceed
-// uint64 range, so it is returned as *big.Int. When the vault is not
-// configured (zero address) the method returns zero with a nil error,
-// mirroring ReservationVaultFeeDebtSat's skip sentinel.
-func (tc *TbtcChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
-	vaultAddress, err := tc.reservationVaultAddress()
+// ReservationVaultFeeReserveTbtcBaseUnits returns the given
+// ReservationVault's TBTC fee-reserve balance in TBTC base units (whole
+// TBTC x 1e18). The value is a token balance of a 1e18-scale token, which
+// can exceed uint64 range, so it is returned as *big.Int. When the vault
+// is not configured (zero address) the method returns zero with a nil
+// error, mirroring ReservationVaultFeeDebtSat's skip sentinel.
+func (tc *TbtcChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
+	vaultAddress, err := decodeReservationVaultAddress(reservationVault)
 	if err != nil {
 		return new(big.Int), err
 	}

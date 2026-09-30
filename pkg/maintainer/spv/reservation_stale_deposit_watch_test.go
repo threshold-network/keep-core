@@ -37,58 +37,6 @@ func locktimeForDeadline(deadline uint32) [4]byte {
 	return locktime
 }
 
-// seedPastDepositRevealedEvent installs a DepositRevealed event for the
-// given wallet/funding outpoint at refundLocktime, discoverable by
-// snapshotRefundDeadline's wallet-keyed event scan.
-func seedPastDepositRevealedEvent(
-	t *testing.T,
-	spvChain *localChain,
-	wallet [20]byte,
-	fundingTxHash bitcoin.Hash,
-	fundingOutputIndex uint32,
-	currentBlock uint64,
-	refundLocktime [4]byte,
-) {
-	t.Helper()
-	blockCounter := newMockBlockCounter()
-	blockCounter.SetCurrentBlock(currentBlock)
-	spvChain.setBlockCounter(blockCounter)
-
-	startBlock := uint64(0)
-	if currentBlock > reservationDefaultLookBackBlocks {
-		startBlock = currentBlock - reservationDefaultLookBackBlocks
-	}
-	endBlock := currentBlock
-	if err := spvChain.addPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          startBlock,
-			EndBlock:            &endBlock,
-			WalletPublicKeyHash: [][20]byte{wallet},
-		},
-		&tbtc.DepositRevealedEvent{
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  fundingOutputIndex,
-			WalletPublicKeyHash: wallet,
-			RefundLocktime:      refundLocktime,
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// seedStaleDeadline pre-populates the watcher's refund-deadline memo
-// directly, standing in for a pollTick discovery pass: production
-// snapshots the deadline from the DepositRevealed event at discovery
-// time, so most of these tests - which exercise CheckStaleReservedDeposit
-// directly - do not need to also seed a matching reveal event.
-func seedStaleDeadline(
-	watcher *ReservationStaleDepositWatcher,
-	depositKey *big.Int,
-	deadline uint32,
-) {
-	watcher.refundDeadlineMemo[depositKey.String()] = deadline
-}
-
 // TestReverseUint32 pins the exact byte order the Bridge derives from a
 // reveal-time RefundLocktime. Deposit.sol documents the event field as
 // "the deposit refund locktime as 4-byte LE", and the on-chain deadline
@@ -117,7 +65,7 @@ func TestReservationStaleDepositWatcher_NonReservedDepositIsSkipped(t *testing.T
 	spvChain.setReservedDeposit(reservationDepositKey(0xB001), walletPKH(), false)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	res, err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB001), 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB001), 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,9 +99,8 @@ func TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline(t *testi
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,9 +137,8 @@ func TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline(t *t
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,9 +177,8 @@ func TestReservationStaleDepositWatcher_PendingActionNotNotifiedAfterDeadline(t 
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -254,8 +199,8 @@ func TestReservationStaleDepositWatcher_PendingActionNotNotifiedAfterDeadline(t 
 // (ReservedDepositWallet, GetReservation, GetReservationAction),
 // delegating every other method to the embedded Chain. It verifies the
 // "no chain reads before the deadline" invariant: with the deadline
-// memoized, the pre-deadline check stays in-memory only, and only the
-// post-deadline check reads on-chain state.
+// taken from the reveal, the pre-deadline check stays in-memory only,
+// and only the post-deadline check reads on-chain state.
 type staleReadCountingChain struct {
 	Chain
 	reservedDepositWalletCalls int
@@ -312,9 +257,8 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 	// gate (see the identical comment in
 	// TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking)
 	// never masks the notification this test asserts.
-	seedStaleDeadline(watcher, key, 10_000)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 10_000, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -333,7 +277,7 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 		)
 	}
 
-	res, err = watcher.CheckStaleReservedDeposit(key, 10_601)
+	res, err = watcher.CheckStaleReservedDeposit(key, 10_000, 10_601)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -376,9 +320,8 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		})
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-		seedStaleDeadline(watcher, key, 100)
 
-		res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+		res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -392,7 +335,7 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		// The notify transaction mines: the record's wallet field clears.
 		spvChain.setReservedDeposit(key, [20]byte{}, true)
 
-		res, err = watcher.CheckStaleReservedDeposit(key, 5_060)
+		res, err = watcher.CheckStaleReservedDeposit(key, 100, 5_060)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -414,9 +357,8 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		spvChain.setReservedDeposit(key, [20]byte{}, true)
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-		seedStaleDeadline(watcher, key, 100)
 
-		res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+		res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -449,10 +391,9 @@ func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
 	// First tick: submit the notification, awaiting confirmation.
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -464,7 +405,7 @@ func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing
 	// neither resubmit nor evict: the wallet field is still non-zero
 	// (the notify transaction has not been observed to take effect), so
 	// the deposit stays tracked rather than being lost.
-	res, err = watcher.CheckStaleReservedDeposit(key, 5_060)
+	res, err = watcher.CheckStaleReservedDeposit(key, 100, 5_060)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -480,7 +421,7 @@ func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing
 	// actionTimeoutRenotifyInterval elapses, the watcher must retry
 	// rather than treat the deposit as permanently resolved or lose it.
 	renotifyAfter := 5_000 + uint32(actionTimeoutRenotifyInterval.Seconds()) + 1
-	res, err = watcher.CheckStaleReservedDeposit(key, renotifyAfter)
+	res, err = watcher.CheckStaleReservedDeposit(key, 100, renotifyAfter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -516,10 +457,9 @@ func TestReservationStaleDepositWatcher_RenotifyBackoffSurvivesNowBeforeNotified
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
 	// First tick: submit the notification, recording notifiedAt = 5_000.
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -533,7 +473,7 @@ func TestReservationStaleDepositWatcher_RenotifyBackoffSurvivesNowBeforeNotified
 	// than the renotify interval, so the code falls through and
 	// resubmits immediately. The guard must keep this call in the
 	// backoff window instead.
-	res, err = watcher.CheckStaleReservedDeposit(key, 4_000)
+	res, err = watcher.CheckStaleReservedDeposit(key, 100, 4_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -553,7 +493,7 @@ func TestReservationStaleDepositWatcher_NilDepositKeyError(t *testing.T) {
 	spvChain := newLocalChain()
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	res, err := watcher.CheckStaleReservedDeposit(nil, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(nil, 100, 5_000)
 	if err == nil {
 		t.Fatal("expected error for nil deposit key, got nil")
 	}
@@ -570,9 +510,9 @@ func TestReservationStaleDepositWatcher_ReservedDepositWalletChainError(t *testi
 	spvChain.reservedDepositWalletErr = fmt.Errorf("rpc unavailable")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	// No memo seeded: the deadline snapshot's own ReservedDepositWallet
-	// read fails first.
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	// Past the deadline, the first chain read - ReservedDepositWallet -
+	// fails.
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err == nil {
 		t.Fatal("expected error when ReservedDepositWallet fails, got nil")
 	}
@@ -591,12 +531,11 @@ func TestReservationStaleDepositWatcher_GetReservationChainError(t *testing.T) {
 	wallet := walletPKH()
 	spvChain.setReservedDeposit(key, wallet, true)
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
-	// No spvChain.setReservation: GetReservation returns an error.
+	spvChain.getReservationErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err == nil {
 		t.Fatal("expected error when GetReservation fails, got nil")
 	}
@@ -621,12 +560,11 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 	spvChain.setReservedDeposit(key, wallet, true)
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
 	spvChain.setReservation(key, &tbtc.Reservation{RequestNonce: 1})
-	// GetReservationAction is NOT seeded, so it returns an error.
+	spvChain.getReservationActionErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 10_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 10_000)
 	if err == nil {
 		t.Fatal("expected error on transient GetReservationAction RPC failure, got nil")
 	}
@@ -667,9 +605,8 @@ func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesCurrentGeneration
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -683,98 +620,6 @@ func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesCurrentGeneration
 	}
 	if diff := deep.Equal(key, calls[0]); diff != nil {
 		t.Errorf("unexpected notified key: %v", diff)
-	}
-}
-
-// TestReservationStaleDepositWatcher_RefundDeadlineFromRevealEvent covers
-// the deadline snapshot's derivation path: a deposit checked without a
-// pre-populated memo (not yet discovered by pollTick) has its deadline
-// recovered from its own DepositRevealed event's RefundLocktime, and
-// that decoded value must be honored precisely, both for "not yet
-// reached" and "notify".
-func TestReservationStaleDepositWatcher_RefundDeadlineFromRevealEvent(t *testing.T) {
-	spvChain := newLocalChain()
-
-	wallet := walletPKH()
-	fundingTxHash, err := bitcoin.NewHashFromString(
-		"585b6699f42291d1a9d0776b75f04c295ea203f83504349db11e94fdae7d1b2c",
-		bitcoin.InternalByteOrder,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fundingOutputIndex := uint32(0)
-
-	key := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
-	spvChain.setReservedDeposit(key, wallet, true)
-	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
-	spvChain.setReservation(key, &tbtc.Reservation{RequestNonce: 0})
-
-	seedPastDepositRevealedEvent(
-		t, spvChain, wallet, fundingTxHash, fundingOutputIndex, 0,
-		locktimeForDeadline(4_600),
-	)
-
-	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-
-	// now == the exact snapshotted deadline: the contract's gate is
-	// strictly-greater-than, so this must still defer.
-	res, err := watcher.CheckStaleReservedDeposit(key, 4_600)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != StaleDepositResolutionKeep {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
-	}
-	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
-		t.Fatalf("expected zero notifications at the exact deadline, got %d", len(calls))
-	}
-
-	// now strictly past the deadline, with no requested action
-	// generation (RequestNonce == 0): notification-eligible. now must
-	// also clear the first-attempt stagger window: deadline (4_600)
-	// plus the maximum possible reservationOperatorStaggerOffset
-	// (bounded by actionTimeoutRenotifyInterval, 600s), so 5_201.
-	res, err = watcher.CheckStaleReservedDeposit(key, 5_201)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != StaleDepositResolutionKeep {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionKeep, res)
-	}
-	calls := spvChain.getSubmittedStaleReservedDeposits()
-	if len(calls) != 1 {
-		t.Fatalf("expected one stale notification, got %d", len(calls))
-	}
-	if diff := deep.Equal(key, calls[0]); diff != nil {
-		t.Errorf("unexpected notified key: %v", diff)
-	}
-}
-
-// TestReservationStaleDepositWatcher_NoMatchingRevealEventPropagatesError
-// covers the derivation miss path: no DepositRevealed event can be found
-// for the deposit within the catch-up window, so the deadline cannot be
-// snapshotted and the check must propagate an error rather than guess.
-func TestReservationStaleDepositWatcher_NoMatchingRevealEventPropagatesError(t *testing.T) {
-	spvChain := newLocalChain()
-	spvChain.setBlockCounter(newMockBlockCounter())
-
-	key := reservationDepositKey(0xB013)
-	wallet := walletPKH()
-	spvChain.setReservedDeposit(key, wallet, true)
-	// No seedPastDepositRevealedEvent call: the scan finds nothing.
-
-	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
-	if err == nil {
-		t.Fatal("expected error when no matching deposit revealed event exists, got nil")
-	}
-	if res != StaleDepositResolutionUnknown {
-		t.Fatalf("expected resolution %v, got %v", StaleDepositResolutionUnknown, res)
-	}
-
-	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
-		t.Fatalf("expected no notifications on chain error, got %d", len(calls))
 	}
 }
 
@@ -793,9 +638,8 @@ func TestReservationStaleDepositWatcher_NotifierError(t *testing.T) {
 	spvChain.notifyStaleReservedDepositErr = fmt.Errorf("notifier unavailable")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	seedStaleDeadline(watcher, key, 100)
 
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err == nil {
 		t.Fatal("expected error when the notifier fails, got nil")
 	}
@@ -806,7 +650,7 @@ func TestReservationStaleDepositWatcher_NotifierError(t *testing.T) {
 
 // TestReservationStaleDepositWatcher_ZeroWalletSkips verifies that a
 // deposit whose reserved-deposit record is already cleared (wallet field
-// zero) when the deadline snapshot is attempted resolves Drop without
+// zero) once its deadline has passed resolves Drop without
 // any notification.
 func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 	spvChain := newLocalChain()
@@ -815,7 +659,7 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 	spvChain.setReservedDeposit(key, [20]byte{}, true)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	res, err := watcher.CheckStaleReservedDeposit(key, 5_000)
+	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -849,7 +693,7 @@ func (c *staleDepositEventCountingChain) PastDepositRevealedEvents(
 // TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead
 // pins the discovery gate: a newly observed reveal whose vault matches
 // the reservation vault is tracked directly from the event, with its
-// refund deadline memoized from the event's RefundLocktime, so the
+// refund deadline taken from the event's RefundLocktime, so the
 // pre-deadline check performs no per-deposit chain read - and a
 // deposit whose record has since cleared on-chain is retired by the
 // post-deadline check's ReservedDepositWallet read alone, without
@@ -873,7 +717,7 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
 
 	fundingTxHash := bitcoin.Hash{0x05}
 	fundingOutputIndex := uint32(0)
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	if err := inner.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
 		&tbtc.DepositRevealedEvent{
@@ -910,7 +754,7 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
 
 	// First tick, now (1_000) is far before the deadline (50_000): the
-	// reveal is discovered and tracked, with its deadline memoized,
+	// reveal is discovered and tracked, with its deadline taken from the event,
 	// and the check stays in-memory.
 	trackedCount, ok := watcher.pollTick(1_000)
 	if !ok {
@@ -983,7 +827,7 @@ func TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline(
 
 	fundingTxHash := bitcoin.Hash{0x05}
 	fundingOutputIndex := uint32(1)
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	if err := inner.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
 		&tbtc.DepositRevealedEvent{

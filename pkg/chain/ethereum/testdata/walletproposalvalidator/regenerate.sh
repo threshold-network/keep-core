@@ -14,13 +14,17 @@
 #                                    StateDB), never reimplementing it in Go.
 #
 # Provenance of the currently vendored WalletProposalValidator.json:
-#   commit:        e635e2292fbb6f2c39d835fb0b3861c032934bd0
-#                  (threshold-network/tbtc-v2 branch fix/m1-cross-repo-review,
-#                  on top of reservations-upgrade @ 9f8f5ef1). Includes the
-#                  snapshotted-minAmount check in
-#                  validateReservationAnchorProposal.
+#   commit:        eec999aad43b3913df378840773348e17f68f1ba
+#                  (threshold-network/tbtc-v2, merge of #1161 into
+#                  reservations-upgrade). The same commit is pinned as
+#                  TBTC_V2_REF in the reservation-router-vendored-fallback-
+#                  verify job of .github/workflows/client.yml, which checks
+#                  this file against its own compile of that commit with
+#                  verify.sh. Built with `yarn install && yarn build` in
+#                  tbtc-v2's solidity/ directory, as that job does.
 #   Re-run this script against a newer tbtc-v2 build whenever the
-#   validator changes, and update this note.
+#   validator changes, bump TBTC_V2_REF to the same commit, and update
+#   this note.
 #
 # Usage:
 #   TBTC_V2_BUILD_DIR=/path/to/tbtc-v2/solidity/build ./regenerate.sh
@@ -28,15 +32,14 @@
 # TBTC_V2_BUILD_DIR must point at a hardhat build/ directory (i.e. the
 # directory containing contracts/bridge/WalletProposalValidator.sol/
 # WalletProposalValidator.json) produced by `yarn build` in the tbtc-v2
-# solidity package. Defaults to the sibling tbtc-v2-m1fix worktree used
-# during development of this harness.
+# solidity package.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOLC="${SOLC:-solc}"
 
-TBTC_V2_BUILD_DIR="${TBTC_V2_BUILD_DIR:-$HERE/../../../../../../tbtc-v2-m1fix/solidity/build}"
+: "${TBTC_V2_BUILD_DIR:?set TBTC_V2_BUILD_DIR to a tbtc-v2 solidity/build directory (run yarn build there first)}"
 VALIDATOR_ARTIFACT="$TBTC_V2_BUILD_DIR/contracts/bridge/WalletProposalValidator.sol/WalletProposalValidator.json"
 
 if [[ ! -f "$VALIDATOR_ARTIFACT" ]]; then
@@ -46,8 +49,10 @@ if [[ ! -f "$VALIDATOR_ARTIFACT" ]]; then
 fi
 
 echo "compiling StubBridge.sol with $($SOLC --version | tail -1)..."
-"$SOLC" --optimize --optimize-runs 200 --via-ir --combined-json abi,bin \
-    "$HERE/StubBridge.sol" >"$HERE/.stub-combined.json"
+# Compile by relative path: solc embeds the source path in the bytecode
+# metadata, so an absolute path would change StubBridge.json per machine.
+(cd "$HERE" && "$SOLC" --optimize --optimize-runs 200 --via-ir \
+    --combined-json abi,bin StubBridge.sol) >"$HERE/.stub-combined.json"
 
 python3 - "$HERE/.stub-combined.json" "$HERE/StubBridge.json" <<'PY'
 import json

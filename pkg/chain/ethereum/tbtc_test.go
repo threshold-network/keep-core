@@ -144,6 +144,7 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 			RetryCredit:           true,
 			DissolutionEligibleAt: 777,
 			CumulativeReanchorFee: 888, // must not appear anywhere in the output
+			ReanchorCooldownUntil: 999,
 		}
 
 		expected := &tbtc.Reservation{
@@ -165,6 +166,7 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 			RequestNonce:          666,
 			RetryCredit:           true,
 			DissolutionEligibleAt: 777,
+			ReanchorCooldownUntil: 999,
 		}
 
 		actual, err := convertReservationFromAbiType(abiReservation)
@@ -201,6 +203,10 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 		ActionDataHash:         actionDataHash,
 		SourceAnchorUtxoHash:   [32]byte{0x99, 0x88, 0x77, 0x66},
 		IsPartial:              true,
+		// Distinct non-zero snapshots so a dropped or swapped mapping
+		// fails the comparison below instead of matching zero to zero.
+		TermSeconds: 1209600,
+		MinAmount:   25000,
 	}
 
 	// The action-type-to-hash-field routing (redemption -> redeemer output
@@ -257,6 +263,8 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 				RedeemerOutputScriptHash:  test.expectedRedeemerOutputScriptHash,
 				ExpectedMainUtxoHash:      test.expectedExpectedMainUtxoHash,
 				IsPartial:                 true,
+				TermSeconds:               1209600,
+				MinAmount:                 25000,
 			}
 
 			if !reflect.DeepEqual(expected, action) {

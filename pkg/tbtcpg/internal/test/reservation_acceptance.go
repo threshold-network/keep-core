@@ -39,15 +39,14 @@ type ReservedDepositScenario struct {
 
 	// PendingAcceptanceAction, when non-nil, instructs the test driver to
 	// seed the deposit's current generation as a Pending Acceptance action
-	// record targeting WalletPublicKeyHash. The acceptance task only
-	// proposes against deposits whose current generation is exactly that
-	// record (mirroring WalletProposalValidator.sol's
-	// validateReservationAnchorProposal precondition), so scenarios that
-	// expect a proposal must seed one here with the live parameters'
-	// snapshots as they stood at the depositor's request time. Scenarios
-	// that expect rejection at any earlier cap gate (wallet state, per-wallet
-	// count, per-wallet amount, single-amount, global total, per-deposit
-	// minimum) leave this nil and reject before any action lookup happens.
+	// record targeting TargetWalletPublicKeyHash, together with the
+	// ReservationAcceptanceRequested event the depositor's request emits.
+	// The acceptance task only discovers deposits through that event and
+	// only proposes against deposits whose current generation is exactly
+	// that record (mirroring WalletProposalValidator.sol's
+	// validateReservationAnchorProposal precondition), so every scenario
+	// that should reach a signer-time rule must seed one here, with the
+	// parameter snapshots as they stood at the depositor's request time.
 	PendingAcceptanceAction *PendingAcceptanceActionScenario
 
 	parsedFundingTxHash bitcoin.Hash
@@ -191,6 +190,7 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 		MinAmount                 uint64
 		TermSeconds               uint32
 		TargetWalletPublicKeyHash string
+		TimeoutAt                 uint32
 	}
 
 	type reservedDepositScenarioJSON struct {
@@ -316,8 +316,6 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 
 	rats.PendingReservedDeposits = unmarshaled.PendingReservedDeposits
 
-	now := time.Now()
-
 	rats.ReservedDeposits = make([]*ReservedDepositScenario, 0)
 	for _, rd := range unmarshaled.ReservedDeposits {
 		fundingTxHash, err := bitcoin.NewHashFromString(
@@ -344,6 +342,7 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 				MinAmount:                 rd.PendingAcceptanceAction.MinAmount,
 				TermSeconds:               rd.PendingAcceptanceAction.TermSeconds,
 				TargetWalletPublicKeyHash: rd.PendingAcceptanceAction.TargetWalletPublicKeyHash,
+				TimeoutAt:                 rd.PendingAcceptanceAction.TimeoutAt,
 			}
 		}
 
@@ -377,17 +376,25 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 		rats.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
 	}
 
-	_ = now
 	return nil
 }
 
 // ReservedDeposit is the materialized form of a reserved deposit scenario,
 // populated by the test driver once the chain state is set up.
 type ReservedDeposit struct {
+	// FundingTxHash is the hash of FundingTx, the deposit's real funding
+	// transaction. LabelFundingTxHash is the scenario's FundingTxHash,
+	// which only labels the deposit when the scenario gives no
+	// FundingTxHex; ExpectedAnchorProposal refers to deposits by label.
 	FundingTxHash       bitcoin.Hash
+	LabelFundingTxHash  bitcoin.Hash
 	FundingOutputIndex  uint32
 	FundingTx           *bitcoin.Transaction
 	WalletPublicKeyHash [20]byte
+	Depositor           chain.Address
+	BlindingFactor      [8]byte
+	RefundPublicKeyHash [20]byte
+	RefundLocktime      [4]byte
 	RevealBlock         uint64
 	RevealedAt          time.Time
 	SweptAt             time.Time
@@ -396,7 +403,11 @@ type ReservedDeposit struct {
 }
 
 // Materialize converts a scenario row into a fully-typed ReservedDeposit
-// the test driver can wire into the local chain.
+// the test driver can wire into the local chain. When the scenario gives
+// no FundingTxHex, a funding transaction whose output at
+// FundingOutputIndex locks Amount with the deposit's P2WSH script is
+// built from the row's reveal fields, so the deposit passes the strict
+// validator's extra-info checks.
 func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 	if rds == nil {
 		return nil, fmt.Errorf("nil scenario deposit")
@@ -416,6 +427,58 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 	if len(rds.Vault) > 0 {
 		addr := chain.Address(rds.Vault)
 		vault = &addr
+	}
+
+	var blindingFactor [8]byte
+	copy(blindingFactor[:], hexToSlice(rds.BlindingFactor))
+	var refundPublicKeyHash [20]byte
+	copy(refundPublicKeyHash[:], hexToSlice(rds.RefundPublicKeyHash))
+	var refundLocktime [4]byte
+	copy(refundLocktime[:], hexToSlice(rds.RefundLocktime))
+
+	fundingTx := rds.parsedFundingTx
+	if fundingTx == nil {
+		depositScript, err := (&tbtc.Deposit{
+			Depositor:           chain.Address(rds.Depositor),
+			BlindingFactor:      blindingFactor,
+			WalletPublicKeyHash: walletHash,
+			RefundPublicKeyHash: refundPublicKeyHash,
+			RefundLocktime:      refundLocktime,
+		}).Script()
+		if err != nil {
+			return nil, fmt.Errorf("cannot build deposit script: [%w]", err)
+		}
+		depositLockingScript, err := bitcoin.PayToWitnessScriptHash(
+			bitcoin.WitnessScriptHash(depositScript),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		outputs := make([]*bitcoin.TransactionOutput, rds.FundingOutputIndex+1)
+		for i := range outputs {
+			outputs[i] = &bitcoin.TransactionOutput{
+				PublicKeyScript: append([]byte{0x00, 0x14}, make([]byte, 20)...),
+			}
+		}
+		outputs[rds.FundingOutputIndex] = &bitcoin.TransactionOutput{
+			Value:           int64(rds.Amount),
+			PublicKeyScript: depositLockingScript,
+		}
+
+		fundingTx = &bitcoin.Transaction{
+			Version: 1,
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					// The label makes every scenario deposit's funding
+					// transaction, and so its hash, distinct.
+					TransactionHash: rds.parsedFundingTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			}},
+			Outputs: outputs,
+		}
 	}
 
 	age := time.Duration(rds.Age) * time.Second
@@ -445,14 +508,20 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 			MinAmount:                 rds.PendingAcceptanceAction.MinAmount,
 			TermSeconds:               rds.PendingAcceptanceAction.TermSeconds,
 			TimeoutAt:                 timeoutAt,
+			Amount:                    rds.Amount,
 		}
 	}
 
 	return &ReservedDeposit{
-		FundingTxHash:       rds.parsedFundingTxHash,
+		FundingTxHash:       fundingTx.Hash(),
+		LabelFundingTxHash:  rds.parsedFundingTxHash,
 		FundingOutputIndex:  rds.FundingOutputIndex,
-		FundingTx:           rds.parsedFundingTx,
+		FundingTx:           fundingTx,
 		WalletPublicKeyHash: walletHash,
+		Depositor:           chain.Address(rds.Depositor),
+		BlindingFactor:      blindingFactor,
+		RefundPublicKeyHash: refundPublicKeyHash,
+		RefundLocktime:      refundLocktime,
 		RevealBlock:         rds.RevealBlock,
 		RevealedAt:          revealedAt,
 		SweptAt:             time.Unix(rds.SweptAt, 0),

@@ -3,15 +3,14 @@ package spv
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -23,9 +22,7 @@ type StaleDepositResolution uint8
 const (
 	// StaleDepositResolutionUnknown is the zero value, returned alongside
 	// a non-nil error whenever the check could not be completed (a chain
-	// call failed, the deposit key was invalid, or the reveal-time refund
-	// deadline could not be snapshotted - for instance because the
-	// matching DepositRevealed event predates the catch-up window). The
+	// call failed or the deposit key was invalid). The
 	// deposit is never added to or evicted from the caller's tracking
 	// set on this resolution - the caller must retain it and retry on
 	// the next tick.
@@ -33,9 +30,9 @@ const (
 	// StaleDepositResolutionKeep indicates the deposit is still
 	// pending-stale and must be retained in the caller's tracking set
 	// for the next tick: its snapshotted refund deadline has not yet
-	// passed - for a pollTick-discovered deposit the deadline is
-	// memoized from the reveal event, so no per-deposit chain read is
-	// made before it does - its current action generation is still
+	// passed - the deadline comes from the reveal event, so no
+	// per-deposit chain read is made before it does - its current action
+	// generation is still
 	// Pending (the contract would
 	// revert the notification while an acceptance authorization is
 	// pending), a previously submitted notification is inside its
@@ -77,11 +74,9 @@ const (
 // reverseUint32) at reveal. Until that deadline the deposit cannot
 // become stale - the contract rejects
 // NotifyStaleReservedDeposit with "Deposit refund deadline has not
-// elapsed" - so for a deposit discovered by pollTick, whose deadline is
-// memoized from the reveal event, the watcher makes no per-deposit
-// chain read at all before the deadline (an in-memory gate only); a
-// deposit checked directly without that memo first recovers its
-// deadline from chain state (see getRefundDeadline). Once the deadline
+// elapsed" - so the watcher, which keeps each tracked deposit's
+// deadline from its reveal event, makes no per-deposit chain read at
+// all before the deadline (an in-memory gate only). Once the deadline
 // has passed, the watcher notifies whenever the current action
 // generation is not Pending, regardless of the assigned wallet's
 // state: a Live wallet that never accepts its deposit is exactly the
@@ -112,17 +107,6 @@ type ReservationStaleDepositWatcher struct {
 	// notification.
 	notifiedAt map[string]uint32
 
-	// refundDeadlineMemo caches each tracked deposit's snapshotted
-	// on-chain refund deadline, derived from its DepositRevealed
-	// event's RefundLocktime via reverseUint32. pollTick fills it at
-	// discovery time, when the reveal event it schedules from is
-	// already in hand; CheckStaleReservedDeposit fills it lazily for
-	// deposits checked directly (the snapshot's one-time reads run
-	// only while this memo has no entry for the deposit), so in
-	// steady operation no per-deposit chain read happens before the
-	// deadline.
-	refundDeadlineMemo map[string]uint32
-
 	// operatorAddress identifies this process for
 	// reservationOperatorStaggerOffset (see reservation_wiring.go),
 	// used to stagger a deposit's FIRST NotifyStaleReservedDeposit
@@ -147,33 +131,33 @@ type ReservationStaleDepositWatcher struct {
 	// through free functions - mirrors
 	// ReservationActionTimeoutWatcher's self-contained Run loop.
 	//
-	// The set is a single one: the old split between an actively-
-	// polled set and a slower-reconciled set of Live-wallet deposits
-	// is gone, because deadline-aware scheduling makes it redundant.
-	// Before a deposit's refund deadline passes it costs no chain
-	// reads at all (nothing to amortize away), and after the deadline
+	// Every tracked deposit is polled the same way, whatever its
+	// wallet state. Before a deposit's refund deadline passes it costs
+	// no chain reads at all, and after the deadline
 	// every tracked deposit - including ones whose wallet is Live,
 	// since the notification is wallet-state-independent - must be
 	// re-checked every tick until its record clears on-chain.
-	pending       map[string]*big.Int
+	pending       map[string]*trackedStaleDeposit
 	lastSeenBlock uint64
 
 	// activationBlock is the network's reservation activation block
 	// (see tbtc.ReservationsActivationBlock): the first reveal scan
-	// starts here instead of a fixed lookback window, so a process
-	// restart after activation picks up every reveal that has appeared
-	// since the feature went live. math.MaxUint64 is the sentinel
-	// for a network without an entry (e.g. ethereum.Unknown): the
-	// watcher skips the startup scan entirely - reservations are
-	// inactive - and the cursor jumps to the chain head.
+	// starts here and walks to the tip in chunks (see
+	// reservationScanRange), so a process restart picks up every
+	// reveal since the feature went live. math.MaxUint64 is the
+	// sentinel for a network without an entry (e.g. ethereum.Unknown):
+	// reservations are inactive there, the first scan is skipped and
+	// the cursor moves to the confirmed tip.
 	activationBlock uint64
 }
 
-// errStaleDepositCleared signals that the reserved deposit record was
-// already released on-chain (its wallet field is zero) when a refund
-// deadline snapshot was attempted: there is nothing left to schedule or
-// notify for this deposit.
-var errStaleDepositCleared = errors.New("reserved deposit record already cleared")
+// trackedStaleDeposit is one deposit tracked by the stale-deposit poll
+// loop: its key and the refund deadline the Bridge snapshotted at reveal,
+// decoded from its DepositRevealed event (see reverseUint32).
+type trackedStaleDeposit struct {
+	depositKey     *big.Int
+	refundDeadline uint32
+}
 
 // NewReservationStaleDepositWatcher constructs a stale-deposit watcher
 // bound to the given chain. operatorAddress is required: it is used by
@@ -189,13 +173,12 @@ func NewReservationStaleDepositWatcher(
 	activationBlock uint64,
 ) *ReservationStaleDepositWatcher {
 	return &ReservationStaleDepositWatcher{
-		spvChain:           spvChain,
-		operatorAddress:    operatorAddress,
-		notifiedAt:         make(map[string]uint32),
-		refundDeadlineMemo: make(map[string]uint32),
-		attempted:          make(map[string]struct{}),
-		pending:            make(map[string]*big.Int),
-		activationBlock:    activationBlock,
+		spvChain:        spvChain,
+		operatorAddress: operatorAddress,
+		notifiedAt:      make(map[string]uint32),
+		attempted:       make(map[string]struct{}),
+		pending:         make(map[string]*trackedStaleDeposit),
+		activationBlock: activationBlock,
 	}
 }
 
@@ -215,9 +198,8 @@ func reverseUint32(locktime [4]byte) uint32 {
 // deposit.
 //
 // The function may submit a Bridge notification
-// (NotifyStaleReservedDeposit) as a side effect, and it caches the
-// snapshotted refund deadline and notification state on the receiver
-// across calls. There is no internal scheduling; the caller owns
+// (NotifyStaleReservedDeposit) as a side effect, and it caches
+// notification state on the receiver across calls. There is no internal scheduling; the caller owns
 // invocation lifecycle and synchronization.
 //
 // Notification eligibility mirrors the contract's
@@ -233,10 +215,8 @@ func reverseUint32(locktime [4]byte) uint32 {
 //  2. The snapshotted refund deadline (the reveal-time RefundLocktime,
 //     byte-reversed; see reverseUint32) has STRICTLY passed: the
 //     contract's requirement is block.timestamp > refundDeadline. At
-//     or before the deadline, a deposit discovered by pollTick
-//     performs no per-deposit chain reads at all (in-memory gate
-//     only); a deposit checked directly without that memo first
-//     recovers its deadline from chain state (see getRefundDeadline).
+//     or before the deadline the check performs no chain reads at all
+//     (in-memory gate only).
 //  3. The current action generation is not Pending: while an
 //     acceptance authorization is pending, the contract reverts the
 //     notification with "Acceptance authorization pending", so the
@@ -258,12 +238,15 @@ func reverseUint32(locktime [4]byte) uint32 {
 //
 // Parameters:
 //   - depositKey: the deposit identifier reported by the Bridge.
+//   - refundDeadline: the deposit's refund deadline snapshotted at
+//     reveal, decoded from its DepositRevealed event.
 //   - now:        the UNIX timestamp against which the refund deadline
 //     and the notifiedAt renotify backoff are compared. Tests pass an
 //     explicit value; production passes time.Now().Unix() cast to
 //     uint32.
 func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
+	refundDeadline uint32,
 	now uint32,
 ) (StaleDepositResolution, error) {
 	if depositKey == nil {
@@ -271,24 +254,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	}
 
 	depositKeyStr := depositKey.String()
-
-	deadline, err := rsdw.getRefundDeadline(depositKey)
-	if errors.Is(err, errStaleDepositCleared) {
-		// The record was already released on-chain before its deadline
-		// could be snapshotted: there is nothing to release.
-		logger.Debugf(
-			"reserved deposit [%v] record already cleared; skipping "+
-				"stale check",
-			depositKey,
-		)
-		if _, outstanding := rsdw.notifiedAt[depositKeyStr]; outstanding {
-			return StaleDepositResolutionNotified, nil
-		}
-		return StaleDepositResolutionDrop, nil
-	}
-	if err != nil {
-		return StaleDepositResolutionUnknown, err
-	}
+	deadline := refundDeadline
 
 	// Until the snapshotted refund deadline has STRICTLY passed the
 	// contract rejects the notification and nothing about this deposit
@@ -476,124 +442,14 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	return StaleDepositResolutionKeep, nil
 }
 
-// getRefundDeadline returns the deposit's snapshotted on-chain refund
-// deadline, memoized on the receiver (see refundDeadlineMemo):
-// pollTick fills it at discovery time, and this call back-fills it
-// lazily for a deposit checked directly, paying the snapshot's one-time
-// reads only while no entry exists yet.
-func (rsdw *ReservationStaleDepositWatcher) getRefundDeadline(
-	depositKey *big.Int,
-) (uint32, error) {
-	if deadline, ok := rsdw.refundDeadlineMemo[depositKey.String()]; ok {
-		return deadline, nil
-	}
-
-	deadline, err := rsdw.snapshotRefundDeadline(depositKey)
-	if err != nil {
-		return 0, err
-	}
-	rsdw.refundDeadlineMemo[depositKey.String()] = deadline
-	return deadline, nil
-}
-
-// snapshotRefundDeadline snapshots a deposit's on-chain refund deadline
-// for the first time, from the RefundLocktime field of its own
-// DepositRevealed event (decoded via reverseUint32 to the exact
-// deadline the Bridge snapshotted at reveal - see tbtc-v2's
-// Deposit.sol reveal-time snapshot of validateDepositRefundLocktime's
-// result). The deposit's assigned wallet is read first, both to key the
-// reveal-event scan and as an early exit: a zero wallet field means the
-// record was already released, and there is nothing to schedule.
-//
-// The event scan is bounded by reservationDefaultLookBackBlocks, the
-// same catch-up window every reservation watcher shares; a reveal that
-// predates it (and was never seen by pollTick) cannot be snapshotted
-// here and surfaces as an error the caller retries.
-func (rsdw *ReservationStaleDepositWatcher) snapshotRefundDeadline(
-	depositKey *big.Int,
-) (uint32, error) {
-	walletPublicKeyHash, err := rsdw.spvChain.ReservedDepositWallet(depositKey)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"failed to fetch wallet for reserved deposit [%v]: [%w]",
-			depositKey,
-			err,
-		)
-	}
-	if walletPublicKeyHash == ([20]byte{}) {
-		return 0, fmt.Errorf("%w for deposit [%v]", errStaleDepositCleared, depositKey)
-	}
-
-	blockCounter, err := rsdw.spvChain.BlockCounter()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"failed to get block counter for refund deadline snapshot: [%w]",
-			err,
-		)
-	}
-	if blockCounter == nil {
-		return 0, fmt.Errorf(
-			"failed to get block counter for refund deadline snapshot: nil block counter",
-		)
-	}
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"failed to get current block for refund deadline snapshot: [%w]",
-			err,
-		)
-	}
-
-	startBlock := uint64(0)
-	if currentBlock > reservationDefaultLookBackBlocks {
-		startBlock = currentBlock - reservationDefaultLookBackBlocks
-	}
-
-	events, eventsErr := rsdw.spvChain.PastDepositRevealedEvents(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          startBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-	)
-	if eventsErr != nil {
-		return 0, fmt.Errorf(
-			"failed to fetch deposit revealed events for refund deadline "+
-				"snapshot: [%w]",
-			eventsErr,
-		)
-	}
-
-	var matchingEvent *tbtc.DepositRevealedEvent
-	for _, event := range events {
-		if rsdw.spvChain.BuildDepositKey(
-			event.FundingTxHash,
-			event.FundingOutputIndex,
-		).Cmp(depositKey) == 0 {
-			matchingEvent = event
-			break
-		}
-	}
-	if matchingEvent == nil {
-		return 0, fmt.Errorf(
-			"no matching DepositRevealed event for deposit [%v] within the "+
-				"catch-up window",
-			depositKey,
-		)
-	}
-
-	return reverseUint32(matchingEvent.RefundLocktime), nil
-}
-
-// forgetDeposit clears any cached notification state and snapshotted
-// refund deadline held for the given deposit key. The poller invokes
+// forgetDeposit clears any cached notification state held for the given
+// deposit key. The poller invokes
 // this once a deposit resolves to Drop or Notified, so a resolved
 // deposit's per-call cache entries do not linger in these maps for the
 // remaining life of the process.
 func (rsdw *ReservationStaleDepositWatcher) forgetDeposit(depositKey *big.Int) {
 	key := depositKey.String()
 	delete(rsdw.notifiedAt, key)
-	delete(rsdw.refundDeadlineMemo, key)
 	delete(rsdw.attempted, key)
 }
 
@@ -649,42 +505,42 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		return rsdw.trackedCount(), false
 	}
 
-	// queryStartBlock is the inclusive lower bound of the next reveal
-	// scan. On the very first tick (lastSeenBlock == 0) it is the
-	// network's reservation activation block, so a process restart
-	// after activation picks up every reveal since the feature went
-	// live instead of the fixed 30-day lookback. Networks without an
-	// activation entry (math.MaxUint64) skip the catch-up scan
-	// entirely: reservations are inactive, so there are no reveals
-	// to find, and the cursor jumps to the head. Steady-state ticks
-	// resume at lastSeenBlock+1, unchanged from the original
-	// incremental scan.
-	var queryStartBlock uint64
-	switch rsdw.lastSeenBlock {
-	case 0:
-		switch {
-		case rsdw.activationBlock == math.MaxUint64,
-			rsdw.activationBlock > currentBlock:
-			// Skip the catch-up window entirely (cursor on the
-			// next tick starts from this head). Returning early here
-			// (before the ReservationParameters fetch) keeps the
-			// tick fast on networks where reservations are not
-			// active; pending is empty so the Check loop below is a
-			// no-op anyway.
-			rsdw.lastSeenBlock = currentBlock
-			return len(rsdw.pending), true
-		default:
-			queryStartBlock = rsdw.activationBlock
-		}
-	default:
-		queryStartBlock = rsdw.lastSeenBlock + 1
+	// The reveal scan follows reservationScanRange: the first tick
+	// starts at the network's reservation activation block and later
+	// ticks resume one block past lastSeenBlock, always stopping a few
+	// blocks behind the tip.
+	startBlock, endBlock, scan := reservationScanRange(
+		rsdw.lastSeenBlock,
+		rsdw.activationBlock,
+		currentBlock,
+	)
+	if !scan {
+		// Reservations are inactive on this network, so there are no
+		// reveals to catch up on. Returning before the
+		// ReservationParameters fetch keeps the tick cheap; pending is
+		// empty on the first tick, so there is nothing to check.
+		rsdw.lastSeenBlock = endBlock
+		return len(rsdw.pending), true
+	}
+	if startBlock > endBlock && len(rsdw.pending) == 0 {
+		// No new confirmed blocks (or activation is still ahead) and
+		// nothing tracked: nothing to do this tick.
+		return 0, true
 	}
 
-	// Chunk the reveal-event scan so a wide catch-up window
-	// (activation block to chain tip) does not become a single huge
-	// PastDepositRevealedEvents query. Steady-state deltas are small
-	// enough to fall into a single chunk.
-	events, err := fetchPastEventsInChunks[*tbtc.DepositRevealedEvent](
+	// A failed parameter read or reveal scan does not skip the checks
+	// below: deposits tracked so far, including those from chunks
+	// fetched before the error, are still checked.
+	scanOK := true
+	params, err := rsdw.spvChain.ReservationParameters()
+	if err != nil {
+		reservationWiringLogger.Errorf(
+			"stale-deposit poll failed to fetch reservation "+
+				"parameters: [%v]",
+			err,
+		)
+		scanOK = false
+	} else if err := fetchPastEventsInChunks(
 		func(chunkStart, chunkEnd uint64) ([]*tbtc.DepositRevealedEvent, error) {
 			return rsdw.spvChain.PastDepositRevealedEvents(
 				&tbtc.DepositRevealedEventFilter{
@@ -693,58 +549,28 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 				},
 			)
 		},
-		queryStartBlock,
-		currentBlock,
-	)
-	if err != nil {
+		startBlock,
+		endBlock,
+		func(events []*tbtc.DepositRevealedEvent, chunkEnd uint64) {
+			rsdw.trackRevealedDeposits(events, params.ReservationVault)
+			rsdw.lastSeenBlock = chunkEnd
+		},
+	); err != nil {
 		reservationWiringLogger.Errorf(
 			"stale-deposit poll failed to fetch deposit revealed "+
 				"events: [%v]",
 			err,
 		)
-		return rsdw.trackedCount(), false
+		scanOK = false
 	}
 
-	params, err := rsdw.spvChain.ReservationParameters()
-	if err != nil {
-		reservationWiringLogger.Errorf(
-			"stale-deposit poll failed to fetch reservation "+
-				"parameters: [%v]",
-			err,
+	for key, tracked := range rsdw.pending {
+		depositKey := tracked.depositKey
+		resolution, err := rsdw.CheckStaleReservedDeposit(
+			depositKey,
+			tracked.refundDeadline,
+			now,
 		)
-		return rsdw.trackedCount(), false
-	}
-
-	for _, event := range events {
-		if event.Vault == nil || !strings.EqualFold(string(*event.Vault), string(params.ReservationVault)) {
-			continue
-		}
-
-		depositKey := rsdw.spvChain.BuildDepositKey(
-			event.FundingTxHash,
-			event.FundingOutputIndex,
-		)
-
-		// Track every vault-matched reveal in memory only: the vault
-		// match (ReservationParameters().ReservationVault, fetched
-		// once per tick) is the discovery gate, and the refund
-		// deadline is memoized from the reveal event in hand, so a
-		// tracked deposit performs no per-deposit chain reads until
-		// its deadline passes - by which point CheckStaleReservedDeposit
-		// reads the record's wallet field first. Doing any read here
-		// would re-introduce the per-deposit RPC the deadline-aware
-		// scheduling was meant to eliminate.
-
-		rsdw.pending[depositKey.String()] = depositKey
-		rsdw.refundDeadlineMemo[depositKey.String()] = reverseUint32(
-			event.RefundLocktime,
-		)
-	}
-
-	rsdw.lastSeenBlock = currentBlock
-
-	for key, depositKey := range rsdw.pending {
-		resolution, err := rsdw.CheckStaleReservedDeposit(depositKey, now)
 		if err != nil {
 			reservationWiringLogger.Errorf(
 				"stale-deposit poll failed to check deposit "+
@@ -767,7 +593,33 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		}
 	}
 
-	return len(rsdw.pending), true
+	return len(rsdw.pending), scanOK
+}
+
+// trackRevealedDeposits adds every reveal routed to reservationVault to
+// the tracked set, together with its refund deadline decoded from the
+// reveal event. Tracking is in memory only: a tracked deposit performs no
+// per-deposit chain reads until its deadline passes, by which point
+// CheckStaleReservedDeposit reads the record's wallet field first.
+func (rsdw *ReservationStaleDepositWatcher) trackRevealedDeposits(
+	events []*tbtc.DepositRevealedEvent,
+	reservationVault chain.Address,
+) {
+	for _, event := range events {
+		if event.Vault == nil || !strings.EqualFold(string(*event.Vault), string(reservationVault)) {
+			continue
+		}
+
+		depositKey := rsdw.spvChain.BuildDepositKey(
+			event.FundingTxHash,
+			event.FundingOutputIndex,
+		)
+
+		rsdw.pending[depositKey.String()] = &trackedStaleDeposit{
+			depositKey:     depositKey,
+			refundDeadline: reverseUint32(event.RefundLocktime),
+		}
+	}
 }
 
 // Run starts the background poll loop, mirroring

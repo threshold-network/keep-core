@@ -4,9 +4,6 @@ package ethereum
 // Ethereum node, against a scripted fake client instead of a node or the
 // in-memory EVM harness:
 //
-//   - GetReservationReanchorRequestReceipt: the Mined/Reverted/NotFound
-//     mapping from TransactionReceipt results, error propagation for
-//     non-not-found RPC failures, and the bounded-lookup requirement.
 //   - ReservationVaultFeeDebtSat /
 //     ReservationVaultFeeReserveTbtcBaseUnits: that the gauges read the
 //     vault's own on-chain values and that the fee reserve is the TBTC
@@ -20,27 +17,25 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	hostchain "github.com/ethereum/go-ethereum"
 	hostchainabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
-	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 // reservationFakeClient is a scripted ethutil.EthereumClient: view calls
-// are answered from a per-(address, selector) table, TransactionReceipt is
-// answered from canned fields, and every other method is promoted from the
-// embedded nil interface and would panic if the code under test reached
-// it - keeping the fake honest about the RPC surface actually exercised.
+// are answered from a per-(address, selector) table, and every other
+// method is promoted from the embedded nil interface and would panic if
+// the code under test reached it - keeping the fake honest about the RPC
+// surface actually exercised.
 type reservationFakeClient struct {
 	ethutil.EthereumClient
 
@@ -55,14 +50,6 @@ type reservationFakeClient struct {
 	balances         map[common.Address]*big.Int
 	balanceOfTargets []common.Address
 	balanceOfSel     [4]byte
-
-	// receiptResult / receiptErr are the canned TransactionReceipt
-	// answer; receiptCtx and receiptHash record the lookup's context and
-	// the hash it targeted.
-	receiptResult *types.Receipt
-	receiptErr    error
-	receiptCtx    context.Context
-	receiptHash   common.Hash
 }
 
 func newReservationFakeClient(t *testing.T) *reservationFakeClient {
@@ -147,17 +134,6 @@ func (c *reservationFakeClient) CallContract(
 		)
 	}
 	return respond(), nil
-}
-
-func (c *reservationFakeClient) TransactionReceipt(
-	ctx context.Context,
-	txHash common.Hash,
-) (*types.Receipt, error) {
-	c.mu.Lock()
-	c.receiptCtx = ctx
-	c.receiptHash = txHash
-	c.mu.Unlock()
-	return c.receiptResult, c.receiptErr
 }
 
 // CodeAt answers the contract-code probe go-ethereum issues when a view
@@ -259,121 +235,12 @@ func newReservationGaugeChain(
 	}
 }
 
-func TestGetReservationReanchorRequestReceipt(t *testing.T) {
-	var txHash [32]byte
-	for i := range txHash {
-		txHash[i] = byte(i + 1)
-	}
-	lookupHash := common.BytesToHash(txHash[:])
-
-	t.Run("successful receipt maps to Mined", func(t *testing.T) {
-		client := newReservationFakeClient(t)
-		client.receiptResult = &types.Receipt{Status: types.ReceiptStatusSuccessful}
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		status, err := chain.GetReservationReanchorRequestReceipt(txHash)
-		if err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
-		}
-		if status != tbtc.ReservationReanchorRequestReceiptMined {
-			t.Fatalf("expected Mined, got %v", status)
-		}
-	})
-
-	t.Run("failed receipt maps to Reverted", func(t *testing.T) {
-		client := newReservationFakeClient(t)
-		client.receiptResult = &types.Receipt{Status: types.ReceiptStatusFailed}
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		status, err := chain.GetReservationReanchorRequestReceipt(txHash)
-		if err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
-		}
-		if status != tbtc.ReservationReanchorRequestReceiptReverted {
-			t.Fatalf("expected Reverted, got %v", status)
-		}
-	})
-
-	t.Run("not-found receipt maps to NotFound without error", func(t *testing.T) {
-		client := newReservationFakeClient(t)
-		client.receiptErr = hostchain.NotFound
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		status, err := chain.GetReservationReanchorRequestReceipt(txHash)
-		if err != nil {
-			t.Fatalf("expected no error for a not-found receipt, got [%v]", err)
-		}
-		if status != tbtc.ReservationReanchorRequestReceiptNotFound {
-			t.Fatalf("expected NotFound, got %v", status)
-		}
-	})
-
-	t.Run("nil receipt without error maps to NotFound", func(t *testing.T) {
-		client := newReservationFakeClient(t)
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		status, err := chain.GetReservationReanchorRequestReceipt(txHash)
-		if err != nil {
-			t.Fatalf("expected no error, got [%v]", err)
-		}
-		if status != tbtc.ReservationReanchorRequestReceiptNotFound {
-			t.Fatalf("expected NotFound, got %v", status)
-		}
-	})
-
-	t.Run("transient RPC failure propagates", func(t *testing.T) {
-		rpcFailure := errors.New("provider RPC failed")
-		client := newReservationFakeClient(t)
-		client.receiptErr = rpcFailure
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		_, err := chain.GetReservationReanchorRequestReceipt(txHash)
-		if err == nil {
-			t.Fatal("expected the transient RPC failure to propagate, got nil error")
-		}
-		if !errors.Is(err, rpcFailure) {
-			t.Fatalf("expected the wrapped error to match the RPC failure, got [%v]", err)
-		}
-	})
-
-	t.Run("lookup is bounded by a deadline and uses the given hash", func(t *testing.T) {
-		client := newReservationFakeClient(t)
-		client.receiptResult = &types.Receipt{Status: types.ReceiptStatusSuccessful}
-		chain := &TbtcChain{baseChain: &baseChain{client: client}}
-
-		before := time.Now()
-		if _, err := chain.GetReservationReanchorRequestReceipt(txHash); err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
-		}
-		if client.receiptCtx == nil {
-			t.Fatal("the receipt lookup context was never recorded")
-		}
-		deadline, ok := client.receiptCtx.Deadline()
-		if !ok {
-			t.Fatal("expected the receipt lookup to run under a bounded context")
-		}
-		if deadline.Before(before) || deadline.After(before.Add(31*time.Second)) {
-			t.Fatalf("deadline %v outside the [start, start+30s] window", deadline)
-		}
-		// The receipt lookup must have targeted the exact hash that was
-		// passed in.
-		if client.receiptHash != lookupHash {
-			t.Fatalf(
-				"receipt lookup targeted %s, want %s",
-				client.receiptHash.Hex(),
-				lookupHash.Hex(),
-			)
-		}
-	})
-}
-
 func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	routerAddress := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	vaultAddress := common.HexToAddress("0x00000000000000000000000000000000000000a2")
 	tokenAddress := common.HexToAddress("0x00000000000000000000000000000000000000a3")
 	otherAccount := common.HexToAddress("0x00000000000000000000000000000000000000a4")
 
-	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
 	vaultABI := parseGenABI(t, tbtcabi.ReservationVaultABI)
 
 	client := newReservationFakeClient(t)
@@ -386,28 +253,9 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	vaultTbtcBalance := new(big.Int).Lsh(big.NewInt(3), 18) // 3 TBTC
 	otherTbtcBalance := new(big.Int).Lsh(big.NewInt(7), 18) // 7 TBTC
 
-	client.setView(
-		t,
-		routerAddress,
-		methodSelector(t, routerABI, "reservationParameters"),
-		func() []byte {
-			return packOutputs(
-				t,
-				routerABI,
-				"reservationParameters",
-				vaultAddress,
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint32(0),
-			)
-		},
-	)
+	// The router's reservationParameters view is deliberately not
+	// scripted: the caller passes the vault address it already read, so
+	// the gauges must not re-read the reservation parameters.
 	client.setView(
 		t,
 		vaultAddress,
@@ -427,9 +275,10 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	client.balances[vaultAddress] = vaultTbtcBalance
 	client.balances[otherAccount] = otherTbtcBalance
 
+	vaultArg := chain.Address(vaultAddress.Hex())
 	chain := newReservationGaugeChain(t, client, routerAddress)
 
-	debt, err := chain.ReservationVaultFeeDebtSat()
+	debt, err := chain.ReservationVaultFeeDebtSat(vaultArg)
 	if err != nil {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
@@ -437,7 +286,7 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 		t.Fatalf("expected the vault's in-kind fee debt %d, got %d", vaultDebtSat, debt)
 	}
 
-	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits()
+	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits(vaultArg)
 	if err != nil {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
@@ -463,37 +312,15 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 func TestReservationVaultFeeGaugesSkipUnconfiguredVault(t *testing.T) {
 	routerAddress := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 
-	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
 	client := newReservationFakeClient(t)
-	client.setView(
-		t,
-		routerAddress,
-		methodSelector(t, routerABI, "reservationParameters"),
-		func() []byte {
-			// Unconfigured vault: the reservation parameters carry the
-			// zero address, so the gauges must short-circuit before
-			// touching any vault or token view.
-			return packOutputs(
-				t,
-				routerABI,
-				"reservationParameters",
-				common.Address{},
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint32(0),
-			)
-		},
-	)
 
+	// Unconfigured vault: the reservation parameters carry the zero
+	// address, so the gauges must short-circuit before touching any vault
+	// or token view.
+	vaultArg := chain.Address(common.Address{}.Hex())
 	chain := newReservationGaugeChain(t, client, routerAddress)
 
-	debt, err := chain.ReservationVaultFeeDebtSat()
+	debt, err := chain.ReservationVaultFeeDebtSat(vaultArg)
 	if err != nil {
 		t.Fatalf("expected the unconfigured-vault skip, got error [%v]", err)
 	}
@@ -501,7 +328,7 @@ func TestReservationVaultFeeGaugesSkipUnconfiguredVault(t *testing.T) {
 		t.Fatalf("expected the unconfigured-vault skip sentinel 0, got %d", debt)
 	}
 
-	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits()
+	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits(vaultArg)
 	if err != nil {
 		t.Fatalf("expected the unconfigured-vault skip, got error [%v]", err)
 	}
