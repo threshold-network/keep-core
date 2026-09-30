@@ -1665,14 +1665,18 @@ func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
 // ReservationVaultFeeDebtSat is not exercised by this fake's tests; it
 // reports an unsupported error mirroring the sibling reservation view
 // methods on this fake.
-func (lc *localChain) ReservationVaultFeeDebtSat() (uint64, error) {
+func (lc *localChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
 	return 0, fmt.Errorf("unsupported")
 }
 
 // ReservationVaultFeeReserveTbtcBaseUnits is not exercised by this
 // fake's tests; it reports an unsupported error mirroring the sibling
 // reservation view methods on this fake.
-func (lc *localChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
+func (lc *localChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
 	return nil, fmt.Errorf("unsupported")
 }
 

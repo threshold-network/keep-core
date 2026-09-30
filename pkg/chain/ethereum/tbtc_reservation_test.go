@@ -31,6 +31,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
+	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -373,7 +374,6 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	tokenAddress := common.HexToAddress("0x00000000000000000000000000000000000000a3")
 	otherAccount := common.HexToAddress("0x00000000000000000000000000000000000000a4")
 
-	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
 	vaultABI := parseGenABI(t, tbtcabi.ReservationVaultABI)
 
 	client := newReservationFakeClient(t)
@@ -386,28 +386,9 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	vaultTbtcBalance := new(big.Int).Lsh(big.NewInt(3), 18) // 3 TBTC
 	otherTbtcBalance := new(big.Int).Lsh(big.NewInt(7), 18) // 7 TBTC
 
-	client.setView(
-		t,
-		routerAddress,
-		methodSelector(t, routerABI, "reservationParameters"),
-		func() []byte {
-			return packOutputs(
-				t,
-				routerABI,
-				"reservationParameters",
-				vaultAddress,
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint32(0),
-			)
-		},
-	)
+	// The router's reservationParameters view is deliberately not
+	// scripted: the caller passes the vault address it already read, so
+	// the gauges must not re-read the reservation parameters.
 	client.setView(
 		t,
 		vaultAddress,
@@ -427,9 +408,10 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 	client.balances[vaultAddress] = vaultTbtcBalance
 	client.balances[otherAccount] = otherTbtcBalance
 
+	vaultArg := chain.Address(vaultAddress.Hex())
 	chain := newReservationGaugeChain(t, client, routerAddress)
 
-	debt, err := chain.ReservationVaultFeeDebtSat()
+	debt, err := chain.ReservationVaultFeeDebtSat(vaultArg)
 	if err != nil {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
@@ -437,7 +419,7 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 		t.Fatalf("expected the vault's in-kind fee debt %d, got %d", vaultDebtSat, debt)
 	}
 
-	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits()
+	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits(vaultArg)
 	if err != nil {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
@@ -463,37 +445,15 @@ func TestReservationVaultFeeGaugesReadVaultValues(t *testing.T) {
 func TestReservationVaultFeeGaugesSkipUnconfiguredVault(t *testing.T) {
 	routerAddress := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 
-	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
 	client := newReservationFakeClient(t)
-	client.setView(
-		t,
-		routerAddress,
-		methodSelector(t, routerABI, "reservationParameters"),
-		func() []byte {
-			// Unconfigured vault: the reservation parameters carry the
-			// zero address, so the gauges must short-circuit before
-			// touching any vault or token view.
-			return packOutputs(
-				t,
-				routerABI,
-				"reservationParameters",
-				common.Address{},
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint64(0),
-				uint64(0),
-				uint32(0),
-				uint32(0),
-				uint32(0),
-			)
-		},
-	)
 
+	// Unconfigured vault: the reservation parameters carry the zero
+	// address, so the gauges must short-circuit before touching any vault
+	// or token view.
+	vaultArg := chain.Address(common.Address{}.Hex())
 	chain := newReservationGaugeChain(t, client, routerAddress)
 
-	debt, err := chain.ReservationVaultFeeDebtSat()
+	debt, err := chain.ReservationVaultFeeDebtSat(vaultArg)
 	if err != nil {
 		t.Fatalf("expected the unconfigured-vault skip, got error [%v]", err)
 	}
@@ -501,7 +461,7 @@ func TestReservationVaultFeeGaugesSkipUnconfiguredVault(t *testing.T) {
 		t.Fatalf("expected the unconfigured-vault skip sentinel 0, got %d", debt)
 	}
 
-	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits()
+	reserve, err := chain.ReservationVaultFeeReserveTbtcBaseUnits(vaultArg)
 	if err != nil {
 		t.Fatalf("expected the unconfigured-vault skip, got error [%v]", err)
 	}

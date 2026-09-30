@@ -718,23 +718,27 @@ type ReservationChain interface {
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
 
-	// ReservationVaultFeeDebtSat returns the ReservationVault's
+	// ReservationVaultFeeDebtSat returns the given ReservationVault's
 	// outstanding in-kind fee debt in satoshi, read from the vault's
-	// inKindFeeDebtSat view. If the reservation vault address is
+	// inKindFeeDebtSat view. The caller passes the vault address it
+	// already read from ReservationParameters. If the address is
 	// zero (vault not configured), it returns zero with a nil
 	// error: the skip sentinel the metric side consumes, not an
 	// error.
-	ReservationVaultFeeDebtSat() (uint64, error)
+	ReservationVaultFeeDebtSat(reservationVault chain.Address) (uint64, error)
 
-	// ReservationVaultFeeReserveTbtcBaseUnits returns the
+	// ReservationVaultFeeReserveTbtcBaseUnits returns the given
 	// ReservationVault's TBTC fee-reserve balance in TBTC base
 	// units: TBTC is a 1e18 base-unit token, so the returned value
 	// is whole TBTC x 1e18. The value can exceed uint64 range, so
-	// it is returned as *big.Int. If the reservation vault address
-	// is zero (vault not configured), it returns zero with a nil
-	// error: the skip sentinel the metric side consumes, not an
-	// error.
-	ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error)
+	// it is returned as *big.Int. The caller passes the vault
+	// address it already read from ReservationParameters. If the
+	// address is zero (vault not configured), it returns zero with
+	// a nil error: the skip sentinel the metric side consumes, not
+	// an error.
+	ReservationVaultFeeReserveTbtcBaseUnits(
+		reservationVault chain.Address,
+	) (*big.Int, error)
 
 	// IsReservedDeposit returns true if the given deposit was revealed
 	// with the reservation vault address and is therefore a reservation

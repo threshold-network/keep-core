@@ -1681,18 +1681,19 @@ func (tc *TbtcChain) ActiveReservationsCount() (uint32, uint32, error) {
 	return activeReservationsCount.Count, activeReservationsCount.MaxActive, nil
 }
 
-// reservationVaultBindings returns the cached, per-vault-address bindings
-// (the ReservationVault itself and the TBTC token it holds its fee
-// reserve in) constructed against a vault address read from the Bridge's
-// on-chain reservation parameters. Successful constructions are cached per
-// vault address. Failures are not cached: they are usually transient RPC
-// errors (for example reading tbtcToken()), and caching them would disable
-// the fee gauges until the process restarts.
+// reservationVaultBindings holds the ReservationVault contract and the TBTC
+// token contract the vault keeps its fee reserve in.
 type reservationVaultBindings struct {
 	vault *tbtccontract.ReservationVault
 	tbtc  *tbtccontract.TBTC
 }
 
+// reservationVaultBindings returns the cached, per-vault-address bindings
+// (the ReservationVault itself and the TBTC token it holds its fee
+// reserve in) for the given vault address. Successful constructions are
+// cached per vault address. Failures are not cached: they are usually
+// transient RPC errors (for example reading tbtcToken()), and caching them
+// would disable the fee gauges until the process restarts.
 func (tc *TbtcChain) reservationVaultBindings(vaultAddress common.Address) (*reservationVaultBindings, error) {
 	if bindings, ok := tc.vaultBindings.Load(vaultAddress); ok {
 		return bindings.(*reservationVaultBindings), nil
@@ -1743,21 +1744,16 @@ func (tc *TbtcChain) reservationVaultBindings(vaultAddress common.Address) (*res
 	return bindings, nil
 }
 
-// reservationVaultAddress resolves the on-chain reservation vault address
+// decodeReservationVaultAddress decodes a reservation vault address read
 // from the Bridge's reservation parameters. It returns the zero address
 // when the vault is not configured (zero address in the parameters) and an
-// error only when the configured address cannot be decoded as a valid
-// 20-byte address, so callers can distinguish "no vault" (a skip, not
-// an error) from a genuinely malformed configuration.
-func (tc *TbtcChain) reservationVaultAddress() (common.Address, error) {
-	reservationParameters, err := tc.ReservationParameters()
-	if err != nil {
-		return common.Address{}, fmt.Errorf(
-			"cannot get reservation parameters: [%v]",
-			err,
-		)
-	}
-	vaultAddressString := string(reservationParameters.ReservationVault)
+// error only when the address cannot be decoded as a valid 20-byte
+// address, so callers can distinguish "no vault" (a skip, not an error)
+// from a genuinely malformed configuration.
+func decodeReservationVaultAddress(
+	reservationVault chain.Address,
+) (common.Address, error) {
+	vaultAddressString := string(reservationVault)
 	vaultAddressBytes, err := hexutil.Decode(vaultAddressString)
 	if err != nil || len(vaultAddressBytes) != common.AddressLength {
 		if err == nil {
@@ -1775,14 +1771,16 @@ func (tc *TbtcChain) reservationVaultAddress() (common.Address, error) {
 	return common.BytesToAddress(vaultAddressBytes), nil
 }
 
-// ReservationVaultFeeDebtSat returns the ReservationVault's outstanding
-// in-kind fee debt in satoshi, read from the vault's inKindFeeDebtSat
-// view. The vault address is resolved from the on-chain reservation
-// parameters; when it is the zero address the vault is not configured
-// and the method returns 0 with a nil error: the skip sentinel the
-// metrics side consumes, not a chain error.
-func (tc *TbtcChain) ReservationVaultFeeDebtSat() (uint64, error) {
-	vaultAddress, err := tc.reservationVaultAddress()
+// ReservationVaultFeeDebtSat returns the given ReservationVault's
+// outstanding in-kind fee debt in satoshi, read from the vault's
+// inKindFeeDebtSat view. The caller passes the vault address it already
+// read from the reservation parameters; when it is the zero address the
+// vault is not configured and the method returns 0 with a nil error: the
+// skip sentinel the metrics side consumes, not a chain error.
+func (tc *TbtcChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
+	vaultAddress, err := decodeReservationVaultAddress(reservationVault)
 	if err != nil {
 		return 0, err
 	}
@@ -1800,14 +1798,16 @@ func (tc *TbtcChain) ReservationVaultFeeDebtSat() (uint64, error) {
 	return debtSat, nil
 }
 
-// ReservationVaultFeeReserveTbtcBaseUnits returns the ReservationVault's
-// TBTC fee-reserve balance in TBTC base units (whole TBTC x 1e18). The
-// value is a token balance of a 1e18-scale token, which can exceed
-// uint64 range, so it is returned as *big.Int. When the vault is not
-// configured (zero address) the method returns zero with a nil error,
-// mirroring ReservationVaultFeeDebtSat's skip sentinel.
-func (tc *TbtcChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
-	vaultAddress, err := tc.reservationVaultAddress()
+// ReservationVaultFeeReserveTbtcBaseUnits returns the given
+// ReservationVault's TBTC fee-reserve balance in TBTC base units (whole
+// TBTC x 1e18). The value is a token balance of a 1e18-scale token, which
+// can exceed uint64 range, so it is returned as *big.Int. When the vault
+// is not configured (zero address) the method returns zero with a nil
+// error, mirroring ReservationVaultFeeDebtSat's skip sentinel.
+func (tc *TbtcChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
+	vaultAddress, err := decodeReservationVaultAddress(reservationVault)
 	if err != nil {
 		return new(big.Int), err
 	}

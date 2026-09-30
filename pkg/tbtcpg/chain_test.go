@@ -2202,7 +2202,9 @@ func (lc *LocalChain) SetReservationVaultFeeReserveBalance(
 
 // ReservationVaultFeeDebtSat returns the value configured via
 // SetReservationVaultFeeDebtSat; zero by default.
-func (lc *LocalChain) ReservationVaultFeeDebtSat() (uint64, error) {
+func (lc *LocalChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
@@ -2211,7 +2213,9 @@ func (lc *LocalChain) ReservationVaultFeeDebtSat() (uint64, error) {
 
 // ReservationVaultFeeReserveTbtcBaseUnits returns the value configured
 // via SetReservationVaultFeeReserveBalance; zero by default.
-func (lc *LocalChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
+func (lc *LocalChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 

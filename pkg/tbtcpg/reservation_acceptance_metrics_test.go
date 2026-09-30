@@ -137,11 +137,15 @@ type feeObservabilityChain struct {
 	feeReserveErr error
 }
 
-func (c *feeObservabilityChain) ReservationVaultFeeDebtSat() (uint64, error) {
+func (c *feeObservabilityChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
 	return c.feeDebtSat, c.feeDebtErr
 }
 
-func (c *feeObservabilityChain) ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error) {
+func (c *feeObservabilityChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
 	return c.feeReserve, c.feeReserveErr
 }
 

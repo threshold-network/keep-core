@@ -441,7 +441,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	// publishing the fee gauges as zero, so this block is unreachable
 	// for that pass.
 	if rat.metricsRecorder != nil {
-		feeDebtSat, err := rat.chain.ReservationVaultFeeDebtSat()
+		feeDebtSat, err := rat.chain.ReservationVaultFeeDebtSat(reservationVault)
 		if err != nil {
 			taskLogger.Warnf(
 				"failed to get reservation vault fee debt: [%v]",
@@ -455,7 +455,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		}
 
 		feeReserve, err :=
-			rat.chain.ReservationVaultFeeReserveTbtcBaseUnits()
+			rat.chain.ReservationVaultFeeReserveTbtcBaseUnits(reservationVault)
 		if err != nil {
 			taskLogger.Warnf(
 				"failed to get reservation vault fee reserve: [%v]",
