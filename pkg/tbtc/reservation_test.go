@@ -748,7 +748,6 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 	}
 
 	t.Run("no matching DepositRevealed event", func(t *testing.T) {
-		chain := Connect()
 		btcChain := newLocalBitcoinChain()
 
 		fundingTx := &bitcoin.Transaction{
@@ -759,22 +758,20 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 		}
 		fundingTxHash := fundingTx.Hash()
 
-		// A DepositRevealed event exists for this wallet, but for a
-		// different funding outpoint - the matching loop must walk past
-		// it and still report no match, not silently accept it.
-		if err := chain.setPastDepositRevealedEvents(
-			&DepositRevealedEventFilter{
-				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-				StartBlock:          300000 - reservationLookBackBlocks,
-			},
-			[]*DepositRevealedEvent{{
-				FundingTxHash:       bitcoin.Hash{0x99},
-				FundingOutputIndex:  0,
-				WalletPublicKeyHash: walletPublicKeyHash,
-			}},
-		); err != nil {
-			t.Fatal(err)
-		}
+		// A DepositRevealed event exists for this wallet in the searched
+		// window, but for a different funding outpoint - the matching
+		// must walk past it and still report no match, not silently
+		// accept it.
+		chain := newRangeRevealChain(&DepositRevealedEvent{
+			BlockNumber:         299990,
+			FundingTxHash:       bitcoin.Hash{0x99},
+			FundingOutputIndex:  0,
+			WalletPublicKeyHash: walletPublicKeyHash,
+		})
+		chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
+			Amount:     100000,
+			RevealedAt: time.Now(),
+		})
 
 		err := newAction(chain, btcChain, fundingTxHash).execute()
 		if err == nil || err.Error() != "no matching DepositRevealed event for deposit" {
@@ -786,7 +783,6 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 	})
 
 	t.Run("deposit request not found", func(t *testing.T) {
-		chain := Connect()
 		btcChain := newLocalBitcoinChain()
 
 		fundingTx := &bitcoin.Transaction{
@@ -797,19 +793,12 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 		}
 		fundingTxHash := fundingTx.Hash()
 
-		if err := chain.setPastDepositRevealedEvents(
-			&DepositRevealedEventFilter{
-				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-				StartBlock:          300000 - reservationLookBackBlocks,
-			},
-			[]*DepositRevealedEvent{{
-				FundingTxHash:       fundingTxHash,
-				FundingOutputIndex:  fundingOutputIndex,
-				WalletPublicKeyHash: walletPublicKeyHash,
-			}},
-		); err != nil {
-			t.Fatal(err)
-		}
+		chain := newRangeRevealChain(&DepositRevealedEvent{
+			BlockNumber:         299990,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  fundingOutputIndex,
+			WalletPublicKeyHash: walletPublicKeyHash,
+		})
 		// Deliberately no setDepositRequest call: the Bridge has no
 		// request record for this funding outpoint.
 
@@ -822,81 +811,93 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 		}
 	})
 
-	t.Run("full happy path up to the signing boundary", func(t *testing.T) {
-		chain := Connect()
-		btcChain := newLocalBitcoinChain()
+	// The happy path runs for a recent reveal and for a reveal older than
+	// the 216000-block (30-day) window the lookup used to be bounded by:
+	// a depositor may request acceptance long after revealing, and the
+	// signer must still find the reveal. The old reveal's event sits
+	// 3000 blocks off the block estimated from its timestamp, inside the
+	// lookup margin, as block-time drift would place it.
+	happyPathCases := map[string]struct {
+		revealAge   time.Duration
+		revealBlock uint64
+	}{
+		"recent reveal": {
+			revealAge:   0,
+			revealBlock: 299990,
+		},
+		"reveal older than 216000 blocks": {
+			revealAge:   250000 * 12 * time.Second,
+			revealBlock: 300000 - 250000 + 3000,
+		},
+	}
+	for name, happyPathCase := range happyPathCases {
+		t.Run("full happy path up to the signing boundary: "+name, func(t *testing.T) {
+			btcChain := newLocalBitcoinChain()
 
-		depositForScript := &Deposit{
-			Depositor:           "0x0000000000000000000000000000000000000001",
-			WalletPublicKeyHash: walletPublicKeyHash,
-		}
-		depositScript, err := depositForScript.Script()
-		if err != nil {
-			t.Fatal(err)
-		}
-		scriptHash := sha256.Sum256(depositScript)
-		fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
-		if err != nil {
-			t.Fatal(err)
-		}
+			depositForScript := &Deposit{
+				Depositor:           "0x0000000000000000000000000000000000000001",
+				WalletPublicKeyHash: walletPublicKeyHash,
+			}
+			depositScript, err := depositForScript.Script()
+			if err != nil {
+				t.Fatal(err)
+			}
+			scriptHash := sha256.Sum256(depositScript)
+			fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-		fundingTx := &bitcoin.Transaction{
-			Outputs: []*bitcoin.TransactionOutput{{
-				Value:           100000,
-				PublicKeyScript: fundingOutputScript,
-			}},
-		}
-		if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
-			t.Fatal(err)
-		}
-		fundingTxHash := fundingTx.Hash()
+			fundingTx := &bitcoin.Transaction{
+				Outputs: []*bitcoin.TransactionOutput{{
+					Value:           100000,
+					PublicKeyScript: fundingOutputScript,
+				}},
+			}
+			if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+				t.Fatal(err)
+			}
+			fundingTxHash := fundingTx.Hash()
 
-		if err := chain.setPastDepositRevealedEvents(
-			&DepositRevealedEventFilter{
-				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-				StartBlock:          300000 - reservationLookBackBlocks,
-			},
-			[]*DepositRevealedEvent{{
+			chain := newRangeRevealChain(&DepositRevealedEvent{
+				BlockNumber:         happyPathCase.revealBlock,
 				FundingTxHash:       fundingTxHash,
 				FundingOutputIndex:  fundingOutputIndex,
 				WalletPublicKeyHash: walletPublicKeyHash,
 				Amount:              100000,
 				Depositor:           "0x0000000000000000000000000000000000000001",
-			}},
-		); err != nil {
-			t.Fatal(err)
-		}
-		chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
-			Amount:     100000,
-			RevealedAt: time.Now(),
-		})
-		chain.setReservationAction(&ReservationAction{
-			ActionType:                ReservationActionTypeAcceptance,
-			State:                     ReservationActionStatePending,
-			TargetWalletPublicKeyHash: walletPublicKeyHash,
-			TxMaxFee:                  2000,
-		})
+			})
+			chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
+				Amount:     100000,
+				RevealedAt: time.Now().Add(-happyPathCase.revealAge),
+			})
+			chain.setReservationAction(&ReservationAction{
+				ActionType:                ReservationActionTypeAcceptance,
+				State:                     ReservationActionStatePending,
+				TargetWalletPublicKeyHash: walletPublicKeyHash,
+				TxMaxFee:                  2000,
+			})
 
-		action := newAction(chain, btcChain, fundingTxHash)
-		// Below reservationActionSigningTimeoutSafetyMarginBlocks (300):
-		// every real upstream step (event match, deposit request fetch,
-		// reservation key derivation, action load, target wallet match,
-		// on-chain validation, transaction assembly) must succeed before
-		// this guard is reached and rejects the proposal - reaching this
-		// exact error is the test's proof that all of it worked.
-		action.expiryBlock = 100
+			action := newAction(chain, btcChain, fundingTxHash)
+			// Below reservationActionSigningTimeoutSafetyMarginBlocks (300):
+			// every real upstream step (event match, deposit request fetch,
+			// reservation key derivation, action load, target wallet match,
+			// on-chain validation, transaction assembly) must succeed before
+			// this guard is reached and rejects the proposal - reaching this
+			// exact error is the test's proof that all of it worked.
+			action.expiryBlock = 100
 
-		err = action.execute()
-		if err == nil || err.Error() != "invalid proposal expiry block" {
-			t.Errorf(
-				"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
-				err,
-			)
-		}
-	})
+			err = action.execute()
+			if err == nil || err.Error() != "invalid proposal expiry block" {
+				t.Errorf(
+					"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
+					err,
+				)
+			}
+		})
+	}
 
 	t.Run("target wallet mismatch is rejected before signing", func(t *testing.T) {
-		chain := Connect()
 		btcChain := newLocalBitcoinChain()
 
 		depositForScript := &Deposit{
@@ -924,21 +925,14 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 		}
 		fundingTxHash := fundingTx.Hash()
 
-		if err := chain.setPastDepositRevealedEvents(
-			&DepositRevealedEventFilter{
-				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-				StartBlock:          300000 - reservationLookBackBlocks,
-			},
-			[]*DepositRevealedEvent{{
-				FundingTxHash:       fundingTxHash,
-				FundingOutputIndex:  fundingOutputIndex,
-				WalletPublicKeyHash: walletPublicKeyHash,
-				Amount:              100000,
-				Depositor:           "0x0000000000000000000000000000000000000001",
-			}},
-		); err != nil {
-			t.Fatal(err)
-		}
+		chain := newRangeRevealChain(&DepositRevealedEvent{
+			BlockNumber:         299990,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  fundingOutputIndex,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			Amount:              100000,
+			Depositor:           "0x0000000000000000000000000000000000000001",
+		})
 		chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
 			Amount:     100000,
 			RevealedAt: time.Now(),
