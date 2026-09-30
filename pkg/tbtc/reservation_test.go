@@ -811,23 +811,30 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 		}
 	})
 
-	// The happy path runs for a recent reveal and for a reveal older than
-	// the 216000-block (30-day) window the lookup used to be bounded by:
-	// a depositor may request acceptance long after revealing, and the
-	// signer must still find the reveal. The old reveal's event sits
-	// 3000 blocks off the block estimated from its timestamp, inside the
-	// lookup margin, as block-time drift would place it.
+	// The happy path runs for a recent reveal, for a reveal 250000 blocks
+	// (about 35 days) back, and on a chain with 1-second blocks: a
+	// depositor may request acceptance long after revealing, and the
+	// signer locates the reveal from its timestamp and the chain's block
+	// time. The 250000-block reveal's event sits 3000 blocks off the block
+	// estimated from its timestamp, inside the lookup margin, as
+	// block-time drift would place it.
 	happyPathCases := map[string]struct {
 		revealAge   time.Duration
 		revealBlock uint64
+		blockTime   time.Duration
 	}{
 		"recent reveal": {
 			revealAge:   0,
 			revealBlock: 299990,
 		},
-		"reveal older than 216000 blocks": {
+		"reveal 250000 blocks back": {
 			revealAge:   250000 * 12 * time.Second,
 			revealBlock: 300000 - 250000 + 3000,
+		},
+		"reveal 7200 one-second blocks back": {
+			revealAge:   2 * time.Hour,
+			revealBlock: 300000 - 7200,
+			blockTime:   time.Second,
 		},
 	}
 	for name, happyPathCase := range happyPathCases {
@@ -878,7 +885,14 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 				TxMaxFee:                  2000,
 			})
 
-			action := newAction(chain, btcChain, fundingTxHash)
+			var actionChain Chain = chain
+			if happyPathCase.blockTime != 0 {
+				actionChain = &timedRangeRevealChain{
+					rangeRevealChain: chain,
+					blockTime:        happyPathCase.blockTime,
+				}
+			}
+			action := newAction(actionChain, btcChain, fundingTxHash)
 			// Below reservationActionSigningTimeoutSafetyMarginBlocks (300):
 			// every real upstream step (event match, deposit request fetch,
 			// reservation key derivation, action load, target wallet match,

@@ -80,6 +80,16 @@ func (c *rangeRevealChain) PastDepositRevealedEvents(
 	return c.reveals.PastDepositRevealedEvents(filter)
 }
 
+// timedRangeRevealChain is a rangeRevealChain that reports a block time.
+type timedRangeRevealChain struct {
+	*rangeRevealChain
+	blockTime time.Duration
+}
+
+func (c *timedRangeRevealChain) AverageBlockTime() time.Duration {
+	return c.blockTime
+}
+
 func matchFundingTxHash(hash bitcoin.Hash) func(*DepositRevealedEvent) bool {
 	return func(event *DepositRevealedEvent) bool {
 		return event.FundingTxHash == hash
@@ -202,8 +212,7 @@ func TestFindDepositRevealedEventByRevealTime(t *testing.T) {
 	target := bitcoin.Hash{0xaa}
 	now := time.Now()
 	currentBlock := uint64(10_000_000)
-	// 300000 blocks (about 41 days at 12 s) before the current block,
-	// older than the 216000-block window the lookup replaced. The
+	// 300000 blocks (about 41 days at 12 s) before the current block. The
 	// margin for this distance is 5% of 300000 = 15000 blocks.
 	revealedAt := now.Add(-300000 * 12 * time.Second)
 	estimatedBlock := currentBlock - 300000

@@ -511,14 +511,21 @@ func (raa *reservationAnchorAction) execute() error {
 	// block it was revealed at. A depositor may request acceptance long
 	// after the reveal, so the DepositRevealed event is located from the
 	// deposit's on-chain reveal timestamp rather than from a fixed
-	// look-back window, and matched on the exact funding outpoint.
+	// look-back window, and matched on the exact funding outpoint. The
+	// chain's configured block time is used when it exposes one.
+	averageBlockTime := DepositRevealLookupDefaultBlockTime
+	if timedChain, ok := raa.chain.(interface {
+		AverageBlockTime() time.Duration
+	}); ok {
+		averageBlockTime = timedChain.AverageBlockTime()
+	}
 	matchingEvent, err := FindDepositRevealedEventByRevealTime(
 		raa.chain,
 		walletPublicKeyHash,
 		depositRequest.RevealedAt,
 		time.Now(),
 		raa.startBlock,
-		DepositRevealLookupDefaultBlockTime,
+		averageBlockTime,
 		func(event *DepositRevealedEvent) bool {
 			return event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
 				event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex
