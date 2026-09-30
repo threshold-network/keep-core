@@ -1,4 +1,5 @@
-FROM golang:1.24-alpine3.21 AS build-sources
+# Keep both builders aligned with the toolchain directive in go.mod.
+FROM golang:1.26.8-alpine3.23 AS build-sources
 
 ENV GOPATH=/go \
 	GOBIN=/go/bin \
@@ -96,7 +97,7 @@ RUN GOOS=linux make build \
 	version=$VERSION \
 	revision=$REVISION
 
-FROM alpine:3.21 as runtime-docker
+FROM alpine:3.23 as runtime-docker
 
 ENV APP_NAME=keep-client \
 	APP_DIR=/go/src/github.com/keep-network/keep-core \
@@ -116,9 +117,15 @@ CMD []
 #
 # Build Binaries
 #
-FROM golang:1.24-bullseye AS build-bins
+# Keep cgo release binaries compatible with glibc 2.31 (Debian 11/Ubuntu 20.04).
+# Copy only Go so the C compiler and libc still come from Bullseye.
+FROM buildpack-deps:bullseye AS build-bins
 
-ENV APP_DIR=/go/src/github.com/keep-network/keep-core
+COPY --from=golang:1.26.8-bookworm /usr/local/go /usr/local/go
+
+ENV PATH=/usr/local/go/bin:$PATH \
+	GOTOOLCHAIN=local \
+	APP_DIR=/go/src/github.com/keep-network/keep-core
 
 WORKDIR $APP_DIR
 

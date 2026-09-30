@@ -92,9 +92,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.24.1'
+          go-version-file: "go.mod"
 
       - name: Verify vendored btcec byte identity vs upstream v0.22.3
         run: |
@@ -627,6 +627,17 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           context: .
 
+      - name: Verify Linux release compatibility
+        run: |
+          release_dir=$(mktemp -d)
+          trap 'rm -rf "$release_dir"' EXIT
+          tar -xzf out/bin/*-linux-amd64.tar.gz -C "$release_dir"
+          for image in debian:bullseye-slim ubuntu:20.04; do
+            docker run --rm --platform linux/amd64 \
+              --mount "type=bind,src=$release_dir,dst=/release,readonly" \
+              "$image" sh -ec 'getconf GNU_LIBC_VERSION; /release/keep-client --version'
+          done
+
       - name: Archive Client Binaries
         uses: actions/upload-artifact@v4
         with:
@@ -688,7 +699,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
       - name: gofmt
@@ -706,7 +717,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
       - run: go vet
@@ -719,13 +730,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
       - name: Staticcheck
         uses: dominikh/staticcheck-action@v1.4.0
         with:
-          version: "2025.1.1"
+          version: "2026.1"
           install-go: false
           checks: "-SA1019"
 
@@ -739,6 +750,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
       pull-requests: write
     env:
       # PRs and the nightly schedule compare against the target/current
@@ -747,13 +759,15 @@ jobs:
       BENCHMARK_BASELINE_BRANCH: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
       BENCHMARK_BASELINE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'workflow_dispatch' || 'push' }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version-file: "go.mod"
           cache: false
 
       - name: Download Docker Build Image

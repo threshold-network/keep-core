@@ -1,8 +1,8 @@
 module github.com/keep-network/keep-core
 
-go 1.24.0
+go 1.25.7
 
-toolchain go1.24.1
+toolchain go1.26.8
 
 replace (
 	github.com/bnb-chain/tss-lib => github.com/threshold-network/tss-lib v0.0.0-20230901144531-2e712689cfbe
