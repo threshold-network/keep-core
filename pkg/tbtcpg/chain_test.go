@@ -41,7 +41,6 @@ type movingFundsCommitmentSubmission struct {
 type reservationReanchorRequestSubmission struct {
 	ReservationKey            *big.Int
 	TargetWalletPublicKeyHash [20]byte
-	TxHash                    [32]byte
 }
 
 // belowDustNotification captures a submitted NotifyMovingFundsBelowDust
@@ -93,13 +92,9 @@ type LocalChain struct {
 	reservationParametersSet              bool
 	reservationProposalValidations        map[[32]byte]bool
 	reservationReanchorRequestSubmissions []*reservationReanchorRequestSubmission
-	reservationReanchorRequestReceipts    map[[32]byte]tbtc.ReservationReanchorRequestReceiptStatus
-	// revertNextReanchorRequest makes the next RequestReservationReanchor
-	// submission record a Reverted receipt and write no generation.
-	revertNextReanchorRequest bool
 	// pendingNextReanchorRequest makes the next RequestReservationReanchor
-	// submission record a Pending receipt and write no generation,
-	// modeling a submission still unconfirmed in the mempool.
+	// submission succeed without writing a generation, modeling a
+	// submission still unconfirmed in the mempool (or dropped from it).
 	pendingNextReanchorRequest bool
 	// reservationReanchorValidationCalls counts calls to
 	// ValidateReservationReanchorProposal, so tests can observe whether
@@ -144,7 +139,6 @@ func NewLocalChain() *LocalChain {
 		reservationActions:                    make(map[string]*tbtc.ReservationAction),
 		reservationProposalValidations:        make(map[[32]byte]bool),
 		reservationReanchorRequestSubmissions: make([]*reservationReanchorRequestSubmission, 0),
-		reservationReanchorRequestReceipts:    make(map[[32]byte]tbtc.ReservationReanchorRequestReceiptStatus),
 		belowDustNotifications:                make([]*belowDustNotification, 0),
 		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
 		reservedDeposits:                      make(map[string]bool),
@@ -1710,64 +1704,40 @@ func buildReservationReanchorProposalValidationKey(
 // reservation to be Active (fails closed otherwise, matching "Reservation
 // is not active"), then bumps its RequestNonce, flips its state to
 // ActionPending, and writes the new generation as a Pending Reanchor
-// action authorizing targetWalletPublicKeyHash. This makes the new
+// action authorizing targetWalletPublicKeyHash. This makes the
 // request-then-wait-then-read flow in ProposeReservationReanchor
 // observable in tests: reading the action before this call succeeds
 // returns "not found", exactly like an on-chain read of an
 // as-yet-unwritten generation would.
 //
-// The fake models the submission as immediately mined, matching the
-// production adapter's ForceMining fast path: it returns a deterministic
-// transaction hash (derived from the submission contents plus the
-// submission count) and registers the receipt as Mined, so the default
-// GetReservationReanchorRequestReceipt answer for a recorded submission is
-// Mined. Tests that need a different outcome (a reverted or still-pending
-// receipt) override it via SetReservationReanchorRequestReceipt before
-// driving the task. SetRevertNextReservationReanchorRequest makes the
-// next submission succeed with a hash but record the receipt as Reverted
-// instead of writing the on-chain generation, matching a request that
-// reverts on-chain after submission.
+// The fake models the submission as immediately mined.
+// SetNextReservationReanchorRequestPending makes the next submission
+// succeed without writing the generation, matching a request that has not
+// been mined.
 func (lc *LocalChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
-) ([32]byte, error) {
+) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
 	key := reservationKey.Text(16)
 	existing, ok := lc.reservations[key]
 	if !ok || existing == nil || existing.State != tbtc.ReservationStateActive {
-		return [32]byte{}, fmt.Errorf("reservation is not active")
+		return fmt.Errorf("reservation is not active")
 	}
-
-	submissionCount := len(lc.reservationReanchorRequestSubmissions)
-	txHash := lc.nextReservationReanchorRequestHash(
-		reservationKey,
-		targetWalletPublicKeyHash,
-		submissionCount,
-	)
 
 	lc.reservationReanchorRequestSubmissions = append(
 		lc.reservationReanchorRequestSubmissions,
 		&reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(reservationKey),
 			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-			TxHash:                    txHash,
 		},
 	)
 
-	if lc.revertNextReanchorRequest {
-		lc.revertNextReanchorRequest = false
-		lc.reservationReanchorRequestReceipts[txHash] =
-			tbtc.ReservationReanchorRequestReceiptReverted
-		return txHash, nil
-	}
-
 	if lc.pendingNextReanchorRequest {
 		lc.pendingNextReanchorRequest = false
-		lc.reservationReanchorRequestReceipts[txHash] =
-			tbtc.ReservationReanchorRequestReceiptPending
-		return txHash, nil
+		return nil
 	}
 
 	// Mirror the request-time count-capacity check Reservation.sol's
@@ -1786,7 +1756,7 @@ func (lc *LocalChain) RequestReservationReanchor(
 		)
 		if currentTargetCount+1 >
 			lc.reservationParametersValue.MaxReservationsPerWallet {
-			return [32]byte{}, fmt.Errorf("wallet reservations cap exceeded")
+			return fmt.Errorf("wallet reservations cap exceeded")
 		}
 	}
 
@@ -1813,7 +1783,7 @@ func (lc *LocalChain) RequestReservationReanchor(
 				anchorValue = uint64(existing.AnchorUtxo.Value)
 			}
 			if targetReservedAmount+anchorValue > maxAmount {
-				return [32]byte{}, fmt.Errorf("wallet reserved amount cap exceeded")
+				return fmt.Errorf("wallet reserved amount cap exceeded")
 			}
 		}
 	}
@@ -1839,76 +1809,11 @@ func (lc *LocalChain) RequestReservationReanchor(
 		TermSeconds: lc.reservationParametersValue.ReservationTermSeconds,
 	}
 
-	lc.reservationReanchorRequestReceipts[txHash] =
-		tbtc.ReservationReanchorRequestReceiptMined
-
-	return txHash, nil
-}
-
-// nextReservationReanchorRequestHash derives the fake's deterministic
-// transaction hash for a re-anchor submission: the keccak-256 of the
-// reservation key, the target wallet hash, and the submission count.
-// Callers hold lc.mutex.
-func (lc *LocalChain) nextReservationReanchorRequestHash(
-	reservationKey *big.Int,
-	targetWalletPublicKeyHash [20]byte,
-	submissionCount int,
-) [32]byte {
-	var buffer bytes.Buffer
-	buffer.Write(reservationKey.Bytes())
-	buffer.Write(targetWalletPublicKeyHash[:])
-	for i := 0; i < 4; i++ {
-		buffer.Write([]byte{byte(uint32(submissionCount) >> (8 * i))})
-	}
-	var hash [32]byte
-	copy(hash[:], crypto.Keccak256(buffer.Bytes()))
-	return hash
-}
-
-// GetReservationReanchorRequestReceipt returns the recorded receipt status
-// of a RequestReservationReanchor submission: a hash recorded via the
-// submission itself (Mined, or Reverted when a revert was forced) or via
-// SetReservationReanchorRequestPending reports its recorded status, and a
-// hash never seen by the fake reports NotFound.
-func (lc *LocalChain) GetReservationReanchorRequestReceipt(
-	txHash [32]byte,
-) (tbtc.ReservationReanchorRequestReceiptStatus, error) {
-	lc.mutex.Lock()
-	defer lc.mutex.Unlock()
-
-	if status, ok := lc.reservationReanchorRequestReceipts[txHash]; ok {
-		return status, nil
-	}
-	return tbtc.ReservationReanchorRequestReceiptNotFound, nil
-}
-
-// SetReservationReanchorRequestReceipt overrides the receipt status the
-// fake reports for the given submission hash (e.g. to model a request
-// that is still pending in the mempool).
-func (lc *LocalChain) SetReservationReanchorRequestReceipt(
-	txHash [32]byte,
-	status tbtc.ReservationReanchorRequestReceiptStatus,
-) {
-	lc.mutex.Lock()
-	defer lc.mutex.Unlock()
-
-	lc.reservationReanchorRequestReceipts[txHash] = status
-}
-
-// SetRevertNextReservationReanchorRequest makes the next
-// RequestReservationReanchor submission succeed (returning its hash)
-// while recording its receipt as Reverted and writing no on-chain
-// generation.
-func (lc *LocalChain) SetRevertNextReservationReanchorRequest() {
-	lc.mutex.Lock()
-	defer lc.mutex.Unlock()
-
-	lc.revertNextReanchorRequest = true
+	return nil
 }
 
 // SetNextReservationReanchorRequestPending makes the next
-// RequestReservationReanchor submission succeed (returning its hash)
-// while recording its receipt as Pending and writing no on-chain
+// RequestReservationReanchor submission succeed while writing no on-chain
 // generation, matching a request still unconfirmed in the mempool.
 func (lc *LocalChain) SetNextReservationReanchorRequestPending() {
 	lc.mutex.Lock()
@@ -2281,7 +2186,6 @@ func (lc *LocalChain) GetReservationReanchorRequestSubmissions() []*reservationR
 		copy[i] = &reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(s.ReservationKey),
 			TargetWalletPublicKeyHash: s.TargetWalletPublicKeyHash,
-			TxHash:                    s.TxHash,
 		}
 	}
 	return copy

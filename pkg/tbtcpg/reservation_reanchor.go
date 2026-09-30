@@ -24,9 +24,7 @@ const ReservationReanchorLookBackBlocks = uint64(216000)
 // waitForReservationReanchorRequestMined waits for a submitted
 // RequestReservationReanchor transaction to be mined, mirroring
 // MovingFundsTask.SubmitMovingFundsCommitment's bounded wait-then-re-read
-// pattern. It doubles as the same-round fast path for a fresh request
-// (below) and the "not observed for this many blocks means dropped"
-// bound for the in-flight receipt check in Run.
+// pattern.
 const reservationReanchorRequestWaitBlocks = uint64(6)
 
 // reservationRequestTimeoutSafetyMarginSeconds mirrors
@@ -38,25 +36,6 @@ const reservationReanchorRequestWaitBlocks = uint64(6)
 // signing window has closed instead of proposing them only to have the
 // validator reject them.
 const reservationRequestTimeoutSafetyMarginSeconds = 2 * 60 * 60
-
-// reservationReanchorInFlightRequest tracks a RequestReservationReanchor
-// submission that has not yet been resolved by its receipt, keyed by the
-// reservation key in the task's inFlightReanchorRequests map.
-type reservationReanchorInFlightRequest struct {
-	// txHash is the RequestReservationReanchor transaction hash the
-	// receipt check looks up.
-	txHash [32]byte
-	// submittedAtBlock is the current block observed when the submission
-	// was recorded.
-	submittedAtBlock uint64
-	// sourceWalletPublicKeyHash is the wallet that hosted the reservation
-	// when the submission was recorded. It identifies the entry to
-	// forgetInFlightReanchorRequests if that wallet's reservation list no
-	// longer contains the key: a custody move that happened before the
-	// next Run round means nothing left to resolve there and the chain
-	// state alone drives any resume.
-	sourceWalletPublicKeyHash [20]byte
-}
 
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
@@ -90,21 +69,6 @@ type ReservationReanchorTask struct {
 	// is excluded. Meaningful only when hasCachedTargetWallet is true.
 	cachedTargetWalletPublicKeyHash [20]byte
 	hasCachedTargetWallet           bool
-
-	// inFlightReanchorRequestsMutex guards inFlightReanchorRequests.
-	// This task instance is shared across concurrent Run calls for
-	// different source wallets, as targetWalletCacheMutex is, so the
-	// per-reservation tracking state needs its own mutex.
-	inFlightReanchorRequestsMutex sync.Mutex
-	// inFlightReanchorRequests tracks RequestReservationReanchor
-	// submissions that have not yet been resolved by their receipt,
-	// keyed by reservation key. The receipt check at the top of Run
-	// settles each entry: mined resumes from chain state, reverted or
-	// not-observed-past-the-bound allows a fresh request, still
-	// pending skips this round. State loss on restart is tolerable: a
-	// mined request shows up as ActionPending (resume path) and a
-	// dropped request leaves Active (a new request is safe).
-	inFlightReanchorRequests map[string]reservationReanchorInFlightRequest
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -114,9 +78,8 @@ func NewReservationReanchorTask(
 	btcChain bitcoin.Chain,
 ) *ReservationReanchorTask {
 	return &ReservationReanchorTask{
-		chain:                    chain,
-		btcChain:                 btcChain,
-		inFlightReanchorRequests: make(map[string]reservationReanchorInFlightRequest),
+		chain:    chain,
+		btcChain: btcChain,
 	}
 }
 
@@ -212,13 +175,6 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
-	// A reservation that left the wallet since the entry was recorded
-	// has nothing left to resolve under it: drop the in-flight entries
-	// that no longer appear in the wallet's reservation list before any
-	// path below (including the empty-list early return) can settle
-	// them.
-	rrt.forgetInFlightReanchorRequestsNotIn(walletPublicKeyHash, reservationKeys)
-
 	if len(reservationKeys) == 0 {
 		taskLogger.Info("wallet has no reservations to re-anchor")
 		// This duty stays embedded in Run() rather than becoming its own
@@ -272,59 +228,6 @@ reservationLoop:
 				reservationKey,
 				err,
 			)
-		}
-
-		// In-flight request tracking: if a RequestReservationReanchor
-		// submitted in an earlier round for this reservation is still
-		// unresolved, check its receipt before doing anything else. A
-		// mined request means the chain now holds the new generation
-		// (resume from chain state below); a reverted or dropped one
-		// means the chain still shows the old state and a fresh request
-		// is allowed; a still-pending one means this reservation is
-		// skipped this round. The submission's block number bounds the
-		// pending window: once the submission is not observed within
-		// reservationReanchorRequestWaitBlocks it is treated as dropped
-		// and a new request is allowed.
-		if inFlight, ok := rrt.getReanchorRequestInFlight(reservationKey); ok {
-			resolved, reReadReservation, err :=
-				rrt.resolveReanchorRequestInFlight(
-					taskLogger,
-					reservationKey,
-					inFlight,
-				)
-			if err != nil {
-				taskLogger.Errorf(
-					"cannot resolve in-flight re-anchor request for "+
-						"[0x%x]: [%v]",
-					reservationKey,
-					err,
-				)
-				continue reservationLoop
-			}
-			if !resolved {
-				taskLogger.Infof(
-					"re-anchor request for [0x%x] still in flight; "+
-						"skipping this reservation this round",
-					reservationKey,
-				)
-				continue reservationLoop
-			}
-			if reReadReservation {
-				// The request just resolved as mined: re-read the
-				// reservation record so the switch below dispatches on
-				// the state the mined generation actually advanced it
-				// to (ActionPending with the new nonce).
-				reservation, err = rrt.chain.GetReservation(reservationKey)
-				if err != nil {
-					taskLogger.Errorf(
-						"cannot re-read reservation [0x%x] after an "+
-							"in-flight request resolved as mined: [%v]",
-						reservationKey,
-						err,
-					)
-					continue reservationLoop
-				}
-			}
 		}
 
 		switch reservation.State {
@@ -471,14 +374,10 @@ reservationLoop:
 					continue
 				}
 
-				// Every other failure on the request path is safe to
-				// retry on the next round without re-requesting: a
-				// request that went on-chain is tracked in-flight by
-				// its transaction hash (resolved by the receipt check
-				// at the top of this pass), and a pre-request local
-				// failure (fee estimation, assembly, validation)
-				// changed no chain state. Skip this reservation this
-				// pass.
+				// Skip this reservation this pass. A request that went
+				// on-chain is picked up from chain state on a later
+				// round: once mined, the reservation is ActionPending
+				// and takes the resume path above.
 				continue reservationLoop
 			}
 
@@ -494,18 +393,6 @@ reservationLoop:
 	taskLogger.Info("no reservations eligible for re-anchor")
 	return nil, false, nil
 }
-
-// errReservationReanchorRequestNotMined signals that a just-submitted
-// RequestReservationReanchor was not observed as mined within the
-// same-round fast-path wait. The submission itself succeeded: an
-// in-flight tracking entry (with the submitted transaction hash and
-// block) was recorded before the wait, so subsequent Run rounds
-// settle it via its receipt instead of issuing a duplicate request.
-// Run treats this as "skip this reservation this round" rather than
-// as a window failure.
-var errReservationReanchorRequestNotMined = errors.New(
-	"reservation re-anchor request not yet mined",
-)
 
 // isReservationCapRevertError reports whether err is a reservation
 // wallet-capacity revert from either RequestReservationReanchor or
@@ -612,32 +499,13 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 			targetWalletPublicKeyHash,
 		)
 
-		txHash, err := rrt.chain.RequestReservationReanchor(
+		if err := rrt.chain.RequestReservationReanchor(
 			reservationKey,
 			targetWalletPublicKeyHash,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
 		}
 
-		// Record the in-flight submission for cross-round receipt
-		// resolution (see Run's in-flight receipt check): a later round
-		// sees this entry and resolves the request via its receipt
-		// (mined -> resume, reverted/dropped -> allow a new request,
-		// pending -> skip this round).
-		rrt.recordReanchorRequestInFlight(
-			taskLogger,
-			sourceWalletPublicKeyHash,
-			reservationKey,
-			txHash,
-		)
-
-		// Same-round fast path: wait for the request to mine so this
-		// round builds the proposal directly rather than waiting for
-		// the next round's receipt resolution. A timeout is no longer a
-		// window-aborting post-write failure: the in-flight entry above
-		// carries the submission into the receipt check, which resolves
-		// it safely in subsequent rounds.
 		reservation, action, err = rrt.waitForReservationReanchorRequestMined(
 			taskLogger,
 			reservationKey,
@@ -645,7 +513,10 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 			requestNonce,
 		)
 		if err != nil {
-			return nil, errReservationReanchorRequestNotMined
+			return nil, fmt.Errorf(
+				"reservation re-anchor request not confirmed: [%w]",
+				err,
+			)
 		}
 		requestNonce = reservation.RequestNonce
 	}
@@ -959,191 +830,6 @@ func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 	if rrt.hasCachedTargetWallet && rrt.cachedTargetWalletPublicKeyHash == target {
 		rrt.hasCachedTargetWallet = false
 	}
-}
-
-// recordReanchorRequestInFlight records the just-submitted
-// RequestReservationReanchor transaction hash for the reservation under
-// sourceWalletPublicKeyHash, the wallet that hosted the reservation when
-// the submission was recorded. The current block (or 0 if the block
-// counter is unavailable) bounds the receipt check's "not observed for
-// this many blocks means dropped" logic.
-func (rrt *ReservationReanchorTask) recordReanchorRequestInFlight(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	reservationKey *big.Int,
-	txHash [32]byte,
-) {
-	var submittedBlock uint64
-	if blockCounter, err := rrt.chain.BlockCounter(); err == nil {
-		if currentBlock, err := blockCounter.CurrentBlock(); err == nil {
-			submittedBlock = currentBlock
-		} else {
-			taskLogger.Warnf(
-				"cannot read current block when recording in-flight re-anchor "+
-					"request for [0x%x]: [%v]; the receipt check will treat "+
-					"any pending status as past the window",
-				reservationKey,
-				err,
-			)
-		}
-	} else {
-		taskLogger.Warnf(
-			"cannot get block counter when recording in-flight re-anchor "+
-				"request for [0x%x]: [%v]; the receipt check will treat any "+
-				"pending status as past the window",
-			reservationKey,
-			err,
-		)
-	}
-
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	rrt.inFlightReanchorRequests[reservationKey.Text(16)] = reservationReanchorInFlightRequest{
-		txHash:                    txHash,
-		submittedAtBlock:          submittedBlock,
-		sourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
-	}
-}
-
-// forgetInFlightReanchorRequestsNotIn drops the in-flight entries for
-// sourceWalletPublicKeyHash whose reservation key is not in currentKeys,
-// called at the top of Run, just after the wallet's reservation list is
-// read: a reservation that has since left the wallet (moved to another
-// custody) has nothing left to resume under this wallet, so the chain
-// state alone drives any follow-up and the tracking entry would otherwise
-// leak for the task's lifetime. Entries hosted by any other wallet are
-// left untouched.
-func (rrt *ReservationReanchorTask) forgetInFlightReanchorRequestsNotIn(
-	sourceWalletPublicKeyHash [20]byte,
-	currentKeys []*big.Int,
-) {
-	present := make(map[string]bool, len(currentKeys))
-	for _, key := range currentKeys {
-		present[key.Text(16)] = true
-	}
-
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	for key, entry := range rrt.inFlightReanchorRequests {
-		if entry.sourceWalletPublicKeyHash == sourceWalletPublicKeyHash &&
-			!present[key] {
-			delete(rrt.inFlightReanchorRequests, key)
-		}
-	}
-}
-
-// getReanchorRequestInFlight returns the in-flight record for the
-// reservation key, if any.
-func (rrt *ReservationReanchorTask) getReanchorRequestInFlight(
-	reservationKey *big.Int,
-) (reservationReanchorInFlightRequest, bool) {
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	entry, ok := rrt.inFlightReanchorRequests[reservationKey.Text(16)]
-	return entry, ok
-}
-
-// forgetInFlightReanchorRequest drops the in-flight record for the
-// reservation key, called once the receipt outcome has been resolved.
-func (rrt *ReservationReanchorTask) forgetInFlightReanchorRequest(
-	reservationKey *big.Int,
-) {
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	delete(rrt.inFlightReanchorRequests, reservationKey.Text(16))
-}
-
-// resolveReanchorRequestInFlight looks up the receipt for an in-flight
-// RequestReservationReanchor submission and settles it.
-//
-//   - Mined: the chain now holds the new generation; the entry is
-//     forgotten. Callers should re-read the reservation and take the
-//     ActionPending resume path.
-//   - Reverted: no generation was written; the entry is forgotten and a
-//     fresh request is allowed this round.
-//   - Pending / NotFound: the submission is still unobserved. Within
-//     reservationReanchorRequestWaitBlocks of submission the caller
-//     should skip this reservation for this round (the receipt may
-//     surface on a later one); past that bound the submission is
-//     treated as dropped and a new request is allowed.
-//
-// The returned values are:
-//
-//	resolved        -- the in-flight entry has been settled and the
-//	                   caller may continue past it;
-//	re-mustClear    -- the chain state may have advanced (only true for
-//	                   the Mined case), so the caller should re-read the
-//	                   reservation record before dispatching.
-func (rrt *ReservationReanchorTask) resolveReanchorRequestInFlight(
-	taskLogger log.StandardLogger,
-	reservationKey *big.Int,
-	inFlight reservationReanchorInFlightRequest,
-) (resolved bool, reMustClear bool, err error) {
-	status, err := rrt.chain.GetReservationReanchorRequestReceipt(inFlight.txHash)
-	if err != nil {
-		return false, false, fmt.Errorf(
-			"receipt lookup: [%w]",
-			err,
-		)
-	}
-
-	switch status {
-	case tbtc.ReservationReanchorRequestReceiptMined:
-		taskLogger.Infof(
-			"in-flight re-anchor request [%x] for reservation [0x%x] mined; "+
-				"resuming from chain state",
-			inFlight.txHash,
-			reservationKey,
-		)
-		rrt.forgetInFlightReanchorRequest(reservationKey)
-		return true, true, nil
-	case tbtc.ReservationReanchorRequestReceiptReverted:
-		taskLogger.Infof(
-			"in-flight re-anchor request [%x] for reservation [0x%x] reverted; "+
-				"allowing a new request",
-			inFlight.txHash,
-			reservationKey,
-		)
-		rrt.forgetInFlightReanchorRequest(reservationKey)
-		return true, false, nil
-	case tbtc.ReservationReanchorRequestReceiptPending,
-		tbtc.ReservationReanchorRequestReceiptNotFound:
-		blockCounter, err := rrt.chain.BlockCounter()
-		if err != nil {
-			return false, false, fmt.Errorf(
-				"block counter: [%w]",
-				err,
-			)
-		}
-		currentBlock, err := blockCounter.CurrentBlock()
-		if err != nil {
-			return false, false, fmt.Errorf(
-				"current block: [%w]",
-				err,
-			)
-		}
-		if currentBlock > inFlight.submittedAtBlock &&
-			currentBlock-inFlight.submittedAtBlock >
-				reservationReanchorRequestWaitBlocks {
-			taskLogger.Infof(
-				"in-flight re-anchor request [%x] for reservation [0x%x] "+
-					"unobserved for [%d] blocks; treating as dropped and "+
-					"allowing a new request",
-				inFlight.txHash,
-				reservationKey,
-				currentBlock-inFlight.submittedAtBlock,
-			)
-			rrt.forgetInFlightReanchorRequest(reservationKey)
-			return true, false, nil
-		}
-		return false, false, nil
-	}
-
-	return true, false, nil
 }
 
 // scanForTargetWallet performs the registration-event scan findTargetWallet

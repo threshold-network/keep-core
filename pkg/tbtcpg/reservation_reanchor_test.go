@@ -708,16 +708,16 @@ func newReservationReanchorLocalChain() *reservationReanchorLocalChain {
 func (rrlc *reservationReanchorLocalChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
-) ([32]byte, error) {
+) error {
 	if !rrlc.capRevertConsumed &&
 		rrlc.forceCapRevertFor == targetWalletPublicKeyHash {
 		rrlc.capRevertConsumed = true
-		return [32]byte{}, errors.New("wallet reservations cap exceeded")
+		return errors.New("wallet reservations cap exceeded")
 	}
 	if !rrlc.amountCapRevertConsumed &&
 		rrlc.forceAmountCapRevertFor == targetWalletPublicKeyHash {
 		rrlc.amountCapRevertConsumed = true
-		return [32]byte{}, errors.New("wallet reserved amount cap exceeded")
+		return errors.New("wallet reserved amount cap exceeded")
 	}
 	return rrlc.LocalChain.RequestReservationReanchor(
 		reservationKey,
@@ -1118,7 +1118,7 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 		})
 		lc.SetWalletReservations(filledTargetWalletPublicKeyHash, []*big.Int{fillKey})
 
-		if _, err := lc.RequestReservationReanchor(
+		if err := lc.RequestReservationReanchor(
 			resKey,
 			filledTargetWalletPublicKeyHash,
 		); err == nil ||

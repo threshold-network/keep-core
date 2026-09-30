@@ -575,29 +575,6 @@ type Chain interface {
 	ReservationChain
 }
 
-// ReservationReanchorRequestReceiptStatus describes the outcome of a
-// receipt lookup for a submitted RequestReservationReanchor transaction.
-// The RequestReservationReanchor submission launches mining and gas
-// bumping in the background and returns before the transaction is mined,
-// so callers track the returned transaction hash across coordination
-// rounds and resolve the request's fate from its receipt.
-type ReservationReanchorRequestReceiptStatus int
-
-const (
-	// ReservationReanchorRequestReceiptMined is the request transaction
-	// mined successfully: the new action generation exists on chain.
-	ReservationReanchorRequestReceiptMined ReservationReanchorRequestReceiptStatus = iota
-	// ReservationReanchorRequestReceiptReverted is the request transaction
-	// mined but reverted on chain: no action generation was written.
-	ReservationReanchorRequestReceiptReverted
-	// ReservationReanchorRequestReceiptPending is the request transaction
-	// is still in the mempool with no receipt yet.
-	ReservationReanchorRequestReceiptPending
-	// ReservationReanchorRequestReceiptNotFound is the request transaction
-	// was never observed on this node; it may have been dropped.
-	ReservationReanchorRequestReceiptNotFound
-)
-
 // ReservationChain defines the subset of the TBTC chain interface that pertains
 // specifically to UTXO reservation Bridge operations. The reservation state
 // machine is implemented behind Bridge.fallback's delegatecall to the
@@ -608,23 +585,10 @@ const (
 type ReservationChain interface {
 	// RequestReservationReanchor requests a reservation re-anchor action
 	// generation for the given reservation, targeting the given wallet.
-	// The returned bytes are the 32-byte hash of the submitted
-	// transaction; callers that submit the request track it across
-	// rounds via GetReservationReanchorRequestReceipt. A returned error
-	// means the submission itself failed before or at send time, so
-	// there is no transaction to track.
 	RequestReservationReanchor(
 		reservationKey *big.Int,
 		targetWalletPublicKeyHash [20]byte,
-	) ([32]byte, error)
-
-	// GetReservationReanchorRequestReceipt reports the mining status of
-	// the RequestReservationReanchor transaction identified by txHash:
-	// mined successfully, mined but reverted, still pending in the
-	// mempool, or not observed.
-	GetReservationReanchorRequestReceipt(
-		txHash [32]byte,
-	) (ReservationReanchorRequestReceiptStatus, error)
+	) error
 
 	// SubmitReservationAcceptanceProof submits an SPV proof for the given
 	// reservation acceptance action generation. The call is restricted to
