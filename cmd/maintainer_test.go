@@ -5,8 +5,13 @@ import (
 	"net"
 	"testing"
 
+	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+
+	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/maintainer"
+	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 )
 
 // stubBlockCounter is a minimal chain.BlockCounter implementation used to
@@ -214,5 +219,32 @@ func TestInitializeMaintainerMetricsEnabledWhenPortSet(t *testing.T) {
 			"expected counter value [1] after increment, got [%v]",
 			value,
 		)
+	}
+}
+
+// TestMaintainerConfig verifies that the maintainer command hands the SPV
+// maintainer the Ethereum network from the [ethereum] section: without it
+// the network is Unknown, the reservation activation block lookup fails
+// and every reservation catch-up scan is skipped. The rest of the
+// maintainer config passes through unchanged.
+func TestMaintainerConfig(t *testing.T) {
+	cfg := &config.Config{
+		Ethereum: commonEthereum.Config{Network: commonEthereum.Sepolia},
+		Maintainer: maintainer.Config{
+			Spv: spv.Config{Enabled: true, ReservationProofsEnabled: true},
+		},
+	}
+
+	got := maintainerConfig(cfg)
+
+	if got.Spv.EthereumNetwork != commonEthereum.Sepolia {
+		t.Errorf(
+			"expected the SPV maintainer network %v, got %v",
+			commonEthereum.Sepolia,
+			got.Spv.EthereumNetwork,
+		)
+	}
+	if !got.Spv.Enabled || !got.Spv.ReservationProofsEnabled {
+		t.Errorf("expected the rest of the SPV config to pass through, got %+v", got.Spv)
 	}
 }

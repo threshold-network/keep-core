@@ -79,11 +79,9 @@ func maintainers(cmd *cobra.Command, args []string) error {
 
 	metricsRecorder := initializeMaintainerMetrics(ctx, blockCounter, tbtcChain, btcChain)
 
-	clientConfig.Maintainer.Spv.EthereumNetwork = clientConfig.Ethereum.Network
-
 	maintainer.Initialize(
 		ctx,
-		clientConfig.Maintainer,
+		maintainerConfig(clientConfig),
 		btcChain,
 		btcDiffChain,
 		tbtcChain,
@@ -92,6 +90,17 @@ func maintainers(cmd *cobra.Command, args []string) error {
 
 	<-ctx.Done()
 	return fmt.Errorf("unexpected context cancellation")
+}
+
+// maintainerConfig returns the maintainers' config with the SPV
+// maintainer's Ethereum network copied from the [ethereum] section. The
+// SPV maintainer looks up the reservation activation block by that
+// network; left unset, the network is Unknown and every reservation
+// catch-up scan is skipped.
+func maintainerConfig(cfg *config.Config) maintainer.Config {
+	maintainerConfig := cfg.Maintainer
+	maintainerConfig.Spv.EthereumNetwork = cfg.Ethereum.Network
+	return maintainerConfig
 }
 
 // initializeMaintainerMetrics sets up the client info registry and performance
