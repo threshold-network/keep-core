@@ -1148,8 +1148,9 @@ func TestReservationAcceptanceTask_IgnoresRequestTimeCaps(t *testing.T) {
 // acceptance requests are scanned. Solidity sets a generation's timeoutAt
 // to request time + the action timeout, so a generation that can still be
 // signed was requested within that timeout: the scan covers the on-chain
-// action timeout in blocks plus a one-day margin, filtered by wallet, and
-// a request inside that window is proposed.
+// action timeout in blocks plus a one-day margin, filtered by wallet and
+// split into 10000-block chunks, and a request inside that window is
+// proposed.
 func TestReservationAcceptanceTask_RequestLookBackWindow(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
 	currentBlock := uint64(300000)
@@ -1167,23 +1168,33 @@ func TestReservationAcceptanceTask_RequestLookBackWindow(t *testing.T) {
 	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
 	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 
-	if len(ralc.acceptanceEventFilters) != 1 {
+	// The 14400-block window is scanned in 10000-block chunks.
+	expectedRanges := [][2]uint64{
+		{expectedStartBlock, expectedStartBlock + 9999},
+		{expectedStartBlock + 10000, currentBlock},
+	}
+	if len(ralc.acceptanceEventFilters) != len(expectedRanges) {
 		t.Fatalf(
-			"expected exactly one acceptance request scan, got %d",
+			"expected %d acceptance request scan chunks, got %d",
+			len(expectedRanges),
 			len(ralc.acceptanceEventFilters),
 		)
 	}
-	filter := ralc.acceptanceEventFilters[0]
-	if filter.StartBlock != expectedStartBlock ||
-		filter.EndBlock == nil || *filter.EndBlock != currentBlock {
-		t.Fatalf(
-			"unexpected scan range: start=%d end=%v, expected [%d, %d]",
-			filter.StartBlock,
-			filter.EndBlock,
-			expectedStartBlock,
-			currentBlock,
-		)
+	for i, expected := range expectedRanges {
+		filter := ralc.acceptanceEventFilters[i]
+		if filter.StartBlock != expected[0] ||
+			filter.EndBlock == nil || *filter.EndBlock != expected[1] {
+			t.Fatalf(
+				"unexpected scan chunk %d: start=%d end=%v, expected [%d, %d]",
+				i,
+				filter.StartBlock,
+				filter.EndBlock,
+				expected[0],
+				expected[1],
+			)
+		}
 	}
+	filter := ralc.acceptanceEventFilters[0]
 	if len(filter.WalletPublicKeyHash) != 1 ||
 		filter.WalletPublicKeyHash[0] != testWalletPublicKeyHash {
 		t.Fatalf("expected the scan to be filtered by the wallet")

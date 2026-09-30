@@ -752,18 +752,34 @@ func (rat *ReservationAcceptanceTask) reservationAcceptanceRequestedEvents(
 		startBlock = currentBlock - lookBackBlocks
 	}
 
-	events, err := rat.chain.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{
-			StartBlock:          startBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get past reservation acceptance requested events: [%w]",
-			err,
+	// The window is wider than many providers accept for one log query, so
+	// it is scanned in chunks of the reveal lookup's size.
+	var events []*tbtc.ReservationAcceptanceRequestedEvent
+	for chunkStart := startBlock; chunkStart <= currentBlock; {
+		chunkEnd := currentBlock
+		if currentBlock-chunkStart >= tbtc.DepositRevealLookupChunkBlocks {
+			chunkEnd = chunkStart + tbtc.DepositRevealLookupChunkBlocks - 1
+		}
+
+		chunkEvents, err := rat.chain.PastReservationAcceptanceRequestedEvents(
+			&tbtc.ReservationAcceptanceRequestedEventFilter{
+				StartBlock:          chunkStart,
+				EndBlock:            &chunkEnd,
+				WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+			},
 		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to get past reservation acceptance requested "+
+					"events in blocks [%d, %d]: [%w]",
+				chunkStart,
+				chunkEnd,
+				err,
+			)
+		}
+		events = append(events, chunkEvents...)
+
+		chunkStart = chunkEnd + 1
 	}
 
 	latest := make(map[string]*tbtc.ReservationAcceptanceRequestedEvent)
