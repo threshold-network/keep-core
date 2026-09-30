@@ -876,6 +876,31 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 		}
 	})
 
+	t.Run("closing wallet: no notification even below dust", func(t *testing.T) {
+		tbtcChain, btcChain := newFixture(500000, nil, true)
+		wallet, err := tbtcChain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closing := *wallet
+		closing.State = tbtc.StateClosing
+		tbtcChain.SetWallet(walletPublicKeyHash, &closing)
+		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+
+		if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: walletPublicKeyHash,
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if notifications := tbtcChain.GetBelowDustNotifications(); len(notifications) != 0 {
+			t.Fatalf(
+				"expected no below-dust notifications for a Closing wallet, got %d",
+				len(notifications),
+			)
+		}
+	})
+
 	t.Run("wallet never reservation-touched: no notification even below dust", func(t *testing.T) {
 		tbtcChain, btcChain := newFixture(500000, nil, false)
 		task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)

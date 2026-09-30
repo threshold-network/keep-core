@@ -423,3 +423,61 @@ func TestReservationReanchorTask_ResumeMarginGate(t *testing.T) {
 		}
 	})
 }
+
+// TestReservationReanchorTask_ClosingSource pins that a Closing source
+// wallet is re-anchored like a MovingFunds one. Reservation.sol accepts a
+// permissionless request from a Closing source, a wallet can reach Closing
+// while it still holds reservations, and it cannot finish closing until
+// they are gone, so both a fresh request and the resume of an
+// already-authorized generation must still happen from Closing.
+func TestReservationReanchorTask_ClosingSource(t *testing.T) {
+	t.Run("active reservation is requested and proposed", func(t *testing.T) {
+		tbtcChain, _, _, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, _ :=
+			newInFlightReanchorFixture(t)
+		tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateClosing})
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok || proposal == nil {
+			t.Fatalf("expected a proposal for a Closing source, got ok=%v proposal=%v", ok, proposal)
+		}
+		reanchorProposal := proposal.(*tbtc.ReservationReanchorProposal)
+		if reanchorProposal.RequestNonce != 1 ||
+			reanchorProposal.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+			t.Fatalf("unexpected proposal: %+v", reanchorProposal)
+		}
+		if got := len(tbtcChain.GetReservationReanchorRequestSubmissions()); got != 1 {
+			t.Fatalf("expected exactly 1 submission, got %d", got)
+		}
+	})
+
+	t.Run("pending generation is resumed", func(t *testing.T) {
+		tbtcChain, _, _, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, reservationKey :=
+			newInFlightReanchorFixture(t)
+		tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateClosing})
+		seedResumableReanchorGeneration(
+			t, tbtcChain, targetWalletPublicKeyHash, reservationKey, 3,
+			time.Now().Add(24*time.Hour),
+		)
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok || proposal == nil {
+			t.Fatalf("expected the pending generation to be resumed, got ok=%v proposal=%v", ok, proposal)
+		}
+		if nonce := proposal.(*tbtc.ReservationReanchorProposal).RequestNonce; nonce != 3 {
+			t.Fatalf("expected the resumed proposal at nonce 3, got [%d]", nonce)
+		}
+		if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 0 {
+			t.Fatalf("expected no request on the resume path, got %d", got)
+		}
+	})
+}

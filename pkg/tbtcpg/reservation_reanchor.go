@@ -39,11 +39,11 @@ const reservationRequestTimeoutSafetyMarginSeconds = 2 * 60 * 60
 
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
-// move to a new wallet (state StateMovingFunds) or when the source wallet's
-// main UTXO has dropped below the moving funds dust threshold (below-dust
-// re-anchor). For every reservation currently custodied by the wallet, the
-// task picks a destination wallet and assembles a 1-input-1-output re-anchor
-// transaction moving the anchor outpoint into that destination wallet.
+// move to a new wallet (state StateMovingFunds) or is closing
+// (state StateClosing). For every reservation currently custodied by the
+// wallet, the task picks a destination wallet and assembles a
+// 1-input-1-output re-anchor transaction moving the anchor outpoint into
+// that destination wallet.
 type ReservationReanchorTask struct {
 	chain    Chain
 	btcChain bitcoin.Chain
@@ -99,13 +99,15 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // Run evaluates whether the given wallet needs to re-anchor any of its
 // reservations and returns a single ReservationReanchorProposal for the
 // first reservation found to be re-anchorable. A wallet is a candidate for
-// re-anchor only once it has entered the StateMovingFunds state (the
-// wallet is migrating and reservations must be released to a live
-// wallet); tbtc-v2's Reservation.requestReservationReanchor requires a
-// privileged (governance) caller for StateLive sources (enforced on-chain
-// in the tbtc-v2 contracts repo, outside keep-core), which the
-// client's ordinary operator key can never satisfy, so no below-dust
-// re-anchor trigger is attempted for Live wallets.
+// re-anchor once it has entered the StateMovingFunds or StateClosing state
+// (the wallet is winding down and reservations must be released to a live
+// wallet), matching the source states tbtc-v2's permissionless
+// Reservation.requestReservationReanchor accepts. A wallet can reach
+// Closing while it still holds reservations, and it cannot finish closing
+// until they are gone, so a re-anchor missed during MovingFunds must still
+// be possible from Closing. Live sources require a privileged
+// (governance) caller on-chain, which the client's ordinary operator key
+// can never satisfy, so Live wallets are skipped.
 //
 // Each reservation is either Active (needs a freshly requested generation)
 // or already ActionPending with its current generation a Pending Reanchor
@@ -146,7 +148,7 @@ func (rrt *ReservationReanchorTask) Run(
 	// live_wallets_count is published unconditionally on every Run pass,
 	// mirroring the sibling active_reservations_count/max_active_reservations
 	// gauges that ReservationAcceptanceTask publishes every coordination
-	// window: it must not depend on this task's StateMovingFunds/
+	// window: it must not depend on this task's wallet-state/
 	// non-empty-reservations guards below, which are false for most
 	// wallets in steady state. Gating the publish on those guards would
 	// leave the gauge stuck at its registered-zero value indefinitely and
@@ -162,7 +164,8 @@ func (rrt *ReservationReanchorTask) Run(
 		rrt.metricsRecorder.SetGauge("live_wallets_count", float64(liveWalletsCount))
 	}
 
-	if walletChainData.State != tbtc.StateMovingFunds {
+	if walletChainData.State != tbtc.StateMovingFunds &&
+		walletChainData.State != tbtc.StateClosing {
 		taskLogger.Info("wallet is not eligible for reservation re-anchor")
 		return nil, false, nil
 	}
@@ -182,8 +185,12 @@ func (rrt *ReservationReanchorTask) Run(
 		// scheduling wired up wherever coordination tasks are registered
 		// (outside this package), which is a larger cross-package change
 		// than justified here, whereas embedding it costs only piggybacking
-		// on this task's own already-scheduled invocation cadence.
-		rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
+		// on this task's own already-scheduled invocation cadence. A
+		// Closing wallet is already past the moving funds process, so the
+		// notification only applies to MovingFunds wallets.
+		if walletChainData.State == tbtc.StateMovingFunds {
+			rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
+		}
 		return nil, false, nil
 	}
 
