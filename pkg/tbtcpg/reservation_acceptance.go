@@ -42,7 +42,7 @@ type ReservationAcceptanceTask struct {
 	// metricsRecorder is optional and used for recording performance
 	// metrics: active_reservations_count, max_active_reservations,
 	// wallet_reservations_count, reservation_vault_fee_debt_sat, and
-	// reservation_vault_fee_reserve_tbtc, sourced from the chain calls
+	// reservation_vault_fee_reserve_tbtc_base_units, sourced from the chain calls
 	// this task already makes in findReservationAcceptanceCandidate.
 	// These are leading indicators of reservation capacity saturation.
 	metricsRecorder interface {
@@ -366,7 +366,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 				0,
 			)
 			rat.metricsRecorder.SetGauge(
-				"reservation_vault_fee_reserve_tbtc",
+				"reservation_vault_fee_reserve_tbtc_base_units",
 				0,
 			)
 		}
@@ -427,7 +427,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 	}
 
 	// reservation_vault_fee_debt_sat /
-	// reservation_vault_fee_reserve_tbtc publish the ReservationVault's
+	// reservation_vault_fee_reserve_tbtc_base_units publish the ReservationVault's
 	// outstanding in-kind fee debt (in satoshi) and fee-reserve balance
 	// (in TBTC base units, 1e18 per whole TBTC; a gauge value of N
 	// means N / 1e18 whole TBTC), unconditionally on every pass,
@@ -464,7 +464,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidate(
 		} else if feeReserve != nil {
 			reserveFloat, _ := feeReserve.Float64()
 			rat.metricsRecorder.SetGauge(
-				"reservation_vault_fee_reserve_tbtc",
+				"reservation_vault_fee_reserve_tbtc_base_units",
 				reserveFloat,
 			)
 		}

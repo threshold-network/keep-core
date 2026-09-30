@@ -720,7 +720,7 @@ func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T)
 // TestReservationGaugesRegistered verifies the six reservation gauges
 // (active_reservations_count, max_active_reservations, live_wallets_count,
 // wallet_reservations_count, reservation_vault_fee_debt_sat,
-// reservation_vault_fee_reserve_tbtc) are registered upfront with a 0
+// reservation_vault_fee_reserve_tbtc_base_units) are registered upfront with a 0
 // value when reservations are enabled.
 func TestReservationGaugesRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -735,7 +735,7 @@ func TestReservationGaugesRegistered(t *testing.T) {
 		MetricReservationLiveWalletsCount,
 		MetricReservationWalletReservationsCount,
 		MetricReservationVaultFeeDebtSat,
-		MetricReservationVaultFeeReserveTbtc,
+		MetricReservationVaultFeeReserveTbtcBaseUnits,
 	}
 
 	for _, name := range reservationGauges {
@@ -782,7 +782,7 @@ func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 		MetricReservationLiveWalletsCount,
 		MetricReservationWalletReservationsCount,
 		MetricReservationVaultFeeDebtSat,
-		MetricReservationVaultFeeReserveTbtc,
+		MetricReservationVaultFeeReserveTbtcBaseUnits,
 	}
 
 	for _, name := range reservationGauges {

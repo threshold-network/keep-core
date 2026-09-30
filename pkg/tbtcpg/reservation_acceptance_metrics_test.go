@@ -118,9 +118,9 @@ func TestReservationAcceptanceTask_RecordsSaturationGauges(t *testing.T) {
 			"expected reservation_vault_fee_debt_sat gauge to be recorded",
 		)
 	}
-	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
+	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; !ok {
 		t.Error(
-			"expected reservation_vault_fee_reserve_tbtc gauge to be recorded",
+			"expected reservation_vault_fee_reserve_tbtc_base_units gauge to be recorded",
 		)
 	}
 }
@@ -187,11 +187,11 @@ func TestReservationAcceptanceTask_RecordsVaultFeeGauges(t *testing.T) {
 	// task's big.Int -> float64 conversion), so the assertion tracks
 	// the exact value the recorder would have received.
 	wantReserve, _ := new(big.Int).Lsh(big.NewInt(2), 18).Float64()
-	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
-		t.Error("expected reservation_vault_fee_reserve_tbtc gauge to be recorded")
+	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; !ok {
+		t.Error("expected reservation_vault_fee_reserve_tbtc_base_units gauge to be recorded")
 	} else if got != wantReserve {
 		t.Errorf(
-			"expected reservation_vault_fee_reserve_tbtc = %v, got %v",
+			"expected reservation_vault_fee_reserve_tbtc_base_units = %v, got %v",
 			wantReserve,
 			got,
 		)
@@ -234,9 +234,9 @@ func TestReservationAcceptanceTask_VaultFeeReadErrorKeepsGauges(t *testing.T) {
 			"reservation_vault_fee_debt_sat must not be published on read error",
 		)
 	}
-	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; ok {
+	if _, ok := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; ok {
 		t.Error(
-			"reservation_vault_fee_reserve_tbtc must not be published on read error",
+			"reservation_vault_fee_reserve_tbtc_base_units must not be published on read error",
 		)
 	}
 
@@ -295,10 +295,10 @@ func TestReservationAcceptanceTask_ZeroVaultAddressZeroesFeeGauges(t *testing.T)
 	} else if got != 0 {
 		t.Errorf("expected reservation_vault_fee_debt_sat = 0, got %v", got)
 	}
-	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc"]; !ok {
-		t.Error("expected reservation_vault_fee_reserve_tbtc gauge to be recorded")
+	if got, ok := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; !ok {
+		t.Error("expected reservation_vault_fee_reserve_tbtc_base_units gauge to be recorded")
 	} else if got != 0 {
-		t.Errorf("expected reservation_vault_fee_reserve_tbtc = 0, got %v", got)
+		t.Errorf("expected reservation_vault_fee_reserve_tbtc_base_units = 0, got %v", got)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestReservationAcceptanceTask_UnconfiguredVaultZeroesFeeGauges(t *testing.T
 	if got := recorder.calls["reservation_vault_fee_debt_sat"]; got != 12345 {
 		t.Fatalf("pass 1: expected fee-debt gauge 12345, got %v", got)
 	}
-	if got := recorder.calls["reservation_vault_fee_reserve_tbtc"]; got == 0 {
+	if got := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; got == 0 {
 		t.Fatalf("pass 1: expected a nonzero fee-reserve gauge, got 0")
 	}
 
@@ -364,7 +364,7 @@ func TestReservationAcceptanceTask_UnconfiguredVaultZeroesFeeGauges(t *testing.T
 			got,
 		)
 	}
-	if got := recorder.calls["reservation_vault_fee_reserve_tbtc"]; got != 0 {
+	if got := recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]; got != 0 {
 		t.Errorf(
 			"pass 2: expected the fee-reserve gauge zeroed for an "+
 				"unconfigured vault, got %v",
