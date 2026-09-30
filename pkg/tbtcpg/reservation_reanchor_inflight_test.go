@@ -759,3 +759,109 @@ func TestReservationReanchorTask_RequestTimeGates(t *testing.T) {
 		})
 	}
 }
+
+// TestReservationReanchorTask_AmountHeadroomPrecheck pins the amount half
+// of the target headroom pre-check on its own: a Live target with count
+// room but whose reserved amount plus the anchor exceeds
+// maxReservationsAmountPerWallet must be skipped without a request (the
+// request would revert on-chain), a target landing exactly on the cap must
+// be accepted (Solidity reverts only above it), and a zero cap must not
+// limit the amount at all.
+func TestReservationReanchorTask_AmountHeadroomPrecheck(t *testing.T) {
+	tests := map[string]struct {
+		amountCap      uint64
+		filledReserved int64
+		expectFilled   bool
+	}{
+		"target over the amount cap is skipped": {
+			amountCap:      300000,
+			filledReserved: 150000,
+			expectFilled:   false,
+		},
+		"target landing exactly on the amount cap is accepted": {
+			amountCap:      300000,
+			filledReserved: 100000,
+			expectFilled:   true,
+		},
+		"zero amount cap is unlimited": {
+			amountCap:      0,
+			filledReserved: 1000000000000,
+			expectFilled:   true,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			tbtcChain, _, _, task, sourceWalletPublicKeyHash, alternateTarget, _ :=
+				newInFlightReanchorFixture(t)
+
+			// The partly filled target registered last, so the search
+			// examines it before the fixture's target.
+			filledTarget := [20]byte{8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8}
+			if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+				&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+				&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: filledTarget},
+			); err != nil {
+				t.Fatal(err)
+			}
+			tbtcChain.SetWallet(filledTarget, &tbtc.WalletChainData{State: tbtc.StateLive})
+			tbtcChain.SetLiveWalletsCount(2)
+			filledKey := big.NewInt(8801)
+			tbtcChain.SetReservation(filledKey, &tbtc.Reservation{
+				WalletPublicKeyHash: filledTarget,
+				AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+					Outpoint: &bitcoin.TransactionOutpoint{TransactionHash: bitcoin.Hash{0x88}},
+					Value:    test.filledReserved,
+				},
+				State: tbtc.ReservationStateActive,
+			})
+			tbtcChain.SetWalletReservations(filledTarget, []*big.Int{filledKey})
+			tbtcChain.SetReservationCaps(test.amountCap, 0)
+
+			proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+				WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !ok || proposal == nil {
+				t.Fatalf("expected a proposal, got ok=%v proposal=%v", ok, proposal)
+			}
+
+			expectedTarget := alternateTarget
+			if test.expectFilled {
+				expectedTarget = filledTarget
+			}
+			if got := proposal.(*tbtc.ReservationReanchorProposal).TargetWalletPublicKeyHash; got != expectedTarget {
+				t.Fatalf("expected target [%x], got [%x]", expectedTarget, got)
+			}
+			attempts := tbtcChain.GetReservationReanchorRequestAttempts()
+			if len(attempts) != 1 {
+				t.Fatalf("expected exactly 1 re-anchor request, got %d", len(attempts))
+			}
+			if attempts[0].TargetWalletPublicKeyHash != expectedTarget {
+				t.Fatalf(
+					"expected the only request to target [%x], got [%x]",
+					expectedTarget,
+					attempts[0].TargetWalletPublicKeyHash,
+				)
+			}
+		})
+	}
+}
+
+// TestReservationRequestTimeoutSafetyMarginMatchesValidator pins the Go
+// copy of WalletProposalValidatorConstants.REQUEST_TIMEOUT_SAFETY_MARGIN
+// (tbtc-v2 solidity/contracts/bridge/WalletProposalValidatorConstants.sol,
+// 2 hours). The EVM harness test checks the on-chain value; this checks
+// the constant the re-anchor and acceptance tasks use to skip generations
+// the validator would no longer sign.
+func TestReservationRequestTimeoutSafetyMarginMatchesValidator(t *testing.T) {
+	if reservationRequestTimeoutSafetyMarginSeconds != 7200 {
+		t.Fatalf(
+			"expected the request timeout safety margin to be 7200 "+
+				"seconds, got %d",
+			reservationRequestTimeoutSafetyMarginSeconds,
+		)
+	}
+}
