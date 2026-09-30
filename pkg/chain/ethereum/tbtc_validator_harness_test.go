@@ -68,13 +68,23 @@ var _ ethutil.EthereumClient = (*harnessBackend)(nil)
 // Enum values mirrored from tbtc-v2's Wallets.WalletState, Reservation.Action-
 // Type, and Reservation.ActionState (see StubBridge.sol's header comment).
 const (
-	walletStateLive uint8 = 1
+	walletStateLive        uint8 = 1
+	walletStateMovingFunds uint8 = 2
 
 	actionTypeAcceptance uint8 = 1
 	actionTypeReanchor   uint8 = 3
 
 	actionStatePending uint8 = 1
 )
+
+// requestTimeoutSafetyMarginSeconds is the margin keep-core assumes the
+// validator keeps before an action's timeoutAt: tbtcpg gates proposals on
+// reservationRequestTimeoutSafetyMarginSeconds, which must equal tbtc-v2's
+// WalletProposalValidatorConstants.REQUEST_TIMEOUT_SAFETY_MARGIN. The
+// validator accepts only while block.timestamp < timeoutAt - margin, so
+// the boundary tests below fail against the real bytecode if the on-chain
+// margin ever moves away from this value.
+const requestTimeoutSafetyMarginSeconds uint32 = 2 * 60 * 60
 
 // ----- Stub bridge struct mirrors -----
 //
@@ -208,11 +218,12 @@ const harnessBlockNumber uint64 = 1
 // state persists) and exposes it through the keep-common
 // ethutil.EthereumClient interface.
 //
-// An in-memory EVM over one shared StateDB is used instead of an
-// ethclient/simulated node so that the real, unmodified validator
-// bytecode runs to completion in the test binary without pulling in the
-// simulated node's heavy dependencies, which the test binary cannot link
-// on recent Go toolchains.
+// An in-memory EVM over one shared StateDB is used instead of
+// go-ethereum's ethclient/simulated backend because, at the pinned
+// go-ethereum v1.13.15, that backend depends on github.com/fjl/memsize,
+// whose //go:linkname reference to runtime.stopTheWorld the Go 1.23+
+// linker rejects ("invalid reference to runtime.stopTheWorld"): a test
+// binary importing it does not link with this module's toolchain.
 //
 // The chain context is a fixed block number (harnessBlockNumber) and a
 // block timestamp captured at construction: the validator compares
@@ -876,6 +887,120 @@ func TestValidateReservationAnchorProposal(t *testing.T) {
 		)
 		mustContainError(t, err, "Anchor amount below the reservation minimum")
 	})
+
+	// anchorSeed holds the inputs the cases below vary; the defaults set
+	// by validateAnchor describe a proposal the validator accepts.
+	type anchorSeed struct {
+		walletState  uint8
+		actionTarget [20]byte
+		timeoutAt    uint32
+		txMaxFee     uint64
+		anchorTxFee  int64
+	}
+
+	// validateAnchor seeds a valid acceptance, lets adjust change one
+	// input, and runs the real validator. now is the harness block
+	// timestamp the validator compares against, not a fresh time.Now(),
+	// so boundary values are exact.
+	validateAnchor := func(
+		t *testing.T,
+		adjust func(now uint32, s *anchorSeed),
+	) error {
+		h := newValidatorHarness(t)
+		now := uint32(h.backend.timestamp)
+
+		s := anchorSeed{
+			walletState:  walletStateLive,
+			actionTarget: walletPubKeyHash,
+			timeoutAt:    now + uint32((24 * time.Hour).Seconds()),
+			txMaxFee:     20_000,
+			anchorTxFee:  10_000,
+		}
+		adjust(now, &s)
+
+		deposit, fundingTx, depositKey := buildFundingDeposit(
+			t, depositor, walletPubKeyHash, refundPubKeyHash,
+			now+uint32((60*24*time.Hour).Seconds()), 1_000_000,
+		)
+
+		h.setReservationParameters(stubParameters{ReservationVault: vault})
+		h.setWallet(walletPubKeyHash, stubWallet{State: s.walletState})
+		h.setDeposit(depositKey, stubDepositReq{
+			Depositor:  depositor,
+			Amount:     1_000_000,
+			RevealedAt: now - uint32((8 * time.Hour).Seconds()),
+			Vault:      vault,
+		})
+		h.setReservedDeposit(depositKey, true)
+		h.setReservationAction(depositKey, 1, stubAction{
+			TargetWalletPubKeyHash: s.actionTarget,
+			RequestedAt:            now - 3600,
+			TimeoutAt:              s.timeoutAt,
+			TxMaxFee:               s.txMaxFee,
+			ActionType:             actionTypeAcceptance,
+			State:                  actionStatePending,
+			MinAmount:              100_000,
+		})
+		h.commit()
+
+		proposal := &tbtc.ReservationAnchorProposal{
+			DepositFundingTxHash:      fundingTx.Hash(),
+			DepositFundingOutputIndex: 0,
+			RequestNonce:              1,
+			AnchorTxFee:               big.NewInt(s.anchorTxFee),
+		}
+
+		return h.tc.ValidateReservationAnchorProposal(
+			walletPubKeyHash, proposal, depositExtraInfoOf(deposit, fundingTx),
+		)
+	}
+
+	t.Run("action timing out exactly at the safety margin is rejected", func(t *testing.T) {
+		// The validator's check is strict (block.timestamp < timeoutAt -
+		// margin), so a proposal exactly at the margin is already too
+		// late; keep-core must not treat it as signable.
+		err := validateAnchor(t, func(now uint32, s *anchorSeed) {
+			s.timeoutAt = now + requestTimeoutSafetyMarginSeconds
+		})
+		mustContainError(t, err, "Acceptance action has timed out")
+	})
+
+	t.Run("action timing out one second past the safety margin is accepted", func(t *testing.T) {
+		err := validateAnchor(t, func(now uint32, s *anchorSeed) {
+			s.timeoutAt = now + requestTimeoutSafetyMarginSeconds + 1
+		})
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
+	})
+
+	t.Run("wallet in MovingFunds state is accepted", func(t *testing.T) {
+		// Acceptance must keep working while a wallet moves funds, or
+		// reserved deposits on a draining wallet could never be anchored.
+		err := validateAnchor(t, func(now uint32, s *anchorSeed) {
+			s.walletState = walletStateMovingFunds
+		})
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
+	})
+
+	t.Run("fee above the action's snapshotted max fee", func(t *testing.T) {
+		err := validateAnchor(t, func(now uint32, s *anchorSeed) {
+			s.anchorTxFee = int64(s.txMaxFee) + 1
+		})
+		mustContainError(t, err, "Proposed transaction fee is too high")
+	})
+
+	t.Run("wallet does not match the authorized action", func(t *testing.T) {
+		// The proposal's wallet is Live and controls the deposit, but the
+		// action authorizes another wallet: only the action's target may
+		// anchor the reservation.
+		err := validateAnchor(t, func(now uint32, s *anchorSeed) {
+			s.actionTarget = [20]byte{0xee, 0x01}
+		})
+		mustContainError(t, err, "Wallet does not match the authorized action")
+	})
 }
 
 func TestValidateReservationReanchorProposal(t *testing.T) {
@@ -971,5 +1096,98 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 			sourceWalletPubKeyHash, proposal,
 		)
 		mustContainError(t, err, "Target wallet does not match the authorized action")
+	})
+
+	// reanchorSeed holds the inputs the cases below vary; the defaults
+	// set by validateReanchor describe a proposal the validator accepts.
+	type reanchorSeed struct {
+		timeoutAt                uint32
+		maxReservationsPerWallet uint32
+		targetReservationsCount  uint32
+	}
+
+	// validateReanchor seeds a valid re-anchor, lets adjust change one
+	// input, and runs the real validator. now is the harness block
+	// timestamp, so boundary values are exact.
+	validateReanchor := func(
+		t *testing.T,
+		adjust func(now uint32, s *reanchorSeed),
+	) error {
+		h := newValidatorHarness(t)
+		now := uint32(h.backend.timestamp)
+
+		s := reanchorSeed{
+			timeoutAt:                now + uint32((24 * time.Hour).Seconds()),
+			maxReservationsPerWallet: 10,
+			targetReservationsCount:  1,
+		}
+		adjust(now, &s)
+
+		h.setReservation(reservationKey, stubResReq{
+			WalletPubKeyHash: sourceWalletPubKeyHash,
+		})
+		h.setReservationAction(reservationKey, 1, stubAction{
+			TargetWalletPubKeyHash: targetWalletPubKeyHash,
+			RequestedAt:            now - 3600,
+			TimeoutAt:              s.timeoutAt,
+			TxMaxFee:               10_000,
+			ActionType:             actionTypeReanchor,
+			State:                  actionStatePending,
+		})
+		h.setWallet(targetWalletPubKeyHash, stubWallet{State: walletStateLive})
+		h.setReservationParameters(stubParameters{
+			MaxReservationsPerWallet: s.maxReservationsPerWallet,
+		})
+		h.setWalletReservationsCount(
+			targetWalletPubKeyHash, s.targetReservationsCount,
+		)
+		h.commit()
+
+		return h.tc.ValidateReservationReanchorProposal(
+			sourceWalletPubKeyHash,
+			&tbtc.ReservationReanchorProposal{
+				ReservationKey:            reservationKey,
+				RequestNonce:              1,
+				TargetWalletPublicKeyHash: targetWalletPubKeyHash,
+				ReanchorTxFee:             big.NewInt(5_000),
+			},
+		)
+	}
+
+	t.Run("action timing out exactly at the safety margin is rejected", func(t *testing.T) {
+		// Strict check, as for acceptance: exactly at the margin is too
+		// late.
+		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
+			s.timeoutAt = now + requestTimeoutSafetyMarginSeconds
+		})
+		mustContainError(t, err, "Re-anchor action has timed out")
+	})
+
+	t.Run("action timing out one second past the safety margin is accepted", func(t *testing.T) {
+		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
+			s.timeoutAt = now + requestTimeoutSafetyMarginSeconds + 1
+		})
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
+	})
+
+	t.Run("target wallet count at the cap is accepted", func(t *testing.T) {
+		// requestReservationReanchor already counted this reservation
+		// against the target wallet, so at signing time a count equal to
+		// the cap is the normal state of a full wallet, not an overflow.
+		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
+			s.targetReservationsCount = s.maxReservationsPerWallet
+		})
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
+	})
+
+	t.Run("target wallet count above the cap is rejected", func(t *testing.T) {
+		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
+			s.targetReservationsCount = s.maxReservationsPerWallet + 1
+		})
+		mustContainError(t, err, "Wallet reservations cap exceeded")
 	})
 }
