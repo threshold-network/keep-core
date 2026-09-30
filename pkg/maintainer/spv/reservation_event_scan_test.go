@@ -3,6 +3,7 @@ package spv
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,27 @@ func assertEachEventReturnedOnce(
 	}
 }
 
+// collectChunks runs fetchPastEventsInChunks against f and returns every
+// event delivered to onChunk together with the chunkEnd of each delivery,
+// in delivery order.
+func collectChunks(
+	f *rangeRecordingFetcher,
+	startBlock, endBlock uint64,
+) ([]chunkTestEvent, []uint64, error) {
+	var events []chunkTestEvent
+	var chunkEnds []uint64
+	err := fetchPastEventsInChunks(
+		f.fetch,
+		startBlock,
+		endBlock,
+		func(chunk []chunkTestEvent, chunkEnd uint64) {
+			events = append(events, chunk...)
+			chunkEnds = append(chunkEnds, chunkEnd)
+		},
+	)
+	return events, chunkEnds, err
+}
+
 // TestFetchPastEventsInChunks_ChunkBoundaries drives a range spanning three
 // chunks and asserts that events sitting on the chunk boundaries - the last
 // block of chunk 1, the first block of chunk 2, and the later chunk 2/3
@@ -140,7 +162,7 @@ func TestFetchPastEventsInChunks_ChunkBoundaries(t *testing.T) {
 		},
 	}
 
-	got, err := fetchPastEventsInChunks(f.fetch, 0, endBlock)
+	got, chunkEnds, err := collectChunks(f, 0, endBlock)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,6 +189,14 @@ func TestFetchPastEventsInChunks_ChunkBoundaries(t *testing.T) {
 				expectedRanges[i].end,
 			)
 		}
+		if chunkEnds[i] != expectedRanges[i].end {
+			t.Errorf(
+				"chunk %d delivered chunkEnd %d, expected %d",
+				i,
+				chunkEnds[i],
+				expectedRanges[i].end,
+			)
+		}
 	}
 }
 
@@ -181,11 +211,7 @@ func TestFetchPastEventsInChunks_SingleChunk(t *testing.T) {
 		},
 	}
 
-	got, err := fetchPastEventsInChunks(
-		f.fetch,
-		0,
-		reservationEventScanChunkSize-1,
-	)
+	got, _, err := collectChunks(f, 0, reservationEventScanChunkSize-1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,18 +227,19 @@ func TestFetchPastEventsInChunks_SingleChunk(t *testing.T) {
 }
 
 // TestFetchPastEventsInChunks_InvertedRange verifies that an inverted range
-// is a no-op: no fetch is issued and an empty result is returned.
+// is a no-op: neither fetch nor onChunk is called, so a caller's cursor
+// does not move.
 func TestFetchPastEventsInChunks_InvertedRange(t *testing.T) {
 	f := &rangeRecordingFetcher{
 		events: []chunkTestEvent{{BlockNumber: 4}},
 	}
 
-	got, err := fetchPastEventsInChunks(f.fetch, 10, 5)
+	got, chunkEnds, err := collectChunks(f, 10, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != nil {
-		t.Errorf("expected no events for an inverted range, got %v", got)
+	if got != nil || chunkEnds != nil {
+		t.Errorf("expected no deliveries for an inverted range, got %v / %v", got, chunkEnds)
 	}
 	if len(f.ranges) != 0 {
 		t.Errorf("expected no chunk fetches for an inverted range, got %v", f.ranges)
@@ -221,7 +248,9 @@ func TestFetchPastEventsInChunks_InvertedRange(t *testing.T) {
 
 // TestFetchPastEventsInChunks_ErrorInSecondChunk verifies that an error on
 // the second chunk is returned, wrapped with the range that failed, and
-// that no partial result is returned.
+// that the first chunk's events were already delivered, so a caller keeps
+// that progress and resumes after the first chunk instead of restarting
+// the whole walk.
 func TestFetchPastEventsInChunks_ErrorInSecondChunk(t *testing.T) {
 	f := &rangeRecordingFetcher{
 		events: []chunkTestEvent{
@@ -232,16 +261,17 @@ func TestFetchPastEventsInChunks_ErrorInSecondChunk(t *testing.T) {
 		failErr: errors.New("provider rejected the range"),
 	}
 
-	got, err := fetchPastEventsInChunks(
-		f.fetch,
-		0,
-		2*reservationEventScanChunkSize-1,
-	)
+	got, chunkEnds, err := collectChunks(f, 0, 2*reservationEventScanChunkSize-1)
 	if err == nil {
 		t.Fatal("expected an error from the second chunk, got nil")
 	}
-	if got != nil {
-		t.Errorf("expected no partial result, got %v events", len(got))
+	assertEachEventReturnedOnce(t, got, []chunkTestEvent{{BlockNumber: 100}})
+	if len(chunkEnds) != 1 || chunkEnds[0] != reservationEventScanChunkSize-1 {
+		t.Errorf(
+			"expected only the first chunk [..%d] to be delivered, got %v",
+			reservationEventScanChunkSize-1,
+			chunkEnds,
+		)
 	}
 	expectedRange := fmt.Sprintf(
 		"[%d..%d]",
@@ -264,4 +294,102 @@ func TestFetchPastEventsInChunks_ErrorInSecondChunk(t *testing.T) {
 		0,
 		2*reservationEventScanChunkSize-1,
 	)
+}
+
+// TestReservationScanRange covers the scan-range policy shared by the proof
+// loop, the stale-deposit watcher and the action-timeout watcher. The
+// first scan starts at the activation block wherever it sits relative to
+// the tip - an old activation is not cut off by any lookback window,
+// because an action that timed out but was never notified still holds
+// capacity - an unknown network skips the first scan, and every range
+// stops reservationEventScanConfirmationBlocks behind the tip.
+func TestReservationScanRange(t *testing.T) {
+	const lag = reservationEventScanConfirmationBlocks
+
+	tests := map[string]struct {
+		lastScannedBlock uint64
+		activationBlock  uint64
+		currentBlock     uint64
+		expectedStart    uint64
+		expectedEnd      uint64
+		expectedScan     bool
+	}{
+		"first scan, activation at genesis (Developer)": {
+			activationBlock: 0,
+			currentBlock:    1000,
+			expectedStart:   0,
+			expectedEnd:     1000 - lag,
+			expectedScan:    true,
+		},
+		"first scan, activation inside the last 30 days": {
+			activationBlock: 250_000,
+			currentBlock:    300_000,
+			expectedStart:   250_000,
+			expectedEnd:     300_000 - lag,
+			expectedScan:    true,
+		},
+		"first scan, activation older than 30 days": {
+			activationBlock: 1_000,
+			currentBlock:    1_000_000,
+			expectedStart:   1_000,
+			expectedEnd:     1_000_000 - lag,
+			expectedScan:    true,
+		},
+		"first scan, activation above the tip": {
+			activationBlock: 500_000,
+			currentBlock:    300_000,
+			expectedStart:   500_000,
+			expectedEnd:     300_000 - lag,
+			expectedScan:    true,
+		},
+		"first scan, unknown network": {
+			activationBlock: math.MaxUint64,
+			currentBlock:    300_000,
+			expectedStart:   0,
+			expectedEnd:     300_000 - lag,
+			expectedScan:    false,
+		},
+		"later scan starts one block past the cursor": {
+			lastScannedBlock: 450_000,
+			activationBlock:  0,
+			currentBlock:     500_000,
+			expectedStart:    450_001,
+			expectedEnd:      500_000 - lag,
+			expectedScan:     true,
+		},
+		"later scan on an unknown network covers new blocks": {
+			lastScannedBlock: 450_000,
+			activationBlock:  math.MaxUint64,
+			currentBlock:     500_000,
+			expectedStart:    450_001,
+			expectedEnd:      500_000 - lag,
+			expectedScan:     true,
+		},
+		"tip within the confirmation depth": {
+			activationBlock: 0,
+			currentBlock:    lag,
+			expectedStart:   0,
+			expectedEnd:     0,
+			expectedScan:    true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			start, end, scan := reservationScanRange(
+				test.lastScannedBlock,
+				test.activationBlock,
+				test.currentBlock,
+			)
+			if scan != test.expectedScan {
+				t.Errorf("unexpected scan: expected %v, got %v", test.expectedScan, scan)
+			}
+			if start != test.expectedStart {
+				t.Errorf("unexpected start: expected %d, got %d", test.expectedStart, start)
+			}
+			if end != test.expectedEnd {
+				t.Errorf("unexpected end: expected %d, got %d", test.expectedEnd, end)
+			}
+		})
+	}
 }

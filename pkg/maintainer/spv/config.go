@@ -99,11 +99,12 @@ type Config struct {
 	// command copies it from its own [ethereum] config section) rather
 	// than read from a config file or CLI flag. It feeds the
 	// reservation activation-block lookup (see
-	// tbtc.ReservationsActivationBlock), which bounds every
-	// reservation watcher's startup catch-up scan: a network without
-	// an activation entry is treated as reservations-inactive and its
-	// startup scans are skipped. The zero value (an unknown network)
-	// behaves exactly like a missing activation entry: reservation
-	// startup scans are skipped on it.
+	// tbtc.ReservationsActivationBlock): the reservation proof loop and
+	// the stale-deposit and action-timeout watchers start their first
+	// event scan at the activation block and walk to the tip in chunks.
+	// A network without an activation entry is treated as
+	// reservations-inactive: those first scans are skipped and later
+	// scans cover only new blocks. The zero value (an unknown network)
+	// behaves exactly like a missing activation entry.
 	EthereumNetwork ethereum.Network
 }
