@@ -283,8 +283,8 @@ reservationLoop:
 			// block.timestamp < action.TimeoutAt -
 			// REQUEST_TIMEOUT_SAFETY_MARGIN, so a generation at or past
 			// that boundary is skipped rather than proposed and rejected;
-			// a fresh request may be issued instead once the reservation
-			// is back in the Active state.
+			// a fresh request may be issued instead once the generation
+			// times out and the resulting re-anchor cooldown ends.
 			if uint64(time.Now().Unix())+
 				uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 				uint64(action.TimeoutAt) {
