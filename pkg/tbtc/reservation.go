@@ -226,11 +226,13 @@ type ReservationAction struct {
 	// TermSeconds is the custody term snapshotted when the generation was
 	// requested. It also bounds the late-acceptance settlement window
 	// (timeoutAt + termSeconds), so proof submitters must read it from the
-	// action, not from the live governance parameter.
+	// action, not from the live governance parameter. Set only for
+	// acceptance generations; zero for other action types.
 	TermSeconds uint32
 	// MinAmount is the minimum reservation amount snapshotted when the
 	// generation was requested. Settlement and signer validation both
-	// enforce this snapshot, not the live governance parameter.
+	// enforce this snapshot, not the live governance parameter. Set only
+	// for acceptance generations; zero for other action types.
 	MinAmount uint64
 }
 

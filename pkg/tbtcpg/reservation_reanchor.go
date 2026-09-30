@@ -39,13 +39,6 @@ const reservationReanchorRequestWaitBlocks = uint64(6)
 // validator reject them.
 const reservationRequestTimeoutSafetyMarginSeconds = 2 * 60 * 60
 
-// reservationDepositRefundSafetyMarginSeconds mirrors
-// WalletProposalValidatorConstants.DEPOSIT_REFUND_SAFETY_MARGIN
-// (24 hours): the on-chain acceptance validator refuses to sign an
-// anchor whose refund becomes available less than a day from now, so a
-// wallet signing later cannot race the depositor's refund.
-const reservationDepositRefundSafetyMarginSeconds = 24 * 60 * 60
-
 // reservationReanchorInFlightRequest tracks a RequestReservationReanchor
 // submission that has not yet been resolved by its receipt, keyed by the
 // reservation key in the task's inFlightReanchorRequests map.

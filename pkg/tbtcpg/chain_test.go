@@ -21,6 +21,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
+// reservationDepositRefundSafetyMarginSeconds mirrors
+// WalletProposalValidatorConstants.DEPOSIT_REFUND_SAFETY_MARGIN
+// (24 hours): the on-chain acceptance validator refuses to sign an
+// anchor whose refund becomes available less than a day from now, so a
+// wallet signing later cannot race the depositor's refund.
+const reservationDepositRefundSafetyMarginSeconds = 24 * 60 * 60
+
 type movingFundsCommitmentSubmission struct {
 	WalletPublicKeyHash [20]byte
 	WalletMainUtxo      *bitcoin.UnspentTransactionOutput

@@ -9,17 +9,6 @@
 // the per-concern files and reintroduce the old tbtc.go, silently dropping
 // whatever those later commits changed. Reconstructing the pre-split state
 // requires a manual merge, not a mechanical revert.
-// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for
-// per-concern implementations (tbtc_deposit.go, tbtc_dkg.go, tbtc_moving_funds.go,
-// tbtc_redemption.go, tbtc_wallet.go, tbtc_sortition.go, tbtc_inactivity.go).
-//
-// These files were split out of a single monolithic tbtc.go with no rename
-// markers git can detect (each file is a fresh addition, not a tracked move),
-// so a plain `git revert` of the split commit cannot be applied cleanly on
-// top of any later commit that also touches this package: it would re-delete
-// the per-concern files and reintroduce the old tbtc.go, silently dropping
-// whatever those later commits changed. Reconstructing the pre-split state
-// requires a manual merge, not a mechanical revert.
 package ethereum
 
 import (
@@ -689,6 +678,8 @@ func convertReservationFromAbiType(
 //   - `UsedRetryCredit`, `Watchtower{Default,LevelOne,LevelTwo}Delay`,
 //     `RetryCreditSourceNonce`: written for governance / late-settlement
 //     reconciliation but not read by the operator client in m1.
+//   - `DissolutionDelay`: snapshotted by acceptance generations for the
+//     dissolution path, which the operator client does not drive in m1.
 //
 // The on-chain `actionDataHash` field is polymorphic across action types:
 // it carries the keccak256 of the redeemer output script for redemptions,

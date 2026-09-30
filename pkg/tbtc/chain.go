@@ -868,7 +868,6 @@ type ReservationReanchoredEvent struct {
 	NewWalletPublicKeyHash [20]byte
 	NewAnchorTxHash        [32]byte
 	NewAnchorAmount        uint64
-	MinerFee               uint64
 	BlockNumber            uint64
 }
 
