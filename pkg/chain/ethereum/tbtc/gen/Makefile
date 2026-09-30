@@ -134,7 +134,8 @@ endif
 # (self-consistency against our own committed bindings only) cannot:
 #   - the vendored fallback files vs the compiled artifacts, and
 #   - the <Name>MetaData.ABI string in abi/<Name>.go vs the same
-#     compiled-artifact selectors.
+#     compiled-artifact selectors, so a fallback or binding update
+#     without the other fails here.
 # Every comparison is on whole-function entries (name, inputs with
 # components, outputs, stateMutability), sorted by function name and
 # canonicalized with jq -S, so each check naturally catches
@@ -171,106 +172,52 @@ endif
 # npm/network access, whenever a vendored fallback file or the generated
 # bindings are touched or need re-verification.
 
+# jq filters selecting the reservation entries keep-core depends on from
+# each compiled artifact.
+bridge_reservation_abi := [.abi[] | select(.name == "isReservedDeposit")]
+wallet_proposal_validator_reservation_abi := [.abi[] | select(.name == "validateReservationAnchorProposal" or .name == "validateReservationReanchorProposal")]
+reservation_vault_abi := [.abi[] | select(.name == "inKindFeeDebtSat" or .name == "tbtcToken")]
+
+# verify_abi runs one verify-vendored-fallback comparison:
+#   $(1) label used in the messages,
+#   $(2) command printing the local side (a vendored file, or the
+#        committed binding's embedded ABI via checkabi) as a JSON array,
+#   $(3) compiled artifact name in ${artifacts_dir}, without .json,
+#   $(4) jq filter selecting the matching entries from that artifact,
+#   $(5) remedy printed on drift.
+# The local command writes to a temp file and is chained with &&
+# instead of being piped into jq, so when it fails (e.g. checkabi does
+# not build) make stops with that command's own error rather than
+# misreporting it as ABI drift. Arguments must not contain commas,
+# since $(call) splits on them.
+define verify_abi
+	@raw=$$(mktemp) && mine=$$(mktemp) && real=$$(mktemp) && \
+	trap 'rm -f "$$raw" "$$mine" "$$real"' EXIT && \
+	$(2) > "$$raw" && \
+	jq -S 'sort_by(.name)' "$$raw" > "$$mine" && \
+	jq -S '$(4) | sort_by(.name)' ${artifacts_dir}/$(3).json > "$$real" && \
+	if diff -u "$$mine" "$$real"; then \
+		echo "$(1) matches the real $(3) artifact"; \
+	else \
+		echo "$(1) differs from the real $(3) artifact - $(5)"; \
+		exit 1; \
+	fi
+endef
+
 .PHONY: verify-vendored-fallback
 verify-vendored-fallback:
 	@[ -f "${artifacts_dir}/ReservationRouter.json" ] && [ -f "${artifacts_dir}/ReservationVault.json" ] && [ -f "${artifacts_dir}/Bridge.json" ] && [ -f "${artifacts_dir}/WalletProposalValidator.json" ] || { \
 		echo "verify-vendored-fallback requires real ${artifacts_dir}/ReservationRouter.json, ${artifacts_dir}/ReservationVault.json, ${artifacts_dir}/Bridge.json, and ${artifacts_dir}/WalletProposalValidator.json"; \
 		exit 1; \
 	}
-	@vendored=$$(mktemp) && real=$$(mktemp) && \
-	jq -S '.abi | sort_by(.name)' ReservationRouter.fallback-artifact.json > "$$vendored" && \
-	jq -S '.abi | sort_by(.name)' ${artifacts_dir}/ReservationRouter.json > "$$real" && \
-	if diff -u "$$vendored" "$$real"; then \
-		echo "ReservationRouter.fallback-artifact.json ABI matches the real artifact"; \
-		rm -f "$$vendored" "$$real"; \
-	else \
-		echo "ReservationRouter.fallback-artifact.json ABI differs from the real artifact - regenerate the vendored fallback (see threshold-network/keep-core#4281)"; \
-		rm -f "$$vendored" "$$real"; \
-		exit 1; \
-	fi
-	@vendored=$$(mktemp) && real=$$(mktemp) && \
-	jq -S '[.[]] | sort_by(.name)' Bridge.reservation-methods-fallback.json > "$$vendored" && \
-	jq -S '[.abi[] | select(.name == "isReservedDeposit")] | sort_by(.name)' ${artifacts_dir}/Bridge.json > "$$real" && \
-	if diff -u "$$vendored" "$$real"; then \
-		echo "Bridge.reservation-methods-fallback.json matches the real Bridge artifact"; \
-		rm -f "$$vendored" "$$real"; \
-	else \
-		echo "Bridge.reservation-methods-fallback.json differs from the real Bridge artifact - regenerate the vendored fragment (see threshold-network/keep-core#4281)"; \
-		rm -f "$$vendored" "$$real"; \
-		exit 1; \
-	fi
-	@vendored=$$(mktemp) && real=$$(mktemp) && \
-	jq -S 'sort_by(.name)' WalletProposalValidator.reservation-methods-fallback.json > "$$vendored" && \
-	jq -S '[.abi[] | select(.name == "validateReservationAnchorProposal" or .name == "validateReservationReanchorProposal")] | sort_by(.name)' ${artifacts_dir}/WalletProposalValidator.json > "$$real" && \
-	if diff -u "$$vendored" "$$real"; then \
-		echo "WalletProposalValidator.reservation-methods-fallback.json matches the real WalletProposalValidator artifact"; \
-		rm -f "$$vendored" "$$real"; \
-	else \
-		echo "WalletProposalValidator.reservation-methods-fallback.json differs from the real WalletProposalValidator artifact - regenerate the vendored fragment (see threshold-network/keep-core#4281)"; \
-		rm -f "$$vendored" "$$real"; \
-		exit 1; \
-	fi
-	# ReservationVault verification
-	@vendored=$$(mktemp) && real=$$(mktemp) && \
-	jq -S '.abi | sort_by(.name)' ReservationVault.fallback-artifact.json > "$$vendored" && \
-	jq -S '[.abi[] | select(.name == "inKindFeeDebtSat" or .name == "tbtcToken")] | sort_by(.name)' ${artifacts_dir}/ReservationVault.json > "$$real" && \
-	if diff -u "$$vendored" "$$real"; then \
-		echo "ReservationVault.fallback-artifact.json matches the real ReservationVault artifact"; \
-		rm -f "$$vendored" "$$real"; \
-	else \
-		echo "ReservationVault.fallback-artifact.json differs from the real ReservationVault artifact - regenerate the vendored fallback (see threshold-network/keep-core#4281)"; \
-		rm -f "$$vendored" "$$real"; \
-		exit 1; \
-	fi
-	# Go binding verification: the ABI embedded in the committed
-	# generated bindings (abi/<Name>.go's <Name>MetaData.ABI, extracted
-	# with go run ./checkabi) must agree with the same
-	# compiled-artifact selectors, so a fallback or binding update without
-	# the other fails here.
-	@binding=$$(mktemp) && real=$$(mktemp) && \
-	go run ./checkabi ReservationRouter | jq -S '. | sort_by(.name)' > "$$binding" && \
-	jq -S '.abi | sort_by(.name)' ${artifacts_dir}/ReservationRouter.json > "$$real" && \
-	if diff -u "$$binding" "$$real"; then \
-		echo "ReservationRouter binding ABI matches the real artifact"; \
-		rm -f "$$binding" "$$real"; \
-	else \
-		echo "ReservationRouter binding ABI (abi/ReservationRouter.go) differs from the real artifact - regenerate the bindings"; \
-		rm -f "$$binding" "$$real"; \
-		exit 1; \
-	fi
-	@binding=$$(mktemp) && real=$$(mktemp) && \
-	go run ./checkabi Bridge isReservedDeposit | jq -S '. | sort_by(.name)' > "$$binding" && \
-	jq -S '[.abi[] | select(.name == "isReservedDeposit")] | sort_by(.name)' ${artifacts_dir}/Bridge.json > "$$real" && \
-	if diff -u "$$binding" "$$real"; then \
-		echo "Bridge binding reservation methods match the real Bridge artifact"; \
-		rm -f "$$binding" "$$real"; \
-	else \
-		echo "Bridge binding ABI (abi/Bridge.go) differs from the real Bridge artifact - regenerate the bindings"; \
-		rm -f "$$binding" "$$real"; \
-		exit 1; \
-	fi
-	@binding=$$(mktemp) && real=$$(mktemp) && \
-	go run ./checkabi WalletProposalValidator validateReservationAnchorProposal validateReservationReanchorProposal | jq -S '. | sort_by(.name)' > "$$binding" && \
-	jq -S '[.abi[] | select(.name == "validateReservationAnchorProposal" or .name == "validateReservationReanchorProposal")] | sort_by(.name)' ${artifacts_dir}/WalletProposalValidator.json > "$$real" && \
-	if diff -u "$$binding" "$$real"; then \
-		echo "WalletProposalValidator binding reservation methods match the real artifact"; \
-		rm -f "$$binding" "$$real"; \
-	else \
-		echo "WalletProposalValidator binding ABI (abi/WalletProposalValidator.go) differs from the real artifact - regenerate the bindings"; \
-		rm -f "$$binding" "$$real"; \
-		exit 1; \
-	fi
-	@binding=$$(mktemp) && real=$$(mktemp) && \
-	go run ./checkabi ReservationVault inKindFeeDebtSat tbtcToken | jq -S '. | sort_by(.name)' > "$$binding" && \
-	jq -S '[.abi[] | select(.name == "inKindFeeDebtSat" or .name == "tbtcToken")] | sort_by(.name)' ${artifacts_dir}/ReservationVault.json > "$$real" && \
-	if diff -u "$$binding" "$$real"; then \
-		echo "ReservationVault binding reservation views match the real artifact"; \
-		rm -f "$$binding" "$$real"; \
-	else \
-		echo "ReservationVault binding ABI (abi/ReservationVault.go) differs from the real artifact - regenerate the bindings"; \
-		rm -f "$$binding" "$$real"; \
-		exit 1; \
-	fi
+	$(call verify_abi,ReservationRouter.fallback-artifact.json ABI,jq .abi ReservationRouter.fallback-artifact.json,ReservationRouter,.abi,regenerate the vendored fallback (see threshold-network/keep-core#4281))
+	$(call verify_abi,Bridge.reservation-methods-fallback.json,cat Bridge.reservation-methods-fallback.json,Bridge,$(bridge_reservation_abi),regenerate the vendored fragment (see threshold-network/keep-core#4281))
+	$(call verify_abi,WalletProposalValidator.reservation-methods-fallback.json,cat WalletProposalValidator.reservation-methods-fallback.json,WalletProposalValidator,$(wallet_proposal_validator_reservation_abi),regenerate the vendored fragment (see threshold-network/keep-core#4281))
+	$(call verify_abi,ReservationVault.fallback-artifact.json,jq .abi ReservationVault.fallback-artifact.json,ReservationVault,$(reservation_vault_abi),regenerate the vendored fallback (see threshold-network/keep-core#4281))
+	$(call verify_abi,ReservationRouter binding ABI (abi/ReservationRouter.go),go run ./checkabi ReservationRouter,ReservationRouter,.abi,regenerate the bindings)
+	$(call verify_abi,Bridge binding ABI (abi/Bridge.go),go run ./checkabi Bridge isReservedDeposit,Bridge,$(bridge_reservation_abi),regenerate the bindings)
+	$(call verify_abi,WalletProposalValidator binding ABI (abi/WalletProposalValidator.go),go run ./checkabi WalletProposalValidator validateReservationAnchorProposal validateReservationReanchorProposal,WalletProposalValidator,$(wallet_proposal_validator_reservation_abi),regenerate the bindings)
+	$(call verify_abi,ReservationVault binding ABI (abi/ReservationVault.go),go run ./checkabi ReservationVault inKindFeeDebtSat tbtcToken,ReservationVault,$(reservation_vault_abi),regenerate the bindings)
 
 # @keep-network/tbtc-v2@development on npm publishes Bridge.json and
 # WalletProposalValidator.json, but both are stale relative to the
