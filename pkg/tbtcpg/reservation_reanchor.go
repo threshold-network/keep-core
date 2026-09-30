@@ -334,6 +334,33 @@ reservationLoop:
 			}
 			anchorValue := uint64(reservation.AnchorUtxo.Value)
 
+			// Mirror Reservation.sol's request-time gates for a
+			// permissionless caller, which would otherwise revert the
+			// request after a target search: no request before
+			// reanchorCooldownUntil, and the anchor must stay above
+			// txMaxFee + minAmount.
+			if uint64(time.Now().Unix()) < uint64(reservation.ReanchorCooldownUntil) {
+				taskLogger.Infof(
+					"reservation [0x%x] is in its re-anchor cooldown until "+
+						"[%d], skipping",
+					reservationKey,
+					reservation.ReanchorCooldownUntil,
+				)
+				continue reservationLoop
+			}
+			if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
+				taskLogger.Infof(
+					"reservation [0x%x] anchor [%d] is not above the "+
+						"re-anchor floor (tx max fee [%d] + min amount [%d]), "+
+						"skipping",
+					reservationKey,
+					anchorValue,
+					params.ReservationTxMaxFee,
+					params.ReservationMinAmount,
+				)
+				continue reservationLoop
+			}
+
 			for {
 				target, err := rrt.findTargetWallet(
 					taskLogger,

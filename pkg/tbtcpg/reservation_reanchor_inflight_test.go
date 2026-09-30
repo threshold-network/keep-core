@@ -685,3 +685,77 @@ func TestReservationReanchorTask_FrontRunRequest_StopsWaiting(t *testing.T) {
 		t.Fatalf("expected exactly 1 re-anchor request in the pass, got %d", got)
 	}
 }
+
+// TestReservationReanchorTask_RequestTimeGates pins that Run applies
+// Reservation.sol's request-time gates before sending a request: a
+// reservation in its re-anchor cooldown, or whose anchor is not above
+// ReservationTxMaxFee + ReservationMinAmount, is skipped without a request
+// that would revert.
+func TestReservationReanchorTask_RequestTimeGates(t *testing.T) {
+	t.Run("cooldown after a timed-out request", func(t *testing.T) {
+		tbtcChain, _, _, task, sourceWalletPublicKeyHash, _, reservationKey :=
+			newInFlightReanchorFixture(t)
+
+		if _, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		}); err != nil || !ok {
+			t.Fatalf("round 1: expected a proposal, got ok=%v err=%v", ok, err)
+		}
+		// The generation is never proven and times out, which starts the
+		// reservation's re-anchor cooldown.
+		if err := tbtcChain.TimeOutReservationReanchor(reservationKey); err != nil {
+			t.Fatal(err)
+		}
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("round 2: unexpected error: %v", err)
+		}
+		if ok || proposal != nil {
+			t.Fatalf("round 2: expected no proposal during the cooldown, got ok=%v proposal=%v", ok, proposal)
+		}
+		if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 1 {
+			t.Fatalf("round 2: expected no request during the cooldown, got %d attempts in total", got)
+		}
+	})
+
+	// The fixture's floor is ReservationTxMaxFee (100000) +
+	// ReservationMinAmount (1000).
+	floorTests := map[string]struct {
+		anchorValue      int64
+		expectedProposal bool
+	}{
+		"anchor at the floor is skipped":     {101000, false},
+		"anchor above the floor is proposed": {101001, true},
+	}
+	for name, test := range floorTests {
+		t.Run(name, func(t *testing.T) {
+			tbtcChain, btcChain, _, task, sourceWalletPublicKeyHash, _, _ :=
+				newInFlightReanchorFixture(t)
+			tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, nil)
+			addActiveReanchorReservation(
+				t, tbtcChain, btcChain, sourceWalletPublicKeyHash,
+				big.NewInt(7003), bitcoin.Hash{0x73}, test.anchorValue,
+			)
+
+			_, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+				WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != test.expectedProposal {
+				t.Fatalf("expected proposal=%v, got %v", test.expectedProposal, ok)
+			}
+			expectedAttempts := 0
+			if test.expectedProposal {
+				expectedAttempts = 1
+			}
+			if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != expectedAttempts {
+				t.Fatalf("expected %d request attempts, got %d", expectedAttempts, got)
+			}
+		})
+	}
+}
