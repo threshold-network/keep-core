@@ -24,9 +24,7 @@ const ReservationReanchorLookBackBlocks = uint64(216000)
 // waitForReservationReanchorRequestMined waits for a submitted
 // RequestReservationReanchor transaction to be mined, mirroring
 // MovingFundsTask.SubmitMovingFundsCommitment's bounded wait-then-re-read
-// pattern. It doubles as the same-round fast path for a fresh request
-// (below) and the "not observed for this many blocks means dropped"
-// bound for the in-flight receipt check in Run.
+// pattern.
 const reservationReanchorRequestWaitBlocks = uint64(6)
 
 // reservationRequestTimeoutSafetyMarginSeconds mirrors
@@ -39,39 +37,13 @@ const reservationReanchorRequestWaitBlocks = uint64(6)
 // validator reject them.
 const reservationRequestTimeoutSafetyMarginSeconds = 2 * 60 * 60
 
-// reservationDepositRefundSafetyMarginSeconds mirrors
-// WalletProposalValidatorConstants.DEPOSIT_REFUND_SAFETY_MARGIN
-// (24 hours): the on-chain acceptance validator refuses to sign an
-// anchor whose refund becomes available less than a day from now, so a
-// wallet signing later cannot race the depositor's refund.
-const reservationDepositRefundSafetyMarginSeconds = 24 * 60 * 60
-
-// reservationReanchorInFlightRequest tracks a RequestReservationReanchor
-// submission that has not yet been resolved by its receipt, keyed by the
-// reservation key in the task's inFlightReanchorRequests map.
-type reservationReanchorInFlightRequest struct {
-	// txHash is the RequestReservationReanchor transaction hash the
-	// receipt check looks up.
-	txHash [32]byte
-	// submittedAtBlock is the current block observed when the submission
-	// was recorded.
-	submittedAtBlock uint64
-	// sourceWalletPublicKeyHash is the wallet that hosted the reservation
-	// when the submission was recorded. It identifies the entry to
-	// forgetInFlightReanchorRequests if that wallet's reservation list no
-	// longer contains the key: a custody move that happened before the
-	// next Run round means nothing left to resolve there and the chain
-	// state alone drives any resume.
-	sourceWalletPublicKeyHash [20]byte
-}
-
 // ReservationReanchorTask is a task that may produce a reservation re-anchor
 // proposal. The wallet enters this task when the source wallet has begun a
-// move to a new wallet (state StateMovingFunds) or when the source wallet's
-// main UTXO has dropped below the moving funds dust threshold (below-dust
-// re-anchor). For every reservation currently custodied by the wallet, the
-// task picks a destination wallet and assembles a 1-input-1-output re-anchor
-// transaction moving the anchor outpoint into that destination wallet.
+// move to a new wallet (state StateMovingFunds) or is closing
+// (state StateClosing). For every reservation currently custodied by the
+// wallet, the task picks a destination wallet and assembles a
+// 1-input-1-output re-anchor transaction moving the anchor outpoint into
+// that destination wallet.
 type ReservationReanchorTask struct {
 	chain    Chain
 	btcChain bitcoin.Chain
@@ -89,29 +61,14 @@ type ReservationReanchorTask struct {
 	// TestReservationReanchorTask_TargetWalletExclusion_SharedTask).
 	targetWalletCacheMutex sync.Mutex
 	// cachedTargetWalletPublicKeyHash is the most recently selected
-	// re-anchor target wallet. findTargetWallet reuses it across Run
-	// calls -- validating headroom and liveness only for this one wallet
-	// -- instead of repeating its O(W) GetWallet-per-registration scan on
-	// every re-anchor window; a fresh full scan only runs when the cache
-	// is empty, the cached wallet fails validation, or the cached wallet
-	// is excluded. Meaningful only when hasCachedTargetWallet is true.
+	// re-anchor target wallet. reanchorTargetSearch tries it first in
+	// every Run -- validating headroom and liveness only for this one
+	// wallet -- instead of repeating its O(W) GetWallet-per-registration
+	// scan on every re-anchor window; a registration scan only runs when
+	// the cache is empty or the cached wallet is unusable. Meaningful only
+	// when hasCachedTargetWallet is true.
 	cachedTargetWalletPublicKeyHash [20]byte
 	hasCachedTargetWallet           bool
-
-	// inFlightReanchorRequestsMutex guards inFlightReanchorRequests.
-	// This task instance is shared across concurrent Run calls for
-	// different source wallets, as targetWalletCacheMutex is, so the
-	// per-reservation tracking state needs its own mutex.
-	inFlightReanchorRequestsMutex sync.Mutex
-	// inFlightReanchorRequests tracks RequestReservationReanchor
-	// submissions that have not yet been resolved by their receipt,
-	// keyed by reservation key. The receipt check at the top of Run
-	// settles each entry: mined resumes from chain state, reverted or
-	// not-observed-past-the-bound allows a fresh request, still
-	// pending skips this round. State loss on restart is tolerable: a
-	// mined request shows up as ActionPending (resume path) and a
-	// dropped request leaves Active (a new request is safe).
-	inFlightReanchorRequests map[string]reservationReanchorInFlightRequest
 }
 
 // NewReservationReanchorTask returns a new ReservationReanchorTask bound to
@@ -121,9 +78,8 @@ func NewReservationReanchorTask(
 	btcChain bitcoin.Chain,
 ) *ReservationReanchorTask {
 	return &ReservationReanchorTask{
-		chain:                    chain,
-		btcChain:                 btcChain,
-		inFlightReanchorRequests: make(map[string]reservationReanchorInFlightRequest),
+		chain:    chain,
+		btcChain: btcChain,
 	}
 }
 
@@ -143,13 +99,15 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // Run evaluates whether the given wallet needs to re-anchor any of its
 // reservations and returns a single ReservationReanchorProposal for the
 // first reservation found to be re-anchorable. A wallet is a candidate for
-// re-anchor only once it has entered the StateMovingFunds state (the
-// wallet is migrating and reservations must be released to a live
-// wallet); tbtc-v2's Reservation.requestReservationReanchor requires a
-// privileged (governance) caller for StateLive sources (enforced on-chain
-// in the tbtc-v2 contracts repo, outside keep-core), which the
-// client's ordinary operator key can never satisfy, so no below-dust
-// re-anchor trigger is attempted for Live wallets.
+// re-anchor once it has entered the StateMovingFunds or StateClosing state
+// (the wallet is winding down and reservations must be released to a live
+// wallet), matching the source states tbtc-v2's permissionless
+// Reservation.requestReservationReanchor accepts. A wallet can reach
+// Closing while it still holds reservations, and it cannot finish closing
+// until they are gone, so a re-anchor missed during MovingFunds must still
+// be possible from Closing. Live sources require a privileged
+// (governance) caller on-chain, which the client's ordinary operator key
+// can never satisfy, so Live wallets are skipped.
 //
 // Each reservation is either Active (needs a freshly requested generation)
 // or already ActionPending with its current generation a Pending Reanchor
@@ -157,6 +115,9 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // far as authorization, or one issued by another party): the latter is
 // resumed at its real nonce and authorized target rather than skipped, so
 // an in-flight authorization is not abandoned and re-requested.
+//
+// A pass sends at most one RequestReservationReanchor: once a request has
+// been sent, any later failure ends the pass without a proposal.
 //
 // Once a MovingFunds wallet's reservations are fully drained, Run also
 // checks whether its main UTXO has fallen below the moving funds dust
@@ -190,7 +151,7 @@ func (rrt *ReservationReanchorTask) Run(
 	// live_wallets_count is published unconditionally on every Run pass,
 	// mirroring the sibling active_reservations_count/max_active_reservations
 	// gauges that ReservationAcceptanceTask publishes every coordination
-	// window: it must not depend on this task's StateMovingFunds/
+	// window: it must not depend on this task's wallet-state/
 	// non-empty-reservations guards below, which are false for most
 	// wallets in steady state. Gating the publish on those guards would
 	// leave the gauge stuck at its registered-zero value indefinitely and
@@ -206,7 +167,8 @@ func (rrt *ReservationReanchorTask) Run(
 		rrt.metricsRecorder.SetGauge("live_wallets_count", float64(liveWalletsCount))
 	}
 
-	if walletChainData.State != tbtc.StateMovingFunds {
+	if walletChainData.State != tbtc.StateMovingFunds &&
+		walletChainData.State != tbtc.StateClosing {
 		taskLogger.Info("wallet is not eligible for reservation re-anchor")
 		return nil, false, nil
 	}
@@ -219,13 +181,6 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
-	// A reservation that left the wallet since the entry was recorded
-	// has nothing left to resolve under it: drop the in-flight entries
-	// that no longer appear in the wallet's reservation list before any
-	// path below (including the empty-list early return) can settle
-	// them.
-	rrt.forgetInFlightReanchorRequestsNotIn(walletPublicKeyHash, reservationKeys)
-
 	if len(reservationKeys) == 0 {
 		taskLogger.Info("wallet has no reservations to re-anchor")
 		// This duty stays embedded in Run() rather than becoming its own
@@ -233,8 +188,12 @@ func (rrt *ReservationReanchorTask) Run(
 		// scheduling wired up wherever coordination tasks are registered
 		// (outside this package), which is a larger cross-package change
 		// than justified here, whereas embedding it costs only piggybacking
-		// on this task's own already-scheduled invocation cadence.
-		rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
+		// on this task's own already-scheduled invocation cadence. A
+		// Closing wallet is already past the moving funds process, so the
+		// notification only applies to MovingFunds wallets.
+		if walletChainData.State == tbtc.StateMovingFunds {
+			rrt.notifyMovingFundsBelowDustIfEligible(taskLogger, walletPublicKeyHash)
+		}
 		return nil, false, nil
 	}
 
@@ -263,12 +222,14 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
-	// triedTargets accumulates target wallets a cap-related revert has
-	// already ruled out during this Run pass. Capacity only grows during
-	// a pass (nothing here releases it), so a wallet excluded for one
-	// reservation is correctly excluded for every later reservation in
-	// the same pass too.
-	triedTargets := make(map[[20]byte]bool)
+	// One target search serves every reservation of this pass, so
+	// registrations and wallet states are read at most once per pass.
+	targets := rrt.newReanchorTargetSearch(
+		taskLogger,
+		walletPublicKeyHash,
+		params.MaxReservationsPerWallet,
+		maxReservationsAmountPerWallet,
+	)
 
 reservationLoop:
 	for _, reservationKey := range reservationKeys {
@@ -279,59 +240,6 @@ reservationLoop:
 				reservationKey,
 				err,
 			)
-		}
-
-		// In-flight request tracking: if a RequestReservationReanchor
-		// submitted in an earlier round for this reservation is still
-		// unresolved, check its receipt before doing anything else. A
-		// mined request means the chain now holds the new generation
-		// (resume from chain state below); a reverted or dropped one
-		// means the chain still shows the old state and a fresh request
-		// is allowed; a still-pending one means this reservation is
-		// skipped this round. The submission's block number bounds the
-		// pending window: once the submission is not observed within
-		// reservationReanchorRequestWaitBlocks it is treated as dropped
-		// and a new request is allowed.
-		if inFlight, ok := rrt.getReanchorRequestInFlight(reservationKey); ok {
-			resolved, reReadReservation, err :=
-				rrt.resolveReanchorRequestInFlight(
-					taskLogger,
-					reservationKey,
-					inFlight,
-				)
-			if err != nil {
-				taskLogger.Errorf(
-					"cannot resolve in-flight re-anchor request for "+
-						"[0x%x]: [%v]",
-					reservationKey,
-					err,
-				)
-				continue reservationLoop
-			}
-			if !resolved {
-				taskLogger.Infof(
-					"re-anchor request for [0x%x] still in flight; "+
-						"skipping this reservation this round",
-					reservationKey,
-				)
-				continue reservationLoop
-			}
-			if reReadReservation {
-				// The request just resolved as mined: re-read the
-				// reservation record so the switch below dispatches on
-				// the state the mined generation actually advanced it
-				// to (ActionPending with the new nonce).
-				reservation, err = rrt.chain.GetReservation(reservationKey)
-				if err != nil {
-					taskLogger.Errorf(
-						"cannot re-read reservation [0x%x] after an "+
-							"in-flight request resolved as mined: [%v]",
-						reservationKey,
-						err,
-					)
-					continue reservationLoop
-				}
-			}
 		}
 
 		switch reservation.State {
@@ -375,8 +283,8 @@ reservationLoop:
 			// block.timestamp < action.TimeoutAt -
 			// REQUEST_TIMEOUT_SAFETY_MARGIN, so a generation at or past
 			// that boundary is skipped rather than proposed and rejected;
-			// a fresh request may be issued instead once the reservation
-			// is back in the Active state.
+			// a fresh request may be issued instead once the generation
+			// times out and the resulting re-anchor cooldown ends.
 			if uint64(time.Now().Unix())+
 				uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 				uint64(action.TimeoutAt) {
@@ -428,15 +336,35 @@ reservationLoop:
 			}
 			anchorValue := uint64(reservation.AnchorUtxo.Value)
 
-			for {
-				target, err := rrt.findTargetWallet(
-					taskLogger,
-					walletPublicKeyHash,
-					anchorValue,
-					params.MaxReservationsPerWallet,
-					maxReservationsAmountPerWallet,
-					triedTargets,
+			// Mirror Reservation.sol's request-time gates for a
+			// permissionless caller, which would otherwise revert the
+			// request after a target search: no request before
+			// reanchorCooldownUntil, and the anchor must stay above
+			// txMaxFee + minAmount.
+			if uint64(time.Now().Unix()) < uint64(reservation.ReanchorCooldownUntil) {
+				taskLogger.Infof(
+					"reservation [0x%x] is in its re-anchor cooldown until "+
+						"[%d], skipping",
+					reservationKey,
+					reservation.ReanchorCooldownUntil,
 				)
+				continue reservationLoop
+			}
+			if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
+				taskLogger.Infof(
+					"reservation [0x%x] anchor [%d] is not above the "+
+						"re-anchor floor (tx max fee [%d] + min amount [%d]), "+
+						"skipping",
+					reservationKey,
+					anchorValue,
+					params.ReservationTxMaxFee,
+					params.ReservationMinAmount,
+				)
+				continue reservationLoop
+			}
+
+			for {
+				target, err := targets.find(anchorValue)
 				if err != nil {
 					if errors.Is(err, errNoLiveTargetWallet) {
 						taskLogger.Infof(
@@ -468,24 +396,27 @@ reservationLoop:
 					err,
 				)
 
+				var postSubmitErr *errReservationReanchorPostSubmitFailure
+				if errors.As(err, &postSubmitErr) {
+					// The request was sent. End the pass so it sends at
+					// most one request; a later round picks the request
+					// up from chain state (resume path once mined, a new
+					// request if the reservation is still Active).
+					return nil, false, nil
+				}
+
 				if isReservationCapRevertError(err) {
 					// The target's capacity changed since our headroom
 					// pre-check (a concurrent re-anchor or acceptance
-					// consumed it); evict it and try the next candidate
+					// consumed it); exclude it and try the next candidate
 					// for this same reservation instead of giving up.
-					triedTargets[target] = true
-					rrt.evictCachedTargetWallet(target)
+					targets.exclude(target)
 					continue
 				}
 
-				// Every other failure on the request path is safe to
-				// retry on the next round without re-requesting: a
-				// request that went on-chain is tracked in-flight by
-				// its transaction hash (resolved by the receipt check
-				// at the top of this pass), and a pre-request local
-				// failure (fee estimation, assembly, validation)
-				// changed no chain state. Skip this reservation this
-				// pass.
+				// Nothing was sent (fee estimation, assembly, or another
+				// request revert), so no chain state changed: skip this
+				// reservation this pass.
 				continue reservationLoop
 			}
 
@@ -502,18 +433,6 @@ reservationLoop:
 	return nil, false, nil
 }
 
-// errReservationReanchorRequestNotMined signals that a just-submitted
-// RequestReservationReanchor was not observed as mined within the
-// same-round fast-path wait. The submission itself succeeded: an
-// in-flight tracking entry (with the submitted transaction hash and
-// block) was recorded before the wait, so subsequent Run rounds
-// settle it via its receipt instead of issuing a duplicate request.
-// Run treats this as "skip this reservation this round" rather than
-// as a window failure.
-var errReservationReanchorRequestNotMined = errors.New(
-	"reservation re-anchor request not yet mined",
-)
-
 // isReservationCapRevertError reports whether err is a reservation
 // wallet-capacity revert from either RequestReservationReanchor or
 // ValidateReservationReanchorProposal, mirroring the two capacity
@@ -529,24 +448,48 @@ func isReservationCapRevertError(err error) bool {
 	return strings.Contains(err.Error(), "cap exceeded")
 }
 
+// errReservationReanchorPostSubmitFailure marks a ProposeReservationReanchor
+// failure that happened after RequestReservationReanchor was sent. Run
+// checks for it with errors.As and ends the pass instead of moving on to
+// another target or reservation, so a pass sends at most one re-anchor
+// request. A failure before the request was sent leaves no chain state
+// behind and is not wrapped.
+type errReservationReanchorPostSubmitFailure struct {
+	err error
+}
+
+func (e *errReservationReanchorPostSubmitFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *errReservationReanchorPostSubmitFailure) Unwrap() error {
+	return e.err
+}
+
 // ProposeReservationReanchor assembles a single reservation re-anchor
 // proposal for the given reservation, targeting the given wallet.
 //
 // If the reservation's current generation is not already a Pending
 // Reanchor action authorizing this exact target, this call first requests
 // one on-chain (RequestReservationReanchor) and waits for it to be mined
-// before re-reading the reservation and action for the real request nonce
-// and snapshotted fee bound; only then does it build and validate the
-// proposal. This ordering is required by the on-chain validator, which
-// requires the action at proposal.RequestNonce to already be a Pending
-// Reanchor -- Reservation.sol's requestReservationReanchor is what writes
-// that record, so validating first would read the zero action and always
-// revert.
+// before re-reading the reservation and action for the real request nonce;
+// only then does it build and validate the proposal. This ordering is
+// required by the on-chain validator, which requires the action at
+// proposal.RequestNonce to already be a Pending Reanchor --
+// Reservation.sol's requestReservationReanchor is what writes that record,
+// so validating first would read the zero action and always revert.
+//
+// Before sending the request, the fee is estimated and the transaction is
+// assembled against the live ReservationTxMaxFee, the value Solidity
+// snapshots into the action the request creates. A fee that cannot fit
+// therefore fails before anything is sent instead of leaving an unusable
+// request on-chain. Any failure after the request was sent is returned as
+// an *errReservationReanchorPostSubmitFailure.
 //
 // A caller resuming an already-Pending generation (Run does this for
 // reservations in ActionPending state) passes that generation's own
-// authorized target and reaches this method with no chain write of its
-// own; a failure here is therefore a pre-write failure, safe to retry.
+// authorized target; the fee is then checked against the action's own
+// snapshotted TxMaxFee and no chain write happens.
 //
 // The supplied fee may be 0 to trigger on-chain-driven fee estimation.
 func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
@@ -602,74 +545,120 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		action.ActionType == tbtc.ReservationActionTypeReanchor &&
 		action.State == tbtc.ReservationActionStatePending &&
 		action.TargetWalletPublicKeyHash == targetWalletPublicKeyHash
-	requestNonce := reservation.RequestNonce
 
-	if !resuming {
-		if reservation.State != tbtc.ReservationStateActive {
-			return nil, fmt.Errorf(
-				"reservation [0x%x] is not active and has no matching "+
-					"pending re-anchor action to resume",
-				reservationKey,
-			)
-		}
-
-		taskLogger.Infof(
-			"requesting reservation re-anchor for [0x%x] to wallet [0x%x]",
-			reservationKey,
+	if resuming {
+		// The fee bound is the action's own snapshotted txMaxFee:
+		// WalletProposalValidator.validateReservationReanchorProposal
+		// checks the proposed fee against action.txMaxFee, not the live
+		// parameter.
+		fee, err = rrt.prepareReservationReanchorTransaction(
+			taskLogger,
+			reservation.AnchorUtxo,
 			targetWalletPublicKeyHash,
-		)
-
-		txHash, err := rrt.chain.RequestReservationReanchor(
-			reservationKey,
-			targetWalletPublicKeyHash,
+			action.TxMaxFee,
+			fee,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
+			return nil, err
 		}
 
-		// Record the in-flight submission for cross-round receipt
-		// resolution (see Run's in-flight receipt check): a later round
-		// sees this entry and resolves the request via its receipt
-		// (mined -> resume, reverted/dropped -> allow a new request,
-		// pending -> skip this round).
-		rrt.recordReanchorRequestInFlight(
+		return rrt.validatedReservationReanchorProposal(
 			taskLogger,
 			sourceWalletPublicKeyHash,
 			reservationKey,
-			txHash,
-		)
-
-		// Same-round fast path: wait for the request to mine so this
-		// round builds the proposal directly rather than waiting for
-		// the next round's receipt resolution. A timeout is no longer a
-		// window-aborting post-write failure: the in-flight entry above
-		// carries the submission into the receipt check, which resolves
-		// it safely in subsequent rounds.
-		reservation, action, err = rrt.waitForReservationReanchorRequestMined(
-			taskLogger,
-			reservationKey,
+			reservation.RequestNonce,
 			targetWalletPublicKeyHash,
-			requestNonce,
+			fee,
 		)
-		if err != nil {
-			return nil, errReservationReanchorRequestNotMined
-		}
-		requestNonce = reservation.RequestNonce
 	}
 
-	// The fee bound is the action's own snapshotted txMaxFee, not a live
-	// parameter value: WalletProposalValidator.validateReservationReanchorProposal
-	// checks the proposed fee against action.txMaxFee specifically (mirroring
-	// how it checks a redemption's fee against the request's own stored
-	// txMaxFee rather than a live Bridge parameter).
-	feeBoundAction := &tbtc.ReservationAction{TxMaxFee: action.TxMaxFee}
+	if reservation.State != tbtc.ReservationStateActive {
+		return nil, fmt.Errorf(
+			"reservation [0x%x] is not active and has no matching "+
+				"pending re-anchor action to resume",
+			reservationKey,
+		)
+	}
 
+	params, err := rrt.chain.ReservationParameters()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation parameters: [%w]",
+			err,
+		)
+	}
+
+	fee, err = rrt.prepareReservationReanchorTransaction(
+		taskLogger,
+		reservation.AnchorUtxo,
+		targetWalletPublicKeyHash,
+		params.ReservationTxMaxFee,
+		fee,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	taskLogger.Infof(
+		"requesting reservation re-anchor for [0x%x] to wallet [0x%x]",
+		reservationKey,
+		targetWalletPublicKeyHash,
+	)
+
+	if err := rrt.chain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	); err != nil {
+		return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
+	}
+
+	minedReservation, err := rrt.waitForReservationReanchorRequestMined(
+		taskLogger,
+		reservationKey,
+		targetWalletPublicKeyHash,
+		reservation.RequestNonce,
+	)
+	if err != nil {
+		return nil, &errReservationReanchorPostSubmitFailure{
+			err: fmt.Errorf(
+				"reservation re-anchor request not confirmed: [%w]",
+				err,
+			),
+		}
+	}
+
+	proposal, err := rrt.validatedReservationReanchorProposal(
+		taskLogger,
+		sourceWalletPublicKeyHash,
+		reservationKey,
+		minedReservation.RequestNonce,
+		targetWalletPublicKeyHash,
+		fee,
+	)
+	if err != nil {
+		return nil, &errReservationReanchorPostSubmitFailure{err: err}
+	}
+
+	return proposal, nil
+}
+
+// prepareReservationReanchorTransaction estimates the re-anchor fee when
+// fee is not positive, and checks that the re-anchor transaction can be
+// assembled with that fee under txMaxFee. It returns the fee to propose.
+func (rrt *ReservationReanchorTask) prepareReservationReanchorTransaction(
+	taskLogger log.StandardLogger,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	targetWalletPublicKeyHash [20]byte,
+	txMaxFee uint64,
+	fee int64,
+) (int64, error) {
 	if fee <= 0 {
 		taskLogger.Infof("estimating reservation re-anchor transaction fee")
 
-		fee, err = estimateReservationReanchorFee(rrt.btcChain, action.TxMaxFee)
+		var err error
+		fee, err = estimateReservationReanchorFee(rrt.btcChain, txMaxFee)
 		if err != nil {
-			return nil, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"cannot estimate reservation re-anchor transaction fee: [%w]",
 				err,
 			)
@@ -680,17 +669,30 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 
 	if _, err := tbtc.AssembleReservationReanchorTransaction(
 		rrt.btcChain,
-		reservation.AnchorUtxo,
+		anchorUtxo,
 		targetWalletPublicKeyHash,
-		feeBoundAction,
+		&tbtc.ReservationAction{TxMaxFee: txMaxFee},
 		fee,
 	); err != nil {
-		return nil, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"cannot assemble reservation re-anchor transaction: [%v]",
 			err,
 		)
 	}
 
+	return fee, nil
+}
+
+// validatedReservationReanchorProposal builds the proposal for the given
+// generation and validates it on-chain.
+func (rrt *ReservationReanchorTask) validatedReservationReanchorProposal(
+	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
+	reservationKey *big.Int,
+	requestNonce uint64,
+	targetWalletPublicKeyHash [20]byte,
+	fee int64,
+) (*tbtc.ReservationReanchorProposal, error) {
 	proposal := &tbtc.ReservationReanchorProposal{
 		ReservationKey:            new(big.Int).Set(reservationKey),
 		RequestNonce:              requestNonce,
@@ -718,26 +720,28 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 // RequestReservationReanchor transaction to be mined: the reservation's
 // RequestNonce must have advanced past preRequestNonce, and the action at
 // the new nonce must be the Pending Reanchor generation authorizing
-// targetWalletPublicKeyHash.
+// targetWalletPublicKeyHash. If the nonce advanced to any other action,
+// another request was mined first and this one can only revert, so the
+// wait ends immediately with an error.
 func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 	taskLogger log.StandardLogger,
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
 	preRequestNonce uint64,
-) (*tbtc.Reservation, *tbtc.ReservationAction, error) {
+) (*tbtc.Reservation, error) {
 	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
-		return nil, nil, fmt.Errorf("error getting block counter: [%w]", err)
+		return nil, fmt.Errorf("error getting block counter: [%w]", err)
 	}
 
 	currentBlock, err := blockCounter.CurrentBlock()
 	if err != nil {
-		return nil, nil, fmt.Errorf("error getting current block: [%w]", err)
+		return nil, fmt.Errorf("error getting current block: [%w]", err)
 	}
 
 	for blockHeight := currentBlock + 1; blockHeight <= currentBlock+reservationReanchorRequestWaitBlocks; blockHeight++ {
 		if err := blockCounter.WaitForBlockHeight(blockHeight); err != nil {
-			return nil, nil, fmt.Errorf("error while waiting for block height: [%w]", err)
+			return nil, fmt.Errorf("error while waiting for block height: [%w]", err)
 		}
 
 		reservation, err := rrt.chain.GetReservation(reservationKey)
@@ -765,18 +769,29 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 				continue
 			}
 
-			if action.ActionType == tbtc.ReservationActionTypeReanchor &&
-				action.State == tbtc.ReservationActionStatePending &&
-				action.TargetWalletPublicKeyHash == targetWalletPublicKeyHash {
-				taskLogger.Infof(
-					"reservation re-anchor request for [0x%x] confirmed at "+
-						"block [%d], nonce [%d]",
+			if action.ActionType != tbtc.ReservationActionTypeReanchor ||
+				action.State != tbtc.ReservationActionStatePending ||
+				action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+				return nil, fmt.Errorf(
+					"reservation [0x%x] advanced to nonce [%d] with a "+
+						"different action (type=%v, state=%v, target=0x%x); "+
+						"another request was mined first",
 					reservationKey,
-					blockHeight,
 					reservation.RequestNonce,
+					action.ActionType,
+					action.State,
+					action.TargetWalletPublicKeyHash,
 				)
-				return reservation, action, nil
 			}
+
+			taskLogger.Infof(
+				"reservation re-anchor request for [0x%x] confirmed at "+
+					"block [%d], nonce [%d]",
+				reservationKey,
+				blockHeight,
+				reservation.RequestNonce,
+			)
+			return reservation, nil
 		}
 
 		taskLogger.Infof(
@@ -787,7 +802,7 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 		)
 	}
 
-	return nil, nil, fmt.Errorf(
+	return nil, fmt.Errorf(
 		"reservation re-anchor request for [0x%x] not confirmed within "+
 			"[%d] blocks",
 		reservationKey,
@@ -795,28 +810,34 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 	)
 }
 
-// errNoLiveTargetWallet signals that no eligible re-anchor destination
-// wallet was found -- either no wallet is Live at all, or every candidate
-// lacks count/amount headroom -- a legitimate "nothing to do yet" outcome,
-// not a chain-read failure. Run treats it as a benign no-op for the
-// current reservation; any other error returned by findTargetWallet is a
-// genuine RPC/chain-read failure and is propagated so the coordinator
-// retries.
-var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor target")
-
-// findTargetWallet picks a live destination wallet, with count and amount
-// headroom for anchorValue, from the on-chain wallet registry for the
-// re-anchor transaction's output. The new wallet must be in StateLive,
-// must not be the source wallet itself, must not be in excluded (wallets
-// a cap-related revert already ruled out earlier in this Run pass), and
-// must have room under maxReservationsPerWallet /
-// maxReservationsAmountPerWallet for one more reservation of anchorValue
-// satoshi -- mirroring the capacity Reservation.sol's
+// reanchorTargetSearch picks live destination wallets for the re-anchor
+// requests of one Run pass. A target must be in StateLive, must not be the
+// source wallet itself, and must have room under maxReservationsPerWallet /
+// maxReservationsAmountPerWallet for one more reservation of the anchor
+// value -- mirroring the capacity Reservation.sol's
 // requestReservationReanchor reserves on the target at request time.
+//
+// The search keeps its state for the whole pass and is local to one Run
+// call (the task instance is shared across concurrent Runs for different
+// source wallets). Registration events and wallet states are read at most
+// once per pass, lazily on the first reservation that needs a target, and
+// capacity reads are not repeated for wallets or anchor values already
+// ruled out. Nothing in a pass releases target capacity, and a pass ends
+// after its first request, so what was ruled out stays ruled out.
+//
+// The previously selected target wallet is cached across passes and is
+// validated first; the registration scan only runs when the cached wallet
+// is missing or unusable. The scan is bounded to
+// ReservationReanchorLookBackBlocks (mirroring the other look-back scans in
+// this package) and falls back to an unbounded scan only when no recently
+// registered wallet has headroom: GetLiveWalletsCount (checked by Run) can
+// confirm live wallets exist even when none of them registered within the
+// look-back window. The fallback skips wallets the bounded scan already
+// read.
 //
 // Selection here is independent of the source wallet's own moving funds
 // commitment (SubmitMovingFundsCommitment /
-// PastMovingFundsCommitmentSubmittedEvents): this method does not attempt
+// PastMovingFundsCommitmentSubmittedEvents): the search does not attempt
 // to route the reservation's anchor UTXO to one of the specific wallets
 // the source wallet has committed to for its Bitcoin funds move. A
 // reservation re-anchored here may therefore end up under different
@@ -829,98 +850,262 @@ var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor t
 // and disambiguate among possibly several committed target wallets at
 // proposal time; that is not worth building unless the chain interface
 // already exposed the mapping trivially, which it does not today.
-//
-// The previously selected target wallet is cached and, when present and
-// not excluded, is the only wallet validated (GetWallet + StateLive +
-// not-the-source + headroom) before reuse -- avoiding the O(W)
-// GetWallet-per-registration scan below on every re-anchor window. A
-// fresh scan runs only when the cache is empty, the cached wallet fails
-// validation (it since went non-Live, lost its headroom, or the caller's
-// own source wallet now matches it), or the cached wallet is excluded.
-func (rrt *ReservationReanchorTask) findTargetWallet(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	if cached, ok := rrt.cachedTargetWallet(sourceWalletPublicKeyHash); ok && !excluded[cached] {
-		walletChainData, err := rrt.chain.GetWallet(cached)
-		if err == nil && walletChainData.State == tbtc.StateLive {
-			hasHeadroom, err := rrt.walletHasReanchorHeadroom(
-				cached, anchorValue, maxReservationsPerWallet, maxReservationsAmountPerWallet,
-			)
-			if err != nil {
-				return [20]byte{}, err
-			}
-			if hasHeadroom {
-				return cached, nil
-			}
-			taskLogger.Infof(
-				"cached re-anchor target wallet [0x%x] has no headroom; "+
-					"scanning for a new one",
-				cached,
-			)
-		} else {
-			taskLogger.Infof(
-				"cached re-anchor target wallet [0x%x] is no longer valid; "+
-					"scanning for a new one",
-				cached,
-			)
-		}
-		rrt.evictCachedTargetWallet(cached)
-	}
+type reanchorTargetSearch struct {
+	rrt                            *ReservationReanchorTask
+	logger                         log.StandardLogger
+	sourceWalletPublicKeyHash      [20]byte
+	maxReservationsPerWallet       uint32
+	maxReservationsAmountPerWallet uint64
 
-	targetWalletPublicKeyHash, err := rrt.scanForTargetWallet(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-	if err != nil {
-		return [20]byte{}, err
-	}
+	// checked holds every wallet whose state was already read this pass.
+	checked map[[20]byte]bool
+	// excluded holds wallets ruled out for every anchor value this pass:
+	// count cap reached, or rejected by a request-time capacity revert.
+	excluded map[[20]byte]bool
+	// candidates are the Live wallets found so far, in selection order:
+	// the cached wallet first, then newest registration first.
+	candidates [][20]byte
 
-	rrt.setCachedTargetWallet(targetWalletPublicKeyHash)
-	return targetWalletPublicKeyHash, nil
+	cachedChecked bool
+	recentScanned bool
+	fullScanned   bool
+
+	// noHeadroomFromAnchor is the smallest anchor value no candidate had
+	// headroom for; zero means no such value is known yet. The amount
+	// check only gets harder as the anchor grows, so every anchor at or
+	// above it is ruled out too.
+	noHeadroomFromAnchor uint64
 }
 
-// walletHasReanchorHeadroom mirrors the capacity check
-// Reservation.sol's requestReservationReanchor performs on the target
-// wallet at request time: the wallet's count of currently-custodied
-// reservations plus one must not exceed maxReservationsPerWallet, and
-// (only when the amount cap is configured -- zero disables it, matching
-// Solidity's `maxReservationsAmountPerWallet == 0` disable convention)
-// its current reserved amount plus anchorValue must not exceed
-// maxReservationsAmountPerWallet.
-func (rrt *ReservationReanchorTask) walletHasReanchorHeadroom(
-	walletPublicKeyHash [20]byte,
-	anchorValue uint64,
+// newReanchorTargetSearch returns a target search for one Run pass. It
+// reads nothing until find is first called.
+func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
+	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
 	maxReservationsPerWallet uint32,
 	maxReservationsAmountPerWallet uint64,
-) (bool, error) {
-	count, err := rrt.chain.WalletReservationsCount(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot get wallet reservations count: [%w]", err)
+) *reanchorTargetSearch {
+	return &reanchorTargetSearch{
+		rrt:                            rrt,
+		logger:                         taskLogger,
+		sourceWalletPublicKeyHash:      sourceWalletPublicKeyHash,
+		maxReservationsPerWallet:       maxReservationsPerWallet,
+		maxReservationsAmountPerWallet: maxReservationsAmountPerWallet,
+		checked:                        make(map[[20]byte]bool),
+		excluded:                       make(map[[20]byte]bool),
 	}
-	if count+1 > maxReservationsPerWallet {
-		return false, nil
+}
+
+// errNoLiveTargetWallet signals that no eligible re-anchor destination
+// wallet was found -- either no wallet is Live at all, or every candidate
+// lacks count/amount headroom -- a legitimate "nothing to do yet" outcome,
+// not a chain-read failure. Run treats it as a benign no-op for the
+// current reservation; any other error returned by the target search is a
+// genuine RPC/chain-read failure and is propagated so the coordinator
+// retries.
+var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor target")
+
+// find returns a target wallet with headroom for anchorValue, loading more
+// candidates only when the ones already found have none.
+func (s *reanchorTargetSearch) find(anchorValue uint64) ([20]byte, error) {
+	if s.noHeadroomFromAnchor != 0 && anchorValue >= s.noHeadroomFromAnchor {
+		return [20]byte{}, errNoLiveTargetWallet
 	}
 
-	if maxReservationsAmountPerWallet > 0 {
-		amount, err := rrt.chain.WalletReservationsAmount(walletPublicKeyHash)
+	// Candidates already checked for this anchor value are not checked
+	// again after more candidates are loaded.
+	from := 0
+	for {
+		target, found, err := s.pick(anchorValue, from)
 		if err != nil {
-			return false, fmt.Errorf("cannot get wallet reservations amount: [%w]", err)
+			return [20]byte{}, err
 		}
-		if amount+anchorValue > maxReservationsAmountPerWallet {
-			return false, nil
+		if found {
+			s.rrt.setCachedTargetWallet(target)
+			return target, nil
+		}
+
+		from = len(s.candidates)
+		loaded, err := s.loadMoreCandidates()
+		if err != nil {
+			return [20]byte{}, err
+		}
+		if !loaded {
+			s.noHeadroomFromAnchor = anchorValue
+			return [20]byte{}, errNoLiveTargetWallet
+		}
+	}
+}
+
+// exclude rules target out for the rest of the pass, after a request-time
+// capacity revert showed its capacity changed since the headroom check.
+func (s *reanchorTargetSearch) exclude(target [20]byte) {
+	s.excluded[target] = true
+	s.rrt.evictCachedTargetWallet(target)
+}
+
+// pick returns the first candidate, starting at index from, with headroom
+// for anchorValue. A candidate whose count cap is reached is excluded for
+// the rest of the pass.
+func (s *reanchorTargetSearch) pick(
+	anchorValue uint64,
+	from int,
+) ([20]byte, bool, error) {
+	for _, candidate := range s.candidates[from:] {
+		if s.excluded[candidate] {
+			continue
+		}
+
+		count, err := s.rrt.chain.WalletReservationsCount(candidate)
+		if err != nil {
+			return [20]byte{}, false, fmt.Errorf(
+				"cannot get wallet reservations count: [%w]",
+				err,
+			)
+		}
+		if count+1 > s.maxReservationsPerWallet {
+			s.logger.Infof(
+				"candidate re-anchor target wallet [0x%x] has no count "+
+					"headroom, skipping",
+				candidate,
+			)
+			s.exclude(candidate)
+			continue
+		}
+
+		// Zero disables the amount cap, matching Solidity's
+		// `maxReservationsAmountPerWallet == 0` convention.
+		if s.maxReservationsAmountPerWallet > 0 {
+			amount, err := s.rrt.chain.WalletReservationsAmount(candidate)
+			if err != nil {
+				return [20]byte{}, false, fmt.Errorf(
+					"cannot get wallet reservations amount: [%w]",
+					err,
+				)
+			}
+			if amount+anchorValue > s.maxReservationsAmountPerWallet {
+				s.logger.Infof(
+					"candidate re-anchor target wallet [0x%x] has no amount "+
+						"headroom for [%d] satoshi, skipping",
+					candidate,
+					anchorValue,
+				)
+				s.rrt.evictCachedTargetWallet(candidate)
+				continue
+			}
+		}
+
+		return candidate, true, nil
+	}
+
+	return [20]byte{}, false, nil
+}
+
+// loadMoreCandidates adds the next batch of Live wallets to the
+// candidates: the cached wallet, then the wallets registered within the
+// look-back window, then every other registered wallet. It reports false
+// once there is nothing left to load.
+func (s *reanchorTargetSearch) loadMoreCandidates() (bool, error) {
+	if !s.cachedChecked {
+		s.cachedChecked = true
+		if cached, ok := s.rrt.cachedTargetWallet(s.sourceWalletPublicKeyHash); ok {
+			if !s.addCandidateIfLive(cached) {
+				s.logger.Infof(
+					"cached re-anchor target wallet [0x%x] is no longer "+
+						"valid; scanning for a new one",
+					cached,
+				)
+				s.rrt.evictCachedTargetWallet(cached)
+			}
+			return true, nil
 		}
 	}
 
-	return true, nil
+	if !s.recentScanned {
+		s.recentScanned = true
+
+		blockCounter, err := s.rrt.chain.BlockCounter()
+		if err != nil {
+			return false, fmt.Errorf("failed to get block counter: [%v]", err)
+		}
+		currentBlock, err := blockCounter.CurrentBlock()
+		if err != nil {
+			return false, fmt.Errorf("failed to get current block: [%v]", err)
+		}
+
+		startBlock := uint64(0)
+		if currentBlock > ReservationReanchorLookBackBlocks {
+			startBlock = currentBlock - ReservationReanchorLookBackBlocks
+		}
+		if startBlock == 0 {
+			// The bounded scan already covers full chain history.
+			s.fullScanned = true
+		}
+
+		return true, s.addRegisteredCandidates(startBlock)
+	}
+
+	if !s.fullScanned {
+		s.fullScanned = true
+
+		s.logger.Infof(
+			"no live re-anchor target with headroom registered within the "+
+				"last [%d] blocks, falling back to an unbounded registration "+
+				"event scan",
+			ReservationReanchorLookBackBlocks,
+		)
+
+		return true, s.addRegisteredCandidates(0)
+	}
+
+	return false, nil
+}
+
+// addRegisteredCandidates scans new-wallet-registered events from
+// startBlock and adds, newest first, the Live wallets not read yet.
+func (s *reanchorTargetSearch) addRegisteredCandidates(startBlock uint64) error {
+	events, err := s.rrt.chain.PastNewWalletRegisteredEvents(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to get past new wallet registered events: [%v]",
+			err,
+		)
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		s.addCandidateIfLive(events[i].WalletPublicKeyHash)
+	}
+
+	return nil
+}
+
+// addCandidateIfLive reads the wallet's state, unless it was already read
+// this pass, and adds it to the candidates if it is Live and not the
+// source wallet. It reports whether the wallet was added.
+func (s *reanchorTargetSearch) addCandidateIfLive(walletPublicKeyHash [20]byte) bool {
+	if walletPublicKeyHash == s.sourceWalletPublicKeyHash ||
+		s.checked[walletPublicKeyHash] {
+		return false
+	}
+	s.checked[walletPublicKeyHash] = true
+
+	wallet, err := s.rrt.chain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		s.logger.Errorf(
+			"failed to get wallet data for wallet with PKH [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+		return false
+	}
+	if wallet.State != tbtc.StateLive {
+		return false
+	}
+
+	s.candidates = append(s.candidates, walletPublicKeyHash)
+	return true
 }
 
 // cachedTargetWallet returns the cached re-anchor target wallet, if any,
@@ -944,7 +1129,7 @@ func (rrt *ReservationReanchorTask) cachedTargetWallet(
 }
 
 // setCachedTargetWallet records the most recently selected re-anchor
-// target wallet for reuse by future findTargetWallet calls.
+// target wallet for reuse by future Run passes.
 func (rrt *ReservationReanchorTask) setCachedTargetWallet(
 	targetWalletPublicKeyHash [20]byte,
 ) {
@@ -956,9 +1141,9 @@ func (rrt *ReservationReanchorTask) setCachedTargetWallet(
 }
 
 // evictCachedTargetWallet clears the cached re-anchor target wallet if it
-// currently equals target, so the next findTargetWallet call performs a
-// fresh scan instead of reusing a wallet just proven to have no headroom
-// or to have reverted on capacity.
+// currently equals target, so the next Run pass performs a fresh scan
+// instead of reusing a wallet just proven to have no headroom or to have
+// reverted on capacity.
 func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 	rrt.targetWalletCacheMutex.Lock()
 	defer rrt.targetWalletCacheMutex.Unlock()
@@ -966,322 +1151,6 @@ func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 	if rrt.hasCachedTargetWallet && rrt.cachedTargetWalletPublicKeyHash == target {
 		rrt.hasCachedTargetWallet = false
 	}
-}
-
-// recordReanchorRequestInFlight records the just-submitted
-// RequestReservationReanchor transaction hash for the reservation under
-// sourceWalletPublicKeyHash, the wallet that hosted the reservation when
-// the submission was recorded. The current block (or 0 if the block
-// counter is unavailable) bounds the receipt check's "not observed for
-// this many blocks means dropped" logic.
-func (rrt *ReservationReanchorTask) recordReanchorRequestInFlight(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	reservationKey *big.Int,
-	txHash [32]byte,
-) {
-	var submittedBlock uint64
-	if blockCounter, err := rrt.chain.BlockCounter(); err == nil {
-		if currentBlock, err := blockCounter.CurrentBlock(); err == nil {
-			submittedBlock = currentBlock
-		} else {
-			taskLogger.Warnf(
-				"cannot read current block when recording in-flight re-anchor "+
-					"request for [0x%x]: [%v]; the receipt check will treat "+
-					"any pending status as past the window",
-				reservationKey,
-				err,
-			)
-		}
-	} else {
-		taskLogger.Warnf(
-			"cannot get block counter when recording in-flight re-anchor "+
-				"request for [0x%x]: [%v]; the receipt check will treat any "+
-				"pending status as past the window",
-			reservationKey,
-			err,
-		)
-	}
-
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	rrt.inFlightReanchorRequests[reservationKey.Text(16)] = reservationReanchorInFlightRequest{
-		txHash:                    txHash,
-		submittedAtBlock:          submittedBlock,
-		sourceWalletPublicKeyHash: sourceWalletPublicKeyHash,
-	}
-}
-
-// forgetInFlightReanchorRequestsNotIn drops the in-flight entries for
-// sourceWalletPublicKeyHash whose reservation key is not in currentKeys,
-// called at the top of Run, just after the wallet's reservation list is
-// read: a reservation that has since left the wallet (moved to another
-// custody) has nothing left to resume under this wallet, so the chain
-// state alone drives any follow-up and the tracking entry would otherwise
-// leak for the task's lifetime. Entries hosted by any other wallet are
-// left untouched.
-func (rrt *ReservationReanchorTask) forgetInFlightReanchorRequestsNotIn(
-	sourceWalletPublicKeyHash [20]byte,
-	currentKeys []*big.Int,
-) {
-	present := make(map[string]bool, len(currentKeys))
-	for _, key := range currentKeys {
-		present[key.Text(16)] = true
-	}
-
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	for key, entry := range rrt.inFlightReanchorRequests {
-		if entry.sourceWalletPublicKeyHash == sourceWalletPublicKeyHash &&
-			!present[key] {
-			delete(rrt.inFlightReanchorRequests, key)
-		}
-	}
-}
-
-// getReanchorRequestInFlight returns the in-flight record for the
-// reservation key, if any.
-func (rrt *ReservationReanchorTask) getReanchorRequestInFlight(
-	reservationKey *big.Int,
-) (reservationReanchorInFlightRequest, bool) {
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	entry, ok := rrt.inFlightReanchorRequests[reservationKey.Text(16)]
-	return entry, ok
-}
-
-// forgetInFlightReanchorRequest drops the in-flight record for the
-// reservation key, called once the receipt outcome has been resolved.
-func (rrt *ReservationReanchorTask) forgetInFlightReanchorRequest(
-	reservationKey *big.Int,
-) {
-	rrt.inFlightReanchorRequestsMutex.Lock()
-	defer rrt.inFlightReanchorRequestsMutex.Unlock()
-
-	delete(rrt.inFlightReanchorRequests, reservationKey.Text(16))
-}
-
-// resolveReanchorRequestInFlight looks up the receipt for an in-flight
-// RequestReservationReanchor submission and settles it.
-//
-//   - Mined: the chain now holds the new generation; the entry is
-//     forgotten. Callers should re-read the reservation and take the
-//     ActionPending resume path.
-//   - Reverted: no generation was written; the entry is forgotten and a
-//     fresh request is allowed this round.
-//   - Pending / NotFound: the submission is still unobserved. Within
-//     reservationReanchorRequestWaitBlocks of submission the caller
-//     should skip this reservation for this round (the receipt may
-//     surface on a later one); past that bound the submission is
-//     treated as dropped and a new request is allowed.
-//
-// The returned values are:
-//
-//	resolved        -- the in-flight entry has been settled and the
-//	                   caller may continue past it;
-//	re-mustClear    -- the chain state may have advanced (only true for
-//	                   the Mined case), so the caller should re-read the
-//	                   reservation record before dispatching.
-func (rrt *ReservationReanchorTask) resolveReanchorRequestInFlight(
-	taskLogger log.StandardLogger,
-	reservationKey *big.Int,
-	inFlight reservationReanchorInFlightRequest,
-) (resolved bool, reMustClear bool, err error) {
-	status, err := rrt.chain.GetReservationReanchorRequestReceipt(inFlight.txHash)
-	if err != nil {
-		return false, false, fmt.Errorf(
-			"receipt lookup: [%w]",
-			err,
-		)
-	}
-
-	switch status {
-	case tbtc.ReservationReanchorRequestReceiptMined:
-		taskLogger.Infof(
-			"in-flight re-anchor request [%x] for reservation [0x%x] mined; "+
-				"resuming from chain state",
-			inFlight.txHash,
-			reservationKey,
-		)
-		rrt.forgetInFlightReanchorRequest(reservationKey)
-		return true, true, nil
-	case tbtc.ReservationReanchorRequestReceiptReverted:
-		taskLogger.Infof(
-			"in-flight re-anchor request [%x] for reservation [0x%x] reverted; "+
-				"allowing a new request",
-			inFlight.txHash,
-			reservationKey,
-		)
-		rrt.forgetInFlightReanchorRequest(reservationKey)
-		return true, false, nil
-	case tbtc.ReservationReanchorRequestReceiptPending,
-		tbtc.ReservationReanchorRequestReceiptNotFound:
-		blockCounter, err := rrt.chain.BlockCounter()
-		if err != nil {
-			return false, false, fmt.Errorf(
-				"block counter: [%w]",
-				err,
-			)
-		}
-		currentBlock, err := blockCounter.CurrentBlock()
-		if err != nil {
-			return false, false, fmt.Errorf(
-				"current block: [%w]",
-				err,
-			)
-		}
-		if currentBlock > inFlight.submittedAtBlock &&
-			currentBlock-inFlight.submittedAtBlock >
-				reservationReanchorRequestWaitBlocks {
-			taskLogger.Infof(
-				"in-flight re-anchor request [%x] for reservation [0x%x] "+
-					"unobserved for [%d] blocks; treating as dropped and "+
-					"allowing a new request",
-				inFlight.txHash,
-				reservationKey,
-				currentBlock-inFlight.submittedAtBlock,
-			)
-			rrt.forgetInFlightReanchorRequest(reservationKey)
-			return true, false, nil
-		}
-		return false, false, nil
-	}
-
-	return true, false, nil
-}
-
-// scanForTargetWallet performs the registration-event scan findTargetWallet
-// falls back to when no cached target wallet is usable. The primary scan
-// is bounded to ReservationReanchorLookBackBlocks (mirroring the other
-// look-back scans in this package): an unbounded eth_getLogs scan on
-// every re-anchor attempt is too expensive to run every window.
-// GetLiveWalletsCount (checked by the caller before findTargetWallet
-// runs) can confirm live wallets exist even when none of them registered
-// within the look-back window, so a bounded scan that finds no candidate
-// falls back to an unbounded one instead of leaving Run stuck returning
-// no proposal indefinitely.
-func (rrt *ReservationReanchorTask) scanForTargetWallet(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	blockCounter, err := rrt.chain.BlockCounter()
-	if err != nil {
-		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return [20]byte{}, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	startBlock := uint64(0)
-	if currentBlock > ReservationReanchorLookBackBlocks {
-		startBlock = currentBlock - ReservationReanchorLookBackBlocks
-	}
-
-	targetWalletPublicKeyHash, err := rrt.findLiveWalletFromRegistrationEvents(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		startBlock,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-	if err == nil {
-		return targetWalletPublicKeyHash, nil
-	}
-	if startBlock == 0 {
-		// The bounded scan above already covered full chain history.
-		return [20]byte{}, err
-	}
-
-	taskLogger.Infof(
-		"no live re-anchor target with headroom registered within the "+
-			"last [%d] blocks, falling back to an unbounded registration "+
-			"event scan",
-		ReservationReanchorLookBackBlocks,
-	)
-
-	return rrt.findLiveWalletFromRegistrationEvents(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		0,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-}
-
-// findLiveWalletFromRegistrationEvents scans new-wallet-registered events
-// starting at startBlock and returns the most-recently-registered Live
-// wallet, other than sourceWalletPublicKeyHash or any wallet in excluded,
-// that has count/amount headroom for anchorValue.
-func (rrt *ReservationReanchorTask) findLiveWalletFromRegistrationEvents(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	startBlock uint64,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	events, err := rrt.chain.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
-	)
-	if err != nil {
-		return [20]byte{}, fmt.Errorf(
-			"failed to get past new wallet registered events: [%v]",
-			err,
-		)
-	}
-
-	for i := len(events) - 1; i >= 0; i-- {
-		walletPubKeyHash := events[i].WalletPublicKeyHash
-		if walletPubKeyHash == sourceWalletPublicKeyHash || excluded[walletPubKeyHash] {
-			continue
-		}
-
-		wallet, err := rrt.chain.GetWallet(walletPubKeyHash)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to get wallet data for wallet with PKH [0x%x]: [%v]",
-				walletPubKeyHash,
-				err,
-			)
-			continue
-		}
-
-		if wallet.State != tbtc.StateLive {
-			continue
-		}
-
-		hasHeadroom, err := rrt.walletHasReanchorHeadroom(
-			walletPubKeyHash, anchorValue, maxReservationsPerWallet, maxReservationsAmountPerWallet,
-		)
-		if err != nil {
-			return [20]byte{}, err
-		}
-		if !hasHeadroom {
-			taskLogger.Infof(
-				"candidate re-anchor target wallet [0x%x] has no headroom, skipping",
-				walletPubKeyHash,
-			)
-			continue
-		}
-
-		return walletPubKeyHash, nil
-	}
-
-	return [20]byte{}, errNoLiveTargetWallet
 }
 
 // isBelowMovingFundsDustThreshold returns the wallet's resolved main UTXO

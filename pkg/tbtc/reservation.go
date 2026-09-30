@@ -80,6 +80,10 @@ type Reservation struct {
 	// DissolutionEligibleAt is the UNIX timestamp at which the current term
 	// becomes eligible for dissolution.
 	DissolutionEligibleAt uint32
+	// ReanchorCooldownUntil is the UNIX timestamp before which a
+	// permissionless re-anchor request reverts. A re-anchor action timeout
+	// sets it to the timeout time plus the timed-out action's duration.
+	ReanchorCooldownUntil uint32
 }
 
 // ReservationActionType represents the type of a reservation action
@@ -226,11 +230,13 @@ type ReservationAction struct {
 	// TermSeconds is the custody term snapshotted when the generation was
 	// requested. It also bounds the late-acceptance settlement window
 	// (timeoutAt + termSeconds), so proof submitters must read it from the
-	// action, not from the live governance parameter.
+	// action, not from the live governance parameter. Set only for
+	// acceptance generations; zero for other action types.
 	TermSeconds uint32
 	// MinAmount is the minimum reservation amount snapshotted when the
 	// generation was requested. Settlement and signer validation both
-	// enforce this snapshot, not the live governance parameter.
+	// enforce this snapshot, not the live governance parameter. Set only
+	// for acceptance generations; zero for other action types.
 	MinAmount uint64
 }
 

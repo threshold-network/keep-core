@@ -9,21 +9,9 @@
 // the per-concern files and reintroduce the old tbtc.go, silently dropping
 // whatever those later commits changed. Reconstructing the pre-split state
 // requires a manual merge, not a mechanical revert.
-// tbtc.go: TbtcChain adapter construction and shared state. See tbtc_*.go for
-// per-concern implementations (tbtc_deposit.go, tbtc_dkg.go, tbtc_moving_funds.go,
-// tbtc_redemption.go, tbtc_wallet.go, tbtc_sortition.go, tbtc_inactivity.go).
-//
-// These files were split out of a single monolithic tbtc.go with no rename
-// markers git can detect (each file is a fresh addition, not a tracked move),
-// so a plain `git revert` of the split commit cannot be applied cleanly on
-// top of any later commit that also touches this package: it would re-delete
-// the per-concern files and reintroduce the old tbtc.go, silently dropping
-// whatever those later commits changed. Reconstructing the pre-split state
-// requires a manual merge, not a mechanical revert.
 package ethereum
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"encoding/binary"
 	"errors"
@@ -35,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	hostchain "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -677,6 +664,7 @@ func convertReservationFromAbiType(
 		RequestNonce:          abiReservation.RequestNonce,
 		RetryCredit:           abiReservation.RetryCredit,
 		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
+		ReanchorCooldownUntil: abiReservation.ReanchorCooldownUntil,
 	}, nil
 }
 
@@ -689,6 +677,8 @@ func convertReservationFromAbiType(
 //   - `UsedRetryCredit`, `Watchtower{Default,LevelOne,LevelTwo}Delay`,
 //     `RetryCreditSourceNonce`: written for governance / late-settlement
 //     reconciliation but not read by the operator client in m1.
+//   - `DissolutionDelay`: snapshotted by acceptance generations for the
+//     dissolution path, which the operator client does not drive in m1.
 //
 // The on-chain `actionDataHash` field is polymorphic across action types:
 // it carries the keccak256 of the redeemer output script for redemptions,
@@ -843,81 +833,31 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 
 // RequestReservationReanchor asks the Bridge (via its ReservationRouter
 // delegatecall target) to start a new reservation re-anchor action generation
-// for the given reservation, targeting the given wallet. The returned
-// transaction hash lets the caller track the submission across coordination
-// rounds via GetReservationReanchorRequestReceipt; the submission launches
-// mining and gas bumping in the background and returns before the
-// transaction is mined.
+// for the given reservation, targeting the given wallet.
 func (tc *TbtcChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
-) ([32]byte, error) {
+) error {
 	gasEstimate, err := tc.reservationRouter.RequestReservationReanchorGasEstimate(
 		reservationKey,
 		targetWalletPublicKeyHash,
 	)
 	if err != nil {
-		return [32]byte{}, err
+		return err
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
-	tx, err := tc.reservationRouter.RequestReservationReanchor(
+	_, err = tc.reservationRouter.RequestReservationReanchor(
 		reservationKey,
 		targetWalletPublicKeyHash,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},
 	)
-	if err != nil {
-		return [32]byte{}, err
-	}
 
-	return [32]byte(tx.Hash().Bytes()), nil
-}
-
-// GetReservationReanchorRequestReceipt reports the mining status of a
-// previously submitted RequestReservationReanchor transaction, as defined
-// by the tbtc.ReservationReanchorRequestReceiptStatus values. The receipt
-// lookup is bounded by a 30-second deadline, matching the baseChain header
-// helpers.
-//
-// A receipt that does not exist yet - which go-ethereum reports as
-// ethereum.NotFound for unknown or unmined hashes - maps to NotFound: the
-// caller treats NotFound and Pending identically, bounded by the block the
-// submission happened in. Every other lookup error (RPC outage, timeout,
-// transport failure) is returned to the caller so an in-flight request is
-// not mistaken for a dropped one.
-func (tc *TbtcChain) GetReservationReanchorRequestReceipt(
-	txHash [32]byte,
-) (tbtc.ReservationReanchorRequestReceiptStatus, error) {
-	ctx, cancelCtx := context.WithTimeout(
-		context.Background(),
-		30*time.Second,
-	)
-	defer cancelCtx()
-
-	receipt, err := tc.baseChain.client.TransactionReceipt(
-		ctx,
-		common.BytesToHash(txHash[:]),
-	)
-	if err != nil {
-		if errors.Is(err, hostchain.NotFound) {
-			return tbtc.ReservationReanchorRequestReceiptNotFound, nil
-		}
-		return tbtc.ReservationReanchorRequestReceiptNotFound, fmt.Errorf(
-			"cannot fetch transaction receipt: %w",
-			err,
-		)
-	}
-	if receipt == nil {
-		return tbtc.ReservationReanchorRequestReceiptNotFound, nil
-	}
-	if receipt.Status == 0 {
-		return tbtc.ReservationReanchorRequestReceiptReverted, nil
-	}
-	return tbtc.ReservationReanchorRequestReceiptMined, nil
+	return err
 }
 
 // SubmitReservationAcceptanceProof submits an SPV proof for the given

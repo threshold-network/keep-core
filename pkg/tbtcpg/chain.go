@@ -187,22 +187,11 @@ type Chain interface {
 	) error
 
 	// RequestReservationReanchor requests a reservation re-anchor action
-	// generation for the given reservation, targeting the given wallet. The
-	// returned bytes are the 32-byte hash of the submitted transaction;
-	// callers that submit the request track it across rounds via
-	// GetReservationReanchorRequestReceipt.
+	// generation for the given reservation, targeting the given wallet.
 	RequestReservationReanchor(
 		reservationKey *big.Int,
 		targetWalletPublicKeyHash [20]byte,
-	) ([32]byte, error)
-
-	// GetReservationReanchorRequestReceipt reports the mining status of the
-	// RequestReservationReanchor transaction identified by txHash: mined
-	// successfully, mined but reverted, still pending in the mempool, or
-	// not observed.
-	GetReservationReanchorRequestReceipt(
-		txHash [32]byte,
-	) (tbtc.ReservationReanchorRequestReceiptStatus, error)
+	) error
 
 	// NotifyMovingFundsBelowDust notifies the Bridge that the given wallet's
 	// main UTXO has fallen below the moving funds dust threshold, ending
