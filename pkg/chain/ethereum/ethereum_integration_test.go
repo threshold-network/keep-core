@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -24,6 +25,10 @@ import (
 	beaconabi "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen/abi"
 	ecdsaabi "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	thresholdabi "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/abi"
+	"github.com/keep-network/keep-core/pkg/operator"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 // To run the tests execute:
@@ -559,22 +564,22 @@ type admissionFacts struct {
 	beaconOwner common.Address
 }
 
-// beaconRecognized is the beacon branch, unchanged by this work: a registered
+// legacyBeaconRecognized reports the historical beacon predicate: a registered
 // operator whose staking provider has, or ever had, a stake delegation.
-func (f admissionFacts) beaconRecognized() bool {
+func (f admissionFacts) legacyBeaconRecognized() bool {
 	return f.beaconStakingProvider != zeroAddress && f.beaconOwner != zeroAddress
 }
 
-// baselineTbtcRecognized is the tBTC branch as it stands on the merge base:
-// the same stake-delegation predicate the beacon uses, read through the wallet
+// legacyOwnershipTbtcRecognized is the historical tBTC predicate: the same
+// stake-delegation predicate the beacon used, read through the wallet
 // registry's own operator mapping.
-func (f admissionFacts) baselineTbtcRecognized() bool {
+func (f admissionFacts) legacyOwnershipTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress && f.tbtcOwner != zeroAddress
 }
 
-// proposedTbtcRecognized is the tBTC branch this change settles on: eligible
-// stake alone.
-func (f admissionFacts) proposedTbtcRecognized() bool {
+// currentTbtcRecognized is the active admission predicate: eligible stake
+// alone.
+func (f admissionFacts) currentTbtcRecognized() bool {
 	return f.tbtcStakingProvider != zeroAddress && f.eligibleStake.Sign() > 0
 }
 
@@ -634,7 +639,8 @@ func readAdmissionFacts(
 	return facts
 }
 
-// admissionSplit counts a population by which branch admits it.
+// admissionSplit counts a historical OR population by which branch recognizes
+// it.
 type admissionSplit struct {
 	beaconOnly int
 	both       int
@@ -649,7 +655,7 @@ func splitPopulation(
 	split := admissionSplit{admitted: make([]common.Address, 0)}
 
 	for _, entry := range facts {
-		beacon := entry.beaconRecognized()
+		beacon := entry.legacyBeaconRecognized()
 		tbtc := tbtcRecognized(entry)
 
 		switch {
@@ -671,6 +677,20 @@ func splitPopulation(
 
 func (s admissionSplit) combined() int {
 	return s.beaconOnly + s.both + s.tbtcOnly
+}
+
+func recognizedPopulation(
+	facts []admissionFacts,
+	recognized func(admissionFacts) bool,
+) []common.Address {
+	population := make([]common.Address, 0)
+	for _, entry := range facts {
+		if recognized(entry) {
+			population = append(population, entry.operator)
+		}
+	}
+
+	return population
 }
 
 func assertSplit(
@@ -740,10 +760,118 @@ func assertAddressSet(
 	}
 }
 
-// TestMainnetChainState_AdmissionCensus evaluates the three admission policies
-// this change moves between - the merge base, the originally proposed head and
-// the policy settled on - over every operator address either registry has ever
-// recorded a registration for, using the chain state at the anchor.
+// networkPublicKeyToOperatorPublicKey mirrors the conversion pkg/net/libp2p
+// applies to a peer's libp2p public key. It is duplicated here because the
+// production helper is unexported and this test resolves peer IDs through
+// the same path the client uses to derive an operator chain address from a
+// peer ID. The libp2p Secp256k1PublicKey is an alias for btcec.PublicKey,
+// so the conversion is the same memory view the production code uses.
+func networkPublicKeyToOperatorPublicKey(
+	networkPublicKey libp2pcrypto.PubKey,
+) (*operator.PublicKey, error) {
+	secp256k1PublicKey, ok := networkPublicKey.(*libp2pcrypto.Secp256k1PublicKey)
+	if !ok {
+		return nil, fmt.Errorf(
+			"unrecognized libp2p public key type for peer ID",
+		)
+	}
+	btcecPublicKey := (*btcec.PublicKey)(secp256k1PublicKey)
+	return &operator.PublicKey{
+		Curve: operator.Secp256k1,
+		X:     btcecPublicKey.X(),
+		Y:     btcecPublicKey.Y(),
+	}, nil
+}
+
+// peerAddressFromMultiaddr takes a single /ipfs/... multiaddr line from the
+// config/_peers file and converts it to the chain address the production
+// client would derive from it. The conversion walks peer.Decode through
+// peerID.ExtractPublicKey, networkPublicKeyToOperatorPublicKey, and
+// operatorPublicKeyToChainAddress: the same path the client applies to a
+// peer ID it has dialed.
+func peerAddressFromMultiaddr(t *testing.T, multiaddrLine string) common.Address {
+	t.Helper()
+
+	parsed, err := ma.NewMultiaddr(multiaddrLine)
+	if err != nil {
+		t.Fatalf("could not parse peer multiaddr [%s]: %v", multiaddrLine, err)
+	}
+
+	peerIDString, err := parsed.ValueForProtocol(ma.P_IPFS)
+	if err != nil {
+		t.Fatalf(
+			"could not extract peer ID from multiaddr [%s]: %v",
+			multiaddrLine,
+			err,
+		)
+	}
+
+	peerID, err := peer.Decode(peerIDString)
+	if err != nil {
+		t.Fatalf("could not decode peer ID [%s]: %v", peerIDString, err)
+	}
+
+	networkPublicKey, err := peerID.ExtractPublicKey()
+	if err != nil {
+		t.Fatalf(
+			"could not extract public key from peer ID [%s]: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	operatorPublicKey, err := networkPublicKeyToOperatorPublicKey(networkPublicKey)
+	if err != nil {
+		t.Fatalf(
+			"could not convert peer [%s] public key to operator key: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	chainAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
+	if err != nil {
+		t.Fatalf(
+			"could not convert peer [%s] operator key to chain address: %v",
+			peerIDString,
+			err,
+		)
+	}
+
+	return chainAddress
+}
+
+// mainnetPeerChainAddresses reads the embedded bootstrap peer addresses from
+// config/_peers/mainnet and converts each to a chain address using the same
+// peer-ID-to-address path the production client applies. The list is the
+// set of addresses a node bootstrapping against this config would dial.
+func mainnetPeerChainAddresses(t *testing.T) []common.Address {
+	t.Helper()
+
+	content, err := os.ReadFile(filepath.Join(
+		"..", "..", "..",
+		"config", "_peers", "mainnet",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var addresses []common.Address
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		addresses = append(addresses, peerAddressFromMultiaddr(t, line))
+	}
+
+	return addresses
+}
+
+// TestMainnetChainState_AdmissionCensus evaluates the historical beacon OR
+// combined with the legacy-ownership and active eligible-stake tBTC predicates
+// over every operator address either registry has ever recorded, using the
+// chain state at the anchor.
 //
 // These are predicate results over registered addresses, not counts of peers
 // that were connected at the anchor. An address that registered once and has
@@ -778,42 +906,94 @@ func TestMainnetChainState_AdmissionCensus(t *testing.T) {
 
 	facts := readAdmissionFacts(t, callers, population)
 
-	baseline := splitPopulation(facts, admissionFacts.baselineTbtcRecognized)
-	proposed := splitPopulation(facts, admissionFacts.proposedTbtcRecognized)
+	legacyOwnership := splitPopulation(
+		facts,
+		admissionFacts.legacyOwnershipTbtcRecognized,
+	)
+	eligibleStakeWithBeacon := splitPopulation(
+		facts,
+		admissionFacts.currentTbtcRecognized,
+	)
+	current := recognizedPopulation(facts, admissionFacts.currentTbtcRecognized)
 
 	assertSplit(
 		t,
-		"proposed",
+		"eligible stake with legacy beacon",
 		admissionSplit{beaconOnly: 262, both: 19, tbtcOnly: 1},
-		proposed,
+		eligibleStakeWithBeacon,
+	)
+	testutils.AssertIntsEqual(t, "current tbtc-only admission", 20, len(current))
+	testutils.AssertIntsEqual(
+		t,
+		"operators retired with legacy beacon admission",
+		262,
+		len(difference(eligibleStakeWithBeacon.admitted, current)),
 	)
 
-	// The proposed policy does not admit the exact same set of addresses as the
-	// merge base: it admits one address the merge base does not, and stops
-	// admitting one address the merge base does. The combined totals match
+	// Eligible stake with legacy beacon does not admit the exact same set of
+	// addresses as legacy ownership: it admits one address legacy ownership does
+	// not, and stops admitting one address it does. The combined totals match
 	// because those two happen to cancel out.
 	gained := []string{"0xc1e20a88c2130472b25b3c382773ba85944230d2"}
 	lost := []string{"0xc19f2434236254fcbd2d329bbe048184bba21975"}
 	assertAddressSet(
 		t,
-		"addresses the proposed policy admits over the merge base",
+		"addresses eligible stake adds over legacy ownership",
 		gained,
-		difference(proposed.admitted, baseline.admitted),
+		difference(eligibleStakeWithBeacon.admitted, legacyOwnership.admitted),
 	)
 	assertAddressSet(
 		t,
-		"addresses the proposed policy stops admitting",
+		"addresses eligible stake removes from legacy ownership",
 		lost,
-		difference(baseline.admitted, proposed.admitted),
+		difference(legacyOwnership.admitted, eligibleStakeWithBeacon.admitted),
 	)
+	// Tie the admitted set to the embedded bootstrap peers: every chain
+	// address the production client would derive from a config/_peers/mainnet
+	// seed must be in the current admitted set. This pins identity, not just
+	// cardinality.
+	currentHeld := make(map[common.Address]bool, len(current))
+	for _, address := range current {
+		currentHeld[address] = true
+	}
+	peerChainAddresses := mainnetPeerChainAddresses(t)
+	for _, address := range peerChainAddresses {
+		if !currentHeld[address] {
+			t.Errorf(
+				"peer chain address [%s] from config/_peers/mainnet is not in the current tbtc-only admitted set",
+				address.Hex(),
+			)
+		}
+	}
+
+	// The retired operators were admitted by the legacy beacon OR but not
+	// by the current tBTC-only policy. Their sortition-pool membership has
+	// lapsed, so each one reads false at the pinned block; the wallet
+	// registry's IsOperatorInPool binding is the same callers/callOpts shape
+	// every other pinned-block read in this file uses.
+	for _, operatorAddress := range eligibleStakeWithBeacon.admitted {
+		if currentHeld[operatorAddress] {
+			continue
+		}
+		inPool := callOrFail(t, func() (bool, error) {
+			return callers.walletRegistry.IsOperatorInPool(
+				callers.callOpts,
+				operatorAddress,
+			)
+		})
+		if inPool {
+			t.Errorf(
+				"retired operator [%s] still reads as a sortition-pool member at the pinned block",
+				operatorAddress.Hex(),
+			)
+		}
+	}
 }
 
-// TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission reads the
-// operators the ECDSA allowlist deliberately left out. The tBTC predicate
-// rejects every one of them, and every one of them stays admitted through the
-// beacon branch. That is why the beacon must keep its own predicate; who the
-// change admits and stops admitting overall is settled by the census above.
-func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) {
+// TestMainnetChainState_DeprecatedOperatorsHaveNoEligibleStake reads the
+// operators the ECDSA allowlist deliberately left out. The active admission
+// predicate rejects each provider because its eligible stake is zero.
+func TestMainnetChainState_DeprecatedOperatorsHaveNoEligibleStake(t *testing.T) {
 	callers := newAdmissionCallers(t)
 	weights := readAllowlistWeights(t)
 
@@ -824,7 +1004,6 @@ func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) 
 	for _, deprecated := range weights.DeprecatedOperatorsNotAdded {
 		t.Run(deprecated.StakingProvider, func(t *testing.T) {
 			stakingProvider := common.HexToAddress(deprecated.StakingProvider)
-			operatorAddress := common.HexToAddress(deprecated.Operator)
 
 			eligibleStake := callOrFail(t, func() (*big.Int, error) {
 				return callers.walletRegistry.EligibleStake(
@@ -841,30 +1020,14 @@ func TestMainnetChainState_DeprecatedOperatorsKeepBeaconAdmission(t *testing.T) 
 				)
 			}
 
-			beaconStakingProvider := callOrFail(t, func() (common.Address, error) {
-				return callers.randomBeacon.OperatorToStakingProvider(
-					callers.callOpts,
-					operatorAddress,
-				)
-			})
-
-			if beaconStakingProvider == zeroAddress {
-				t.Error("expected the operator to be known to the beacon")
-			}
-
-			if callers.rolesOwner(t, beaconStakingProvider) == zeroAddress {
-				t.Error("expected the beacon branch to keep admitting")
-			}
 		})
 	}
 }
 
-// TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider is the reason
-// the beacon keeps the legacy delegation predicate. Token staking authorizes
-// no stake for the beacon, so beacon eligible stake is zero for every staking
-// provider that ever registered a beacon operator - the whole registered
-// population at the anchor, not a subset of it. Were the beacon given the
-// tBTC predicate, this branch would recognize nobody.
+// TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider records that
+// token staking authorizes no stake for the beacon. Beacon eligible stake is
+// zero for the whole registered provider population at the anchor and is not
+// an admission credential.
 func TestBeaconChain_EligibleStakeIsZeroForEveryRegisteredProvider(t *testing.T) {
 	callers := newAdmissionCallers(t)
 
@@ -948,12 +1111,10 @@ func TestMainnetChainState_EligibleStakeAtMinimumAuthorization(t *testing.T) {
 	}
 }
 
-// TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze is the
-// case the change exists for. Legacy token staking can no longer record a
-// delegation for anyone, so a provider authorized after it froze reads a zero
-// owner forever while holding full eligible stake: the delegation predicate
-// rejects it permanently and the eligible stake predicate admits it. It has no
-// beacon backstop either, which is the cost the change carries.
+// TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze records a
+// provider authorized after legacy token staking froze. It holds full eligible
+// stake and has a zero legacy owner at the anchor, so a roles-based predicate
+// rejects it while the eligible-stake predicate admits it.
 func TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.T) {
 	callers := newAdmissionCallers(t)
 
@@ -1014,6 +1175,6 @@ func TestMainnetChainState_ProviderAuthorizedAfterLegacyStakingFroze(t *testing.
 	}
 
 	if callers.rolesOwner(t, beaconStakingProvider) != zeroAddress {
-		t.Error("expected the provider to have no beacon backstop")
+		t.Error("expected the beacon-side provider to have no legacy owner")
 	}
 }
