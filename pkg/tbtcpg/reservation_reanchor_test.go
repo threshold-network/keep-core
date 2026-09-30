@@ -29,7 +29,7 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 			tbtcChain := tbtcpg.NewLocalChain()
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 
-			// findTargetWallet now bounds its wallet-registration scan to
+			// The target search bounds its wallet-registration scan to
 			// ReservationReanchorLookBackBlocks; a small current block keeps
 			// the computed StartBlock at 0, matching the filter used below.
 			blockCounter := tbtcpg.NewMockBlockCounter()
@@ -195,7 +195,7 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 
 			// Fall back to a non-zero MaxReservationsPerWallet when the
 			// scenario omits it: the headroom pre-check used by
-			// findTargetWallet rejects every candidate when the cap is
+			// the target search rejects every candidate when the cap is
 			// zero (count + 1 > 0 is always true), so a zero default
 			// would silently turn every scenario into "no live target".
 			maxPerWallet := scenario.MaxReservationsPerWallet
@@ -211,10 +211,10 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 			btcChain.SetEstimateSatPerVByteFee(1, scenario.EstimateSatPerVByteFee)
 
 			// Unconditionally register the source wallet itself in the
-			// same past-registration-events bucket findTargetWallet
+			// same past-registration-events bucket the target search
 			// queries (filter{StartBlock: 0}), even for scenarios with no
-			// target wallet. findLiveWalletFromRegistrationEvents always
-			// skips a registration matching the source wallet, so this is
+			// target wallet. The target search always skips a
+			// registration matching the source wallet, so this is
 			// inert for target selection; its only purpose is to give the
 			// mock chain a populated entry so PastNewWalletRegisteredEvents
 			// returns an (empty-after-filtering) slice instead of its
@@ -669,7 +669,7 @@ type reservationReanchorLocalChain struct {
 
 	// pastNewWalletRegisteredEventsCalls counts calls to
 	// PastNewWalletRegisteredEvents, letting tests assert on how many
-	// times findTargetWallet's registration-event scan actually ran
+	// times the target search's registration-event scan actually ran
 	// (e.g. that a cached target wallet suppressed a repeat scan).
 	pastNewWalletRegisteredEventsCalls int
 
@@ -947,14 +947,9 @@ func TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust(t *testing.T) 
 	})
 }
 
-// TestReservationReanchorTask_FindTargetWallet_CachesAcrossRuns was moved
-// to reservation_reanchor_metrics_test.go, which is in package tbtcpg and
-// can therefore reach the unexported findTargetWallet method directly.
-// See that file for the test body.
-
 // TestReservationReanchorTask_CapRevertLeadsToNextCandidate is a
-// regression test for the cap-revert branch Run adds on top of
-// findTargetWallet: a request-time capacity revert (modeled here as a
+// regression test for the cap-revert branch Run adds on top of the
+// target search: a request-time capacity revert (modeled here as a
 // concurrent consumer eating the cached target's headroom between the
 // headroom pre-check and the request submission) must not abort the
 // coordination window. Run must evict the reverted target, mark it as
@@ -1178,7 +1173,7 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 		tbtcChain.SetBlockCounter(blockCounter)
 
 		// Register the alternate target (oldest), then the filled
-		// target (newest): findTargetWallet scans registration events
+		// target (newest): the target search scans registration events
 		// newest-first, so the filled target is the first candidate
 		// examined -- it passes the headroom pre-check and its request
 		// reverts on the amount cap, forcing eviction to the alternate.

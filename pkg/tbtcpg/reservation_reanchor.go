@@ -61,12 +61,12 @@ type ReservationReanchorTask struct {
 	// TestReservationReanchorTask_TargetWalletExclusion_SharedTask).
 	targetWalletCacheMutex sync.Mutex
 	// cachedTargetWalletPublicKeyHash is the most recently selected
-	// re-anchor target wallet. findTargetWallet reuses it across Run
-	// calls -- validating headroom and liveness only for this one wallet
-	// -- instead of repeating its O(W) GetWallet-per-registration scan on
-	// every re-anchor window; a fresh full scan only runs when the cache
-	// is empty, the cached wallet fails validation, or the cached wallet
-	// is excluded. Meaningful only when hasCachedTargetWallet is true.
+	// re-anchor target wallet. reanchorTargetSearch tries it first in
+	// every Run -- validating headroom and liveness only for this one
+	// wallet -- instead of repeating its O(W) GetWallet-per-registration
+	// scan on every re-anchor window; a registration scan only runs when
+	// the cache is empty or the cached wallet is unusable. Meaningful only
+	// when hasCachedTargetWallet is true.
 	cachedTargetWalletPublicKeyHash [20]byte
 	hasCachedTargetWallet           bool
 }
@@ -222,12 +222,14 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
-	// triedTargets accumulates target wallets a cap-related revert has
-	// already ruled out during this Run pass. Capacity only grows during
-	// a pass (nothing here releases it), so a wallet excluded for one
-	// reservation is correctly excluded for every later reservation in
-	// the same pass too.
-	triedTargets := make(map[[20]byte]bool)
+	// One target search serves every reservation of this pass, so
+	// registrations and wallet states are read at most once per pass.
+	targets := rrt.newReanchorTargetSearch(
+		taskLogger,
+		walletPublicKeyHash,
+		params.MaxReservationsPerWallet,
+		maxReservationsAmountPerWallet,
+	)
 
 reservationLoop:
 	for _, reservationKey := range reservationKeys {
@@ -362,14 +364,7 @@ reservationLoop:
 			}
 
 			for {
-				target, err := rrt.findTargetWallet(
-					taskLogger,
-					walletPublicKeyHash,
-					anchorValue,
-					params.MaxReservationsPerWallet,
-					maxReservationsAmountPerWallet,
-					triedTargets,
-				)
+				target, err := targets.find(anchorValue)
 				if err != nil {
 					if errors.Is(err, errNoLiveTargetWallet) {
 						taskLogger.Infof(
@@ -413,10 +408,9 @@ reservationLoop:
 				if isReservationCapRevertError(err) {
 					// The target's capacity changed since our headroom
 					// pre-check (a concurrent re-anchor or acceptance
-					// consumed it); evict it and try the next candidate
+					// consumed it); exclude it and try the next candidate
 					// for this same reservation instead of giving up.
-					triedTargets[target] = true
-					rrt.evictCachedTargetWallet(target)
+					targets.exclude(target)
 					continue
 				}
 
@@ -816,28 +810,34 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 	)
 }
 
-// errNoLiveTargetWallet signals that no eligible re-anchor destination
-// wallet was found -- either no wallet is Live at all, or every candidate
-// lacks count/amount headroom -- a legitimate "nothing to do yet" outcome,
-// not a chain-read failure. Run treats it as a benign no-op for the
-// current reservation; any other error returned by findTargetWallet is a
-// genuine RPC/chain-read failure and is propagated so the coordinator
-// retries.
-var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor target")
-
-// findTargetWallet picks a live destination wallet, with count and amount
-// headroom for anchorValue, from the on-chain wallet registry for the
-// re-anchor transaction's output. The new wallet must be in StateLive,
-// must not be the source wallet itself, must not be in excluded (wallets
-// a cap-related revert already ruled out earlier in this Run pass), and
-// must have room under maxReservationsPerWallet /
-// maxReservationsAmountPerWallet for one more reservation of anchorValue
-// satoshi -- mirroring the capacity Reservation.sol's
+// reanchorTargetSearch picks live destination wallets for the re-anchor
+// requests of one Run pass. A target must be in StateLive, must not be the
+// source wallet itself, and must have room under maxReservationsPerWallet /
+// maxReservationsAmountPerWallet for one more reservation of the anchor
+// value -- mirroring the capacity Reservation.sol's
 // requestReservationReanchor reserves on the target at request time.
+//
+// The search keeps its state for the whole pass and is local to one Run
+// call (the task instance is shared across concurrent Runs for different
+// source wallets). Registration events and wallet states are read at most
+// once per pass, lazily on the first reservation that needs a target, and
+// capacity reads are not repeated for wallets or anchor values already
+// ruled out. Nothing in a pass releases target capacity, and a pass ends
+// after its first request, so what was ruled out stays ruled out.
+//
+// The previously selected target wallet is cached across passes and is
+// validated first; the registration scan only runs when the cached wallet
+// is missing or unusable. The scan is bounded to
+// ReservationReanchorLookBackBlocks (mirroring the other look-back scans in
+// this package) and falls back to an unbounded scan only when no recently
+// registered wallet has headroom: GetLiveWalletsCount (checked by Run) can
+// confirm live wallets exist even when none of them registered within the
+// look-back window. The fallback skips wallets the bounded scan already
+// read.
 //
 // Selection here is independent of the source wallet's own moving funds
 // commitment (SubmitMovingFundsCommitment /
-// PastMovingFundsCommitmentSubmittedEvents): this method does not attempt
+// PastMovingFundsCommitmentSubmittedEvents): the search does not attempt
 // to route the reservation's anchor UTXO to one of the specific wallets
 // the source wallet has committed to for its Bitcoin funds move. A
 // reservation re-anchored here may therefore end up under different
@@ -850,98 +850,262 @@ var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor t
 // and disambiguate among possibly several committed target wallets at
 // proposal time; that is not worth building unless the chain interface
 // already exposed the mapping trivially, which it does not today.
-//
-// The previously selected target wallet is cached and, when present and
-// not excluded, is the only wallet validated (GetWallet + StateLive +
-// not-the-source + headroom) before reuse -- avoiding the O(W)
-// GetWallet-per-registration scan below on every re-anchor window. A
-// fresh scan runs only when the cache is empty, the cached wallet fails
-// validation (it since went non-Live, lost its headroom, or the caller's
-// own source wallet now matches it), or the cached wallet is excluded.
-func (rrt *ReservationReanchorTask) findTargetWallet(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	if cached, ok := rrt.cachedTargetWallet(sourceWalletPublicKeyHash); ok && !excluded[cached] {
-		walletChainData, err := rrt.chain.GetWallet(cached)
-		if err == nil && walletChainData.State == tbtc.StateLive {
-			hasHeadroom, err := rrt.walletHasReanchorHeadroom(
-				cached, anchorValue, maxReservationsPerWallet, maxReservationsAmountPerWallet,
-			)
-			if err != nil {
-				return [20]byte{}, err
-			}
-			if hasHeadroom {
-				return cached, nil
-			}
-			taskLogger.Infof(
-				"cached re-anchor target wallet [0x%x] has no headroom; "+
-					"scanning for a new one",
-				cached,
-			)
-		} else {
-			taskLogger.Infof(
-				"cached re-anchor target wallet [0x%x] is no longer valid; "+
-					"scanning for a new one",
-				cached,
-			)
-		}
-		rrt.evictCachedTargetWallet(cached)
-	}
+type reanchorTargetSearch struct {
+	rrt                            *ReservationReanchorTask
+	logger                         log.StandardLogger
+	sourceWalletPublicKeyHash      [20]byte
+	maxReservationsPerWallet       uint32
+	maxReservationsAmountPerWallet uint64
 
-	targetWalletPublicKeyHash, err := rrt.scanForTargetWallet(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-	if err != nil {
-		return [20]byte{}, err
-	}
+	// checked holds every wallet whose state was already read this pass.
+	checked map[[20]byte]bool
+	// excluded holds wallets ruled out for every anchor value this pass:
+	// count cap reached, or rejected by a request-time capacity revert.
+	excluded map[[20]byte]bool
+	// candidates are the Live wallets found so far, in selection order:
+	// the cached wallet first, then newest registration first.
+	candidates [][20]byte
 
-	rrt.setCachedTargetWallet(targetWalletPublicKeyHash)
-	return targetWalletPublicKeyHash, nil
+	cachedChecked bool
+	recentScanned bool
+	fullScanned   bool
+
+	// noHeadroomFromAnchor is the smallest anchor value no candidate had
+	// headroom for; zero means no such value is known yet. The amount
+	// check only gets harder as the anchor grows, so every anchor at or
+	// above it is ruled out too.
+	noHeadroomFromAnchor uint64
 }
 
-// walletHasReanchorHeadroom mirrors the capacity check
-// Reservation.sol's requestReservationReanchor performs on the target
-// wallet at request time: the wallet's count of currently-custodied
-// reservations plus one must not exceed maxReservationsPerWallet, and
-// (only when the amount cap is configured -- zero disables it, matching
-// Solidity's `maxReservationsAmountPerWallet == 0` disable convention)
-// its current reserved amount plus anchorValue must not exceed
-// maxReservationsAmountPerWallet.
-func (rrt *ReservationReanchorTask) walletHasReanchorHeadroom(
-	walletPublicKeyHash [20]byte,
-	anchorValue uint64,
+// newReanchorTargetSearch returns a target search for one Run pass. It
+// reads nothing until find is first called.
+func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
+	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
 	maxReservationsPerWallet uint32,
 	maxReservationsAmountPerWallet uint64,
-) (bool, error) {
-	count, err := rrt.chain.WalletReservationsCount(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot get wallet reservations count: [%w]", err)
+) *reanchorTargetSearch {
+	return &reanchorTargetSearch{
+		rrt:                            rrt,
+		logger:                         taskLogger,
+		sourceWalletPublicKeyHash:      sourceWalletPublicKeyHash,
+		maxReservationsPerWallet:       maxReservationsPerWallet,
+		maxReservationsAmountPerWallet: maxReservationsAmountPerWallet,
+		checked:                        make(map[[20]byte]bool),
+		excluded:                       make(map[[20]byte]bool),
 	}
-	if count+1 > maxReservationsPerWallet {
-		return false, nil
+}
+
+// errNoLiveTargetWallet signals that no eligible re-anchor destination
+// wallet was found -- either no wallet is Live at all, or every candidate
+// lacks count/amount headroom -- a legitimate "nothing to do yet" outcome,
+// not a chain-read failure. Run treats it as a benign no-op for the
+// current reservation; any other error returned by the target search is a
+// genuine RPC/chain-read failure and is propagated so the coordinator
+// retries.
+var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor target")
+
+// find returns a target wallet with headroom for anchorValue, loading more
+// candidates only when the ones already found have none.
+func (s *reanchorTargetSearch) find(anchorValue uint64) ([20]byte, error) {
+	if s.noHeadroomFromAnchor != 0 && anchorValue >= s.noHeadroomFromAnchor {
+		return [20]byte{}, errNoLiveTargetWallet
 	}
 
-	if maxReservationsAmountPerWallet > 0 {
-		amount, err := rrt.chain.WalletReservationsAmount(walletPublicKeyHash)
+	// Candidates already checked for this anchor value are not checked
+	// again after more candidates are loaded.
+	from := 0
+	for {
+		target, found, err := s.pick(anchorValue, from)
 		if err != nil {
-			return false, fmt.Errorf("cannot get wallet reservations amount: [%w]", err)
+			return [20]byte{}, err
 		}
-		if amount+anchorValue > maxReservationsAmountPerWallet {
-			return false, nil
+		if found {
+			s.rrt.setCachedTargetWallet(target)
+			return target, nil
+		}
+
+		from = len(s.candidates)
+		loaded, err := s.loadMoreCandidates()
+		if err != nil {
+			return [20]byte{}, err
+		}
+		if !loaded {
+			s.noHeadroomFromAnchor = anchorValue
+			return [20]byte{}, errNoLiveTargetWallet
+		}
+	}
+}
+
+// exclude rules target out for the rest of the pass, after a request-time
+// capacity revert showed its capacity changed since the headroom check.
+func (s *reanchorTargetSearch) exclude(target [20]byte) {
+	s.excluded[target] = true
+	s.rrt.evictCachedTargetWallet(target)
+}
+
+// pick returns the first candidate, starting at index from, with headroom
+// for anchorValue. A candidate whose count cap is reached is excluded for
+// the rest of the pass.
+func (s *reanchorTargetSearch) pick(
+	anchorValue uint64,
+	from int,
+) ([20]byte, bool, error) {
+	for _, candidate := range s.candidates[from:] {
+		if s.excluded[candidate] {
+			continue
+		}
+
+		count, err := s.rrt.chain.WalletReservationsCount(candidate)
+		if err != nil {
+			return [20]byte{}, false, fmt.Errorf(
+				"cannot get wallet reservations count: [%w]",
+				err,
+			)
+		}
+		if count+1 > s.maxReservationsPerWallet {
+			s.logger.Infof(
+				"candidate re-anchor target wallet [0x%x] has no count "+
+					"headroom, skipping",
+				candidate,
+			)
+			s.exclude(candidate)
+			continue
+		}
+
+		// Zero disables the amount cap, matching Solidity's
+		// `maxReservationsAmountPerWallet == 0` convention.
+		if s.maxReservationsAmountPerWallet > 0 {
+			amount, err := s.rrt.chain.WalletReservationsAmount(candidate)
+			if err != nil {
+				return [20]byte{}, false, fmt.Errorf(
+					"cannot get wallet reservations amount: [%w]",
+					err,
+				)
+			}
+			if amount+anchorValue > s.maxReservationsAmountPerWallet {
+				s.logger.Infof(
+					"candidate re-anchor target wallet [0x%x] has no amount "+
+						"headroom for [%d] satoshi, skipping",
+					candidate,
+					anchorValue,
+				)
+				s.rrt.evictCachedTargetWallet(candidate)
+				continue
+			}
+		}
+
+		return candidate, true, nil
+	}
+
+	return [20]byte{}, false, nil
+}
+
+// loadMoreCandidates adds the next batch of Live wallets to the
+// candidates: the cached wallet, then the wallets registered within the
+// look-back window, then every other registered wallet. It reports false
+// once there is nothing left to load.
+func (s *reanchorTargetSearch) loadMoreCandidates() (bool, error) {
+	if !s.cachedChecked {
+		s.cachedChecked = true
+		if cached, ok := s.rrt.cachedTargetWallet(s.sourceWalletPublicKeyHash); ok {
+			if !s.addCandidateIfLive(cached) {
+				s.logger.Infof(
+					"cached re-anchor target wallet [0x%x] is no longer "+
+						"valid; scanning for a new one",
+					cached,
+				)
+				s.rrt.evictCachedTargetWallet(cached)
+			}
+			return true, nil
 		}
 	}
 
-	return true, nil
+	if !s.recentScanned {
+		s.recentScanned = true
+
+		blockCounter, err := s.rrt.chain.BlockCounter()
+		if err != nil {
+			return false, fmt.Errorf("failed to get block counter: [%v]", err)
+		}
+		currentBlock, err := blockCounter.CurrentBlock()
+		if err != nil {
+			return false, fmt.Errorf("failed to get current block: [%v]", err)
+		}
+
+		startBlock := uint64(0)
+		if currentBlock > ReservationReanchorLookBackBlocks {
+			startBlock = currentBlock - ReservationReanchorLookBackBlocks
+		}
+		if startBlock == 0 {
+			// The bounded scan already covers full chain history.
+			s.fullScanned = true
+		}
+
+		return true, s.addRegisteredCandidates(startBlock)
+	}
+
+	if !s.fullScanned {
+		s.fullScanned = true
+
+		s.logger.Infof(
+			"no live re-anchor target with headroom registered within the "+
+				"last [%d] blocks, falling back to an unbounded registration "+
+				"event scan",
+			ReservationReanchorLookBackBlocks,
+		)
+
+		return true, s.addRegisteredCandidates(0)
+	}
+
+	return false, nil
+}
+
+// addRegisteredCandidates scans new-wallet-registered events from
+// startBlock and adds, newest first, the Live wallets not read yet.
+func (s *reanchorTargetSearch) addRegisteredCandidates(startBlock uint64) error {
+	events, err := s.rrt.chain.PastNewWalletRegisteredEvents(
+		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to get past new wallet registered events: [%v]",
+			err,
+		)
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		s.addCandidateIfLive(events[i].WalletPublicKeyHash)
+	}
+
+	return nil
+}
+
+// addCandidateIfLive reads the wallet's state, unless it was already read
+// this pass, and adds it to the candidates if it is Live and not the
+// source wallet. It reports whether the wallet was added.
+func (s *reanchorTargetSearch) addCandidateIfLive(walletPublicKeyHash [20]byte) bool {
+	if walletPublicKeyHash == s.sourceWalletPublicKeyHash ||
+		s.checked[walletPublicKeyHash] {
+		return false
+	}
+	s.checked[walletPublicKeyHash] = true
+
+	wallet, err := s.rrt.chain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		s.logger.Errorf(
+			"failed to get wallet data for wallet with PKH [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+		return false
+	}
+	if wallet.State != tbtc.StateLive {
+		return false
+	}
+
+	s.candidates = append(s.candidates, walletPublicKeyHash)
+	return true
 }
 
 // cachedTargetWallet returns the cached re-anchor target wallet, if any,
@@ -965,7 +1129,7 @@ func (rrt *ReservationReanchorTask) cachedTargetWallet(
 }
 
 // setCachedTargetWallet records the most recently selected re-anchor
-// target wallet for reuse by future findTargetWallet calls.
+// target wallet for reuse by future Run passes.
 func (rrt *ReservationReanchorTask) setCachedTargetWallet(
 	targetWalletPublicKeyHash [20]byte,
 ) {
@@ -977,9 +1141,9 @@ func (rrt *ReservationReanchorTask) setCachedTargetWallet(
 }
 
 // evictCachedTargetWallet clears the cached re-anchor target wallet if it
-// currently equals target, so the next findTargetWallet call performs a
-// fresh scan instead of reusing a wallet just proven to have no headroom
-// or to have reverted on capacity.
+// currently equals target, so the next Run pass performs a fresh scan
+// instead of reusing a wallet just proven to have no headroom or to have
+// reverted on capacity.
 func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 	rrt.targetWalletCacheMutex.Lock()
 	defer rrt.targetWalletCacheMutex.Unlock()
@@ -987,137 +1151,6 @@ func (rrt *ReservationReanchorTask) evictCachedTargetWallet(target [20]byte) {
 	if rrt.hasCachedTargetWallet && rrt.cachedTargetWalletPublicKeyHash == target {
 		rrt.hasCachedTargetWallet = false
 	}
-}
-
-// scanForTargetWallet performs the registration-event scan findTargetWallet
-// falls back to when no cached target wallet is usable. The primary scan
-// is bounded to ReservationReanchorLookBackBlocks (mirroring the other
-// look-back scans in this package): an unbounded eth_getLogs scan on
-// every re-anchor attempt is too expensive to run every window.
-// GetLiveWalletsCount (checked by the caller before findTargetWallet
-// runs) can confirm live wallets exist even when none of them registered
-// within the look-back window, so a bounded scan that finds no candidate
-// falls back to an unbounded one instead of leaving Run stuck returning
-// no proposal indefinitely.
-func (rrt *ReservationReanchorTask) scanForTargetWallet(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	blockCounter, err := rrt.chain.BlockCounter()
-	if err != nil {
-		return [20]byte{}, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return [20]byte{}, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	startBlock := uint64(0)
-	if currentBlock > ReservationReanchorLookBackBlocks {
-		startBlock = currentBlock - ReservationReanchorLookBackBlocks
-	}
-
-	targetWalletPublicKeyHash, err := rrt.findLiveWalletFromRegistrationEvents(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		startBlock,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-	if err == nil {
-		return targetWalletPublicKeyHash, nil
-	}
-	if startBlock == 0 {
-		// The bounded scan above already covered full chain history.
-		return [20]byte{}, err
-	}
-
-	taskLogger.Infof(
-		"no live re-anchor target with headroom registered within the "+
-			"last [%d] blocks, falling back to an unbounded registration "+
-			"event scan",
-		ReservationReanchorLookBackBlocks,
-	)
-
-	return rrt.findLiveWalletFromRegistrationEvents(
-		taskLogger,
-		sourceWalletPublicKeyHash,
-		0,
-		anchorValue,
-		maxReservationsPerWallet,
-		maxReservationsAmountPerWallet,
-		excluded,
-	)
-}
-
-// findLiveWalletFromRegistrationEvents scans new-wallet-registered events
-// starting at startBlock and returns the most-recently-registered Live
-// wallet, other than sourceWalletPublicKeyHash or any wallet in excluded,
-// that has count/amount headroom for anchorValue.
-func (rrt *ReservationReanchorTask) findLiveWalletFromRegistrationEvents(
-	taskLogger log.StandardLogger,
-	sourceWalletPublicKeyHash [20]byte,
-	startBlock uint64,
-	anchorValue uint64,
-	maxReservationsPerWallet uint32,
-	maxReservationsAmountPerWallet uint64,
-	excluded map[[20]byte]bool,
-) ([20]byte, error) {
-	events, err := rrt.chain.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{StartBlock: startBlock},
-	)
-	if err != nil {
-		return [20]byte{}, fmt.Errorf(
-			"failed to get past new wallet registered events: [%v]",
-			err,
-		)
-	}
-
-	for i := len(events) - 1; i >= 0; i-- {
-		walletPubKeyHash := events[i].WalletPublicKeyHash
-		if walletPubKeyHash == sourceWalletPublicKeyHash || excluded[walletPubKeyHash] {
-			continue
-		}
-
-		wallet, err := rrt.chain.GetWallet(walletPubKeyHash)
-		if err != nil {
-			taskLogger.Errorf(
-				"failed to get wallet data for wallet with PKH [0x%x]: [%v]",
-				walletPubKeyHash,
-				err,
-			)
-			continue
-		}
-
-		if wallet.State != tbtc.StateLive {
-			continue
-		}
-
-		hasHeadroom, err := rrt.walletHasReanchorHeadroom(
-			walletPubKeyHash, anchorValue, maxReservationsPerWallet, maxReservationsAmountPerWallet,
-		)
-		if err != nil {
-			return [20]byte{}, err
-		}
-		if !hasHeadroom {
-			taskLogger.Infof(
-				"candidate re-anchor target wallet [0x%x] has no headroom, skipping",
-				walletPubKeyHash,
-			)
-			continue
-		}
-
-		return walletPubKeyHash, nil
-	}
-
-	return [20]byte{}, errNoLiveTargetWallet
 }
 
 // isBelowMovingFundsDustThreshold returns the wallet's resolved main UTXO
