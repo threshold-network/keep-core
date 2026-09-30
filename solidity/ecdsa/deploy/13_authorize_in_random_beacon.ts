@@ -8,6 +8,27 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const WalletRegistry = await deployments.get("WalletRegistry")
 
+  if (
+    await deployments.read(
+      "RandomBeacon",
+      "authorizedRequesters",
+      WalletRegistry.address
+    )
+  ) {
+    return
+  }
+  const RandomBeaconGovernance = await deployments.get("RandomBeaconGovernance")
+  const currentGovernance = await deployments.read("RandomBeacon", "governance")
+  if (
+    currentGovernance.toLowerCase() !==
+    RandomBeaconGovernance.address.toLowerCase()
+  ) {
+    deployments.log(
+      `RandomBeacon governance is ${currentGovernance}; skipping requester authorization through inactive RandomBeaconGovernance ${RandomBeaconGovernance.address}`
+    )
+    return
+  }
+
   // For mainnet we expect the scripts to be executed one by one. It's assumed that
   // the transfer of RandomBeaconGovernance ownership to governance will happen
   // after ecdsa contracts migration is done, so the `deployer` is still the

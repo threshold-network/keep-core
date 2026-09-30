@@ -7,11 +7,22 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const RandomBeaconGovernance = await deployments.get("RandomBeaconGovernance")
 
-  await helpers.ownable.transferOwnership(
-    "RandomBeaconGovernance",
-    governance,
-    deployer
-  )
+  const owner = await deployments.read("RandomBeaconGovernance", "owner")
+  if (helpers.address.equal(owner, deployer)) {
+    await helpers.ownable.transferOwnership(
+      "RandomBeaconGovernance",
+      governance,
+      deployer
+    )
+  }
+
+  const currentGovernance = await deployments.read("RandomBeacon", "governance")
+  if (!helpers.address.equal(currentGovernance, deployer)) {
+    deployments.log(
+      `RandomBeacon governance is already ${currentGovernance}; skipping transfer`
+    )
+    return
+  }
 
   await deployments.execute(
     "RandomBeacon",
