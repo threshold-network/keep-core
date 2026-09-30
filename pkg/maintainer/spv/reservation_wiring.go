@@ -64,22 +64,11 @@ var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollIn
 // finished.
 var reservationWatcherPanicRecovered = func() {}
 
-// reservationDefaultLookBackBlocks bounds every reservation watcher's
-// startup/first-pass catch-up scan window: 30 days at 12s/block. It is
-// the single source of truth for this bound, replacing what were
-// previously 4+ independently-defined constants (this file's own
-// reservationStrandingStartupScanLookBackBlocks and
-// reservationStaleDepositLookBackBlocks,
-// reservation_action_timeout_watch.go's
-// reservationActionTimeoutLookBackBlocks, and
-// reservation_proof_loop.go's reservationProofLookBackBlocks) all
-// independently set to the identical literal value with near-duplicate
-// doc comments. Every former duplicate, including the two thin aliases
-// that used to remain solely for test-file references
-// (reservationProofLookBackBlocks and
-// reservation_stale_deposit_watch.go's
-// staleDepositRevealScanLookBackBlocks), now references this constant
-// directly.
+// reservationDefaultLookBackBlocks bounds the stranding startup scan of
+// wallet registrations (see scanReservationStrandingStartupRegistrations):
+// 30 days at 12s/block. The reservation event scans are not bounded by it;
+// they start at the reservation activation block (see
+// reservationScanRange).
 const reservationDefaultLookBackBlocks = uint64(216000)
 
 // reservationStrandingStartupScanRetryDelay bounds how long the startup
@@ -225,14 +214,15 @@ func recordReservationWatcherDeath(recorder MetricsRecorder) {
 // interface.
 //
 // `ethNetwork` is the Ethereum network this wiring run targets; it
-// drives the reservation activation-block lookup shared by the proof
-// loop's startup catch-up scan and the stale-deposit watcher's startup
-// reveal scan (see tbtc.ReservationsActivationBlock). Passing
+// drives the reservation activation-block lookup (see
+// tbtc.ReservationsActivationBlock) where the stale-deposit and
+// action-timeout watchers start their first event scan. Passing
 // ethereum.Unknown (or any network without an entry in
 // reservationsActivationBlocks) returns math.MaxUint64 from the lookup,
-// which the proof loop and stale-deposit watcher treat as "reservations
-// never activate on this network" and skip their startup scans
-// accordingly.
+// which both watchers treat as "reservations inactive on this network":
+// they skip their first catch-up scan and later scan only new blocks.
+// The SPV proof loop does the same lookup from its own
+// Config.EthereumNetwork.
 func WireReservationWatchers(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,

@@ -168,9 +168,7 @@ type pendingAction struct {
 // actionEventKey identifies one reservation action generation. It
 // delegates to reservationEventKey (see reservation_proof_loop.go), the
 // canonical (reservationKey, requestNonce) key formatter shared by
-// every pending-event map in this package; this watcher previously used
-// its own "%s#%d" format, now consolidated onto reservationEventKey's
-// pre-existing "%s:%d" format.
+// every pending-event map in this package.
 func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 	return reservationEventKey(reservationKey, requestNonce)
 }

@@ -20,9 +20,9 @@ import (
 // the set of still-settleable action-request events across successive
 // passes of runReservationProofLoop, so proveReservationAcceptanceActions
 // and proveReservationReanchorActions scan only the event/Bitcoin history
-// that has appeared since the previous pass instead of rescanning the full
-// reservationDefaultLookBackBlocks window - and refetching Bitcoin history
-// for every wallet in it - every config.IdleBackoffTime.
+// that has appeared since the previous pass (see reservationScanRange)
+// instead of rescanning from the activation block - and refetching
+// Bitcoin history for every wallet - every config.IdleBackoffTime.
 type reservationProofScanState struct {
 	acceptanceLastScannedBlock uint64
 	pendingAcceptanceEvents    map[string]*tbtc.ReservationAcceptanceRequestedEvent
@@ -82,8 +82,9 @@ func defaultReservationProofNowFn() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// reanchorSourceAnchorHash computes exactly the Bridge's
-// anchorUtxoHash(reservation) from Reservation.sol:
+// reanchorSourceAnchorHash computes the Bridge's
+// anchorUtxoHash(reservation) from Reservation.sol for a reservation with
+// an anchor outpoint:
 // keccak256(abi.encodePacked(anchorTxHash, uint32 anchorTxOutputIndex)) -
 // the 32-byte anchor transaction hash in its Bitcoin internal byte order
 // (the order the Bridge stores it, matching the
@@ -91,7 +92,9 @@ func defaultReservationProofNowFn() uint32 {
 // big-endian uint32. It is the hash the Bridge's
 // requireCurrentSourceAnchor check in ReservationProofs.sol compares
 // against each tracked generation's on-chain source anchor snapshot. A
-// reservation with no anchor outpoint yields the zero hash.
+// reservation with no anchor outpoint yields the zero hash, where the
+// Bridge would hash the zeroed fields instead; neither value can equal a
+// generation's snapshot, which is always taken from a real anchor.
 func reanchorSourceAnchorHash(reservation *tbtc.Reservation) [32]byte {
 	if reservation == nil ||
 		reservation.AnchorUtxo == nil ||

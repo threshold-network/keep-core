@@ -131,11 +131,9 @@ type ReservationStaleDepositWatcher struct {
 	// through free functions - mirrors
 	// ReservationActionTimeoutWatcher's self-contained Run loop.
 	//
-	// The set is a single one: the old split between an actively-
-	// polled set and a slower-reconciled set of Live-wallet deposits
-	// is gone, because deadline-aware scheduling makes it redundant.
-	// Before a deposit's refund deadline passes it costs no chain
-	// reads at all (nothing to amortize away), and after the deadline
+	// Every tracked deposit is polled the same way, whatever its
+	// wallet state. Before a deposit's refund deadline passes it costs
+	// no chain reads at all, and after the deadline
 	// every tracked deposit - including ones whose wallet is Live,
 	// since the notification is wallet-state-independent - must be
 	// re-checked every tick until its record clears on-chain.
@@ -144,12 +142,12 @@ type ReservationStaleDepositWatcher struct {
 
 	// activationBlock is the network's reservation activation block
 	// (see tbtc.ReservationsActivationBlock): the first reveal scan
-	// starts here instead of a fixed lookback window, so a process
-	// restart after activation picks up every reveal that has appeared
-	// since the feature went live. math.MaxUint64 is the sentinel
-	// for a network without an entry (e.g. ethereum.Unknown): the
-	// watcher skips the startup scan entirely - reservations are
-	// inactive - and the cursor jumps to the chain head.
+	// starts here and walks to the tip in chunks (see
+	// reservationScanRange), so a process restart picks up every
+	// reveal since the feature went live. math.MaxUint64 is the
+	// sentinel for a network without an entry (e.g. ethereum.Unknown):
+	// reservations are inactive there, the first scan is skipped and
+	// the cursor moves to the confirmed tip.
 	activationBlock uint64
 }
 
