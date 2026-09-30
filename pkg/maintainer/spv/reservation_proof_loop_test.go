@@ -587,7 +587,7 @@ func TestProveReservationTransaction(t *testing.T) {
 		spvChain, btcChain := newFixture(20)
 
 		submitted := false
-		err := proveReservationTransaction(
+		outcome, err := proveReservationTransaction(
 			[]*bitcoin.Transaction{transaction},
 			alwaysMatchReservationTransaction,
 			btcChain,
@@ -621,13 +621,16 @@ func TestProveReservationTransaction(t *testing.T) {
 		if !submitted {
 			t.Error("expected submit to be called")
 		}
+		if outcome != reservationProofSubmitted {
+			t.Errorf("expected outcome %v, got %v", reservationProofSubmitted, outcome)
+		}
 	})
 
 	t.Run("skips without submitting when confirmations are insufficient", func(t *testing.T) {
 		spvChain, btcChain := newFixture(2)
 
 		submitted := false
-		err := proveReservationTransaction(
+		outcome, err := proveReservationTransaction(
 			[]*bitcoin.Transaction{transaction},
 			alwaysMatchReservationTransaction,
 			btcChain,
@@ -647,12 +650,15 @@ func TestProveReservationTransaction(t *testing.T) {
 		if submitted {
 			t.Error("expected submit not to be called for insufficient confirmations")
 		}
+		if outcome != reservationProofAwaitingConfirmations {
+			t.Errorf("expected outcome %v, got %v", reservationProofAwaitingConfirmations, outcome)
+		}
 	})
 
 	t.Run("propagates submit errors", func(t *testing.T) {
 		spvChain, btcChain := newFixture(20)
 
-		err := proveReservationTransaction(
+		outcome, err := proveReservationTransaction(
 			[]*bitcoin.Transaction{transaction},
 			alwaysMatchReservationTransaction,
 			btcChain,
@@ -667,6 +673,9 @@ func TestProveReservationTransaction(t *testing.T) {
 		)
 		if err == nil {
 			t.Fatal("expected submit error to propagate")
+		}
+		if outcome != reservationProofSubmitted {
+			t.Errorf("a failed submission is still an attempt: expected outcome %v, got %v", reservationProofSubmitted, outcome)
 		}
 	})
 
@@ -689,7 +698,7 @@ func TestProveReservationTransaction(t *testing.T) {
 		}
 
 		submitted := false
-		err := proveReservationTransaction(
+		outcome, err := proveReservationTransaction(
 			[]*bitcoin.Transaction{nonMatching, matching},
 			isMatch,
 			btcChain,
@@ -713,6 +722,9 @@ func TestProveReservationTransaction(t *testing.T) {
 		}
 		if submitted {
 			t.Error("expected submit not to be called for insufficient confirmations")
+		}
+		if outcome != reservationProofAwaitingConfirmations {
+			t.Errorf("expected outcome %v, got %v", reservationProofAwaitingConfirmations, outcome)
 		}
 	})
 }
@@ -778,7 +790,7 @@ func TestProveReservationTransaction_RecordsMetrics(t *testing.T) {
 			}
 
 			submitted := false
-			if err := proveReservationTransaction(
+			if _, err := proveReservationTransaction(
 				[]*bitcoin.Transaction{transaction},
 				alwaysMatchReservationTransaction,
 				btcChain,
@@ -1293,7 +1305,7 @@ func TestProveReservationTransaction_SelectsConfirmedRBFCandidate(t *testing.T) 
 
 	var submittedHash bitcoin.Hash
 	submissions := 0
-	err := proveReservationTransaction(
+	_, err := proveReservationTransaction(
 		[]*bitcoin.Transaction{unconfirmedReplaced, confirmedReplacement},
 		alwaysMatchReservationTransaction,
 		btcChain,
@@ -1757,6 +1769,7 @@ func newTimedOutReanchorFixture(
 		},
 	)
 	spvChain.setReservation(reservationKey, &tbtc.Reservation{
+		State:      tbtc.ReservationStateActive,
 		AnchorUtxo: anchorUtxo,
 	})
 
@@ -2124,6 +2137,7 @@ func TestProveReservationReanchorActions_TimedOutSourceAnchor(t *testing.T) {
 		fixture.spvChain.setReservation(
 			fixture.reservationKey,
 			&tbtc.Reservation{
+				State: tbtc.ReservationStateActive,
 				AnchorUtxo: &bitcoin.UnspentTransactionOutput{
 					Outpoint: &bitcoin.TransactionOutpoint{
 						TransactionHash: replacementAnchorTx.Hash(),
@@ -2590,6 +2604,306 @@ func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
 		}
 		if _, ok := state.pendingAcceptanceEvents[lateKey]; !ok {
 			t.Error("expected the event below the old tip to be found by the next pass")
+		}
+	})
+}
+
+// TestProveReservationAcceptanceActions_TimedOutEvictedOnceReservationExists
+// verifies that a TimedOut acceptance generation still inside its late
+// window is dropped once the reservation exists: the Bridge rejects every
+// acceptance proof after one generation settled ("Reservation already
+// exists"), so proving it again would only burn proof-assembly work.
+func TestProveReservationAcceptanceActions_TimedOutEvictedOnceReservationExists(t *testing.T) {
+	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
+	fixture.state.nowFn = func() uint32 { return 1050 }
+	fixture.spvChain.setReservation(fixture.reservationKey, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	if err := proveReservationAcceptanceActions(
+		fixture.state,
+		fixture.config,
+		fixture.spvChain,
+		fixture.spvChain,
+		fixture.btcChain,
+		newProofInfoCache(),
+		nil,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fixture.submissions != 0 {
+		t.Errorf("expected no submission, got %d", fixture.submissions)
+	}
+	key := reservationEventKey(fixture.reservationKey, fixture.requestNonce)
+	if _, tracked := fixture.state.pendingAcceptanceEvents[key]; tracked {
+		t.Error("expected the generation to be evicted once the reservation exists")
+	}
+}
+
+// TestProveReservationActions_OneSubmissionPerReservation verifies that
+// when a Pending generation and a TimedOut generation of the same
+// reservation both match the same Bitcoin transaction, a pass submits one
+// proof only - for the Pending generation - instead of broadcasting a
+// second, reverting transaction.
+func TestProveReservationActions_OneSubmissionPerReservation(t *testing.T) {
+	t.Run("acceptance", func(t *testing.T) {
+		fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
+		fixture.state.nowFn = func() uint32 { return 1050 }
+
+		const pendingNonce = 2
+		fixture.spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      fixture.reservationKey,
+			RequestNonce:        pendingNonce,
+			WalletPublicKeyHash: fixture.walletPKH,
+			DepositAmount:       150000,
+			BlockNumber:         600,
+		})
+		fixture.spvChain.setReservationAction(
+			fixture.reservationKey,
+			pendingNonce,
+			&tbtc.ReservationAction{
+				State:                     tbtc.ReservationActionStatePending,
+				ActionType:                tbtc.ReservationActionTypeAcceptance,
+				TargetWalletPublicKeyHash: fixture.walletPKH,
+				TimeoutAt:                 5000,
+				MinAmount:                 1000,
+			},
+		)
+
+		var submittedNonces []uint64
+		fixture.spvChain.submitReservationAcceptanceProofHook = func(
+			_ *tbtc.BitcoinTxInfo,
+			_ *tbtc.BitcoinTxProof,
+			_ *big.Int,
+			requestNonce uint64,
+		) error {
+			submittedNonces = append(submittedNonces, requestNonce)
+			return nil
+		}
+
+		if err := proveReservationAcceptanceActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(submittedNonces) != 1 || submittedNonces[0] != pendingNonce {
+			t.Errorf("expected one submission for nonce %d, got %v", pendingNonce, submittedNonces)
+		}
+	})
+
+	t.Run("re-anchor", func(t *testing.T) {
+		fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+
+		pendingNonce := fixture.requestNonce + 1
+		fixture.spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+			ReservationKey:            fixture.reservationKey,
+			RequestNonce:              pendingNonce,
+			SourceWalletPublicKeyHash: fixture.sourceWalletPKH,
+			TargetWalletPublicKeyHash: fixture.sourceWalletPKH,
+			TxMaxFee:                  20000,
+			BlockNumber:               600,
+		})
+		fixture.spvChain.setReservationAction(
+			fixture.reservationKey,
+			pendingNonce,
+			&tbtc.ReservationAction{
+				State:                     tbtc.ReservationActionStatePending,
+				ActionType:                tbtc.ReservationActionTypeReanchor,
+				TargetWalletPublicKeyHash: fixture.sourceWalletPKH,
+				TimeoutAt:                 5000,
+			},
+		)
+
+		var submittedNonces []uint64
+		fixture.spvChain.submitReservationReanchorProofHook = func(
+			_ *tbtc.BitcoinTxInfo,
+			_ *tbtc.BitcoinTxProof,
+			_ *big.Int,
+			requestNonce uint64,
+		) error {
+			submittedNonces = append(submittedNonces, requestNonce)
+			return nil
+		}
+
+		if err := proveReservationReanchorActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(submittedNonces) != 1 || submittedNonces[0] != pendingNonce {
+			t.Errorf("expected one submission for nonce %d, got %v", pendingNonce, submittedNonces)
+		}
+	})
+}
+
+// TestProveReservationReanchorActions_TimedOutReservationState verifies
+// that a TimedOut re-anchor generation is dropped once its reservation can
+// no longer settle a late proof (Closed or Unknown), while a Stranded
+// reservation - which the Bridge still lets a late proof settle - keeps
+// the generation and gets it proved.
+func TestProveReservationReanchorActions_TimedOutReservationState(t *testing.T) {
+	tests := map[string]struct {
+		state           tbtc.ReservationState
+		expectTracked   bool
+		expectSubmitted int
+	}{
+		"closed":   {tbtc.ReservationStateClosed, false, 0},
+		"unknown":  {tbtc.ReservationStateUnknown, false, 0},
+		"stranded": {tbtc.ReservationStateStranded, true, 1},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+			reservation, err := fixture.spvChain.GetReservation(fixture.reservationKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated := *reservation
+			updated.State = test.state
+			fixture.spvChain.setReservation(fixture.reservationKey, &updated)
+
+			if err := proveReservationReanchorActions(
+				fixture.state,
+				fixture.config,
+				fixture.spvChain,
+				fixture.spvChain,
+				fixture.btcChain,
+				newProofInfoCache(),
+				nil,
+			); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if fixture.submissions != test.expectSubmitted {
+				t.Errorf("expected %d submissions, got %d", test.expectSubmitted, fixture.submissions)
+			}
+			key := reservationEventKey(fixture.reservationKey, fixture.requestNonce)
+			if _, tracked := fixture.state.pendingReanchorEvents[key]; tracked != test.expectTracked {
+				t.Errorf("expected tracked=%v, got %v", test.expectTracked, tracked)
+			}
+		})
+	}
+}
+
+// TestProveReservationReanchorActions_ReadsReservationOncePerGeneration
+// verifies that proving a re-anchor generation reads its reservation once
+// per pass: the record read to decide whether the generation can settle
+// is the one used to find its anchor.
+func TestProveReservationReanchorActions_ReadsReservationOncePerGeneration(t *testing.T) {
+	fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+
+	if err := proveReservationReanchorActions(
+		fixture.state,
+		fixture.config,
+		fixture.spvChain,
+		fixture.spvChain,
+		fixture.btcChain,
+		newProofInfoCache(),
+		nil,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fixture.submissions != 1 {
+		t.Fatalf("expected the generation to be proved, got %d submissions", fixture.submissions)
+	}
+	if calls := fixture.spvChain.getReservationCallCount(); calls != 1 {
+		t.Errorf("expected one GetReservation read, got %d", calls)
+	}
+}
+
+// TestProveReservationReanchorActions_TimedOutBackoff verifies that a
+// TimedOut re-anchor generation with no matching transaction is not
+// re-read every pass: after each fruitless check it is skipped for a
+// doubling number of passes, a change in the source wallet's transaction
+// list ends the delay early, and a Pending generation is never delayed.
+func TestProveReservationReanchorActions_TimedOutBackoff(t *testing.T) {
+	newFixture := func(t *testing.T) *timedOutReanchorFixture {
+		fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+		// The wallet's re-anchor transaction pays the source wallet, so
+		// pointing the event at another target wallet leaves it with no
+		// matching transaction.
+		for _, event := range fixture.spvChain.reservationReanchorRequestedEvents {
+			event.TargetWalletPublicKeyHash = [20]byte{0xEE}
+		}
+		return fixture
+	}
+
+	prove := func(t *testing.T, fixture *timedOutReanchorFixture) {
+		if err := proveReservationReanchorActions(
+			fixture.state,
+			fixture.config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	t.Run("timed-out generation backs off", func(t *testing.T) {
+		fixture := newFixture(t)
+
+		// Pass 1 checks; pass 2 is skipped; pass 3 checks and doubles
+		// the delay, so passes 4 and 5 are skipped and pass 6 checks.
+		expectedReads := []int{1, 1, 2, 2, 2, 3}
+		for pass, expected := range expectedReads {
+			prove(t, fixture)
+			if calls := fixture.spvChain.getReservationCallCount(); calls != expected {
+				t.Fatalf("pass %d: expected %d reservation reads, got %d", pass+1, expected, calls)
+			}
+		}
+
+		key := reservationEventKey(fixture.reservationKey, fixture.requestNonce)
+		if _, tracked := fixture.state.pendingReanchorEvents[key]; !tracked {
+			t.Fatal("expected the backed-off generation to stay tracked")
+		}
+
+		// A new transaction in the wallet's cached history ends the
+		// delay: the next pass checks the generation again.
+		cached := fixture.state.walletTransactionCache[fixture.sourceWalletPKH]
+		cached.txHashes = append(append([]bitcoin.Hash{}, cached.txHashes...), bitcoin.Hash{0x01})
+		prove(t, fixture)
+		if calls := fixture.spvChain.getReservationCallCount(); calls != 4 {
+			t.Fatalf("expected the changed wallet history to end the delay, got %d reads", calls)
+		}
+	})
+
+	t.Run("pending generation is checked every pass", func(t *testing.T) {
+		fixture := newFixture(t)
+		fixture.spvChain.setReservationAction(
+			fixture.reservationKey,
+			fixture.requestNonce,
+			&tbtc.ReservationAction{
+				State:      tbtc.ReservationActionStatePending,
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				TimeoutAt:  5000,
+			},
+		)
+
+		for pass := 1; pass <= 3; pass++ {
+			prove(t, fixture)
+			if calls := fixture.spvChain.getReservationCallCount(); calls != pass {
+				t.Fatalf("pass %d: expected %d reservation reads, got %d", pass, pass, calls)
+			}
 		}
 	})
 }
