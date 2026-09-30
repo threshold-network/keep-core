@@ -1190,14 +1190,13 @@ func TestReservationAcceptanceTask_RequestLookBackWindow(t *testing.T) {
 	}
 }
 
-// TestReservationAcceptanceTask_RevealOlderThanFormerLookBack is a
-// regression test for acceptance requests made long after the reveal. A
-// depositor may request acceptance up to one term after revealing, so a
-// deposit revealed 300000 blocks (about 41 days) ago -- beyond the
-// 216000-block window the task used to scan reveals in -- must still be
-// found and proposed. The reveal sits exactly on the oldest block of a
-// 10000-block lookup chunk to catch off-by-one errors at chunk edges.
-func TestReservationAcceptanceTask_RevealOlderThanFormerLookBack(t *testing.T) {
+// TestReservationAcceptanceTask_RevealLongBeforeRequest is a regression
+// test for acceptance requests made long after the reveal. A depositor may
+// request acceptance up to one term after revealing, so a deposit revealed
+// 300000 blocks (about 41 days) before its request must be found and
+// proposed. The reveal sits exactly on the oldest block of a 10000-block
+// lookup chunk to catch off-by-one errors at chunk edges.
+func TestReservationAcceptanceTask_RevealLongBeforeRequest(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
 	currentBlock := uint64(1000000)
 
@@ -2039,7 +2038,7 @@ func TestLocalChain_ValidateReservationReanchorProposal_RejectsInsideTimeoutMarg
 // regression test for budget starvation: the per-run candidate budget
 // (50) must only be spent on generations the on-chain check confirms are
 // a Pending Acceptance targeting this wallet. Here 51 requested deposits
-// whose generations have since timed out sort ahead of one real pending
+// whose generations have already settled sort ahead of one real pending
 // acceptance; if they consumed the budget, the real request would never
 // be reached and would time out.
 func TestReservationAcceptanceTask_BudgetCountsOnlyPendingAcceptances(t *testing.T) {
@@ -2048,15 +2047,14 @@ func TestReservationAcceptanceTask_BudgetCountsOnlyPendingAcceptances(t *testing
 
 	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
 
-	// Candidates are tried in timeout order, so the timed-out generations
-	// get the earlier timeouts. Their records say TimedOut, but their
-	// request events still carry a timeout outside the margin, as a
-	// generation reported timed out early by a notifier would.
+	// Candidates are tried in timeout order, so the settled generations
+	// get the earlier timeouts. They were accepted before their timeout,
+	// so their request events are still inside the scan window.
 	for i := 0; i < 51; i++ {
 		opts := defaultPendingDepositOptions(currentBlock)
 		opts.seed = byte(0x40 + i)
 		opts.timeoutAt = uint32(time.Now().Add(20 * time.Hour).Unix())
-		opts.actionState = tbtc.ReservationActionStateTimedOut
+		opts.actionState = tbtc.ReservationActionStateSettled
 		addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 	}
 	realOpts := defaultPendingDepositOptions(currentBlock)
