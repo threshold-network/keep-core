@@ -67,104 +67,6 @@ func (c *reservationProofBitcoinChain) GetTxHashesForPublicKeyHash(
 	return hashes, nil
 }
 
-// TestReservationProofNextScanRange covers the incremental scan-range
-// arithmetic for the proof loop's activation-block-aware catch-up scan.
-// The first pass (lastScannedBlock == 0) now starts at the network's
-// reservation activation block (see tbtc.ReservationsActivationBlock)
-// instead of a fixed 30-day lookback. An activation block of
-// math.MaxUint64 (unknown / inactive network) makes the first scan a
-// no-op: the cursor jumps to the chain tip and no events are fetched.
-// Steady-state passes (lastScannedBlock > 0) start exactly one block
-// after the previous cursor and are unchanged.
-func TestReservationProofNextScanRange(t *testing.T) {
-	tests := map[string]struct {
-		activationBlock  uint64
-		currentBlock     uint64
-		lastScannedBlock uint64
-		expectedStart    uint64
-		expectedSkipScan bool
-	}{
-		// Developer network (activation at block 0) - first scan from 0.
-		"first pass, Developer network, current block below lookback": {
-			activationBlock:  0,
-			currentBlock:     1000,
-			lastScannedBlock: 0,
-			expectedStart:    0,
-			expectedSkipScan: false,
-		},
-		"first pass, Developer network, current block beyond lookback": {
-			activationBlock:  0,
-			currentBlock:     reservationDefaultLookBackBlocks + 500,
-			lastScannedBlock: 0,
-			expectedStart:    0,
-			expectedSkipScan: false,
-		},
-		// Unknown network (activation = MaxUint64) - first scan skipped.
-		"first pass, unknown network": {
-			activationBlock:  math.MaxUint64,
-			currentBlock:     300_000,
-			lastScannedBlock: 0,
-			expectedStart:    300_000 + 1,
-			expectedSkipScan: true,
-		},
-		// Public network with activation ahead of current tip.
-		"first pass, activation in future": {
-			activationBlock:  500_000,
-			currentBlock:     300_000,
-			lastScannedBlock: 0,
-			expectedStart:    500_000,
-			expectedSkipScan: false,
-		},
-		// Steady-state passes are unchanged.
-		"later pass starts one block after the cursor": {
-			activationBlock:  0,
-			currentBlock:     reservationDefaultLookBackBlocks * 3,
-			lastScannedBlock: reservationDefaultLookBackBlocks * 2,
-			expectedStart:    reservationDefaultLookBackBlocks*2 + 1,
-			expectedSkipScan: false,
-		},
-	}
-
-	for testName, test := range tests {
-		t.Run(testName, func(t *testing.T) {
-			spvChain := newLocalChain()
-			blockCounter := newMockBlockCounter()
-			blockCounter.SetCurrentBlock(test.currentBlock)
-			spvChain.setBlockCounter(blockCounter)
-
-			startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
-				spvChain,
-				test.lastScannedBlock,
-				test.activationBlock,
-			)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if skipScan != test.expectedSkipScan {
-				t.Errorf(
-					"unexpected skipScan\nexpected: %v\nactual:   %v",
-					test.expectedSkipScan,
-					skipScan,
-				)
-			}
-			if !test.expectedSkipScan && startBlock != test.expectedStart {
-				t.Errorf(
-					"unexpected start block\nexpected: %v\nactual:   %v",
-					test.expectedStart,
-					startBlock,
-				)
-			}
-			if currentBlock != test.currentBlock {
-				t.Errorf(
-					"unexpected current block\nexpected: %v\nactual:   %v",
-					test.currentBlock,
-					currentBlock,
-				)
-			}
-		})
-	}
-}
-
 // TestFindReservationAcceptanceTransaction verifies the acceptance
 // transaction matcher: it must find the 1-input-1-output transaction whose
 // sole input spends the deposit UTXO identified by event.ReservationKey (via
@@ -1290,8 +1192,8 @@ func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.
 		}
 	}
 
-	if scanState.acceptanceLastScannedBlock != 1000 {
-		t.Fatalf("expected cursor to advance to current block 1000, got %d", scanState.acceptanceLastScannedBlock)
+	if scanState.acceptanceLastScannedBlock != 1000-reservationEventScanConfirmationBlocks {
+		t.Fatalf("expected cursor to advance to confirmed tip %d, got %d", 1000-reservationEventScanConfirmationBlocks, scanState.acceptanceLastScannedBlock)
 	}
 }
 
@@ -1343,8 +1245,8 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 		}
 	}
 
-	if scanState.reanchorLastScannedBlock != 1000 {
-		t.Fatalf("expected cursor to advance to current block 1000, got %d", scanState.reanchorLastScannedBlock)
+	if scanState.reanchorLastScannedBlock != 1000-reservationEventScanConfirmationBlocks {
+		t.Fatalf("expected cursor to advance to confirmed tip %d, got %d", 1000-reservationEventScanConfirmationBlocks, scanState.reanchorLastScannedBlock)
 	}
 }
 
@@ -2531,10 +2433,163 @@ func TestRunReservationProofLoop_ResumesScanAfterRestart(t *testing.T) {
 			chain.reanchorScanCalls,
 		)
 	}
-	if state.acceptanceLastScannedBlock != 1000 {
-		t.Errorf("expected the acceptance cursor to survive the restart at 1000, got %d", state.acceptanceLastScannedBlock)
+	if state.acceptanceLastScannedBlock != 1000-reservationEventScanConfirmationBlocks {
+		t.Errorf("expected the acceptance cursor to survive the restart at %d, got %d", 1000-reservationEventScanConfirmationBlocks, state.acceptanceLastScannedBlock)
 	}
-	if state.reanchorLastScannedBlock != 1000 {
-		t.Errorf("expected the re-anchor cursor to advance to 1000 on the restart, got %d", state.reanchorLastScannedBlock)
+	if state.reanchorLastScannedBlock != 1000-reservationEventScanConfirmationBlocks {
+		t.Errorf("expected the re-anchor cursor to advance to %d on the restart, got %d", 1000-reservationEventScanConfirmationBlocks, state.reanchorLastScannedBlock)
 	}
+}
+
+// reservationChunkFailingChain wraps localChain and fails the acceptance
+// event fetch for any chunk starting at failChunkStart, so a test can
+// drive a scan that breaks part-way through the activation-to-tip walk.
+type reservationChunkFailingChain struct {
+	*localChain
+
+	failChunkStart *uint64
+}
+
+func (c *reservationChunkFailingChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	if c.failChunkStart != nil && filter.StartBlock == *c.failChunkStart {
+		return nil, errors.New("simulated provider failure")
+	}
+	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+// TestProveReservationAcceptanceActions_ChunkedScan verifies the proof
+// loop's event scan across chunk boundaries: every chunk of the
+// activation-to-tip walk is scanned, a failing chunk keeps the progress of
+// the chunks before it (the cursor stops at the last good chunk and the
+// next pass resumes after it), and the cursor stays
+// reservationEventScanConfirmationBlocks behind the tip, so an event that
+// only shows up later at a height the first pass could have covered - as
+// after a short reorg - is still found by the next pass.
+func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
+	const currentBlock = 2*reservationEventScanChunkSize + 500
+	confirmedTip := uint64(currentBlock) - reservationEventScanConfirmationBlocks
+
+	newFixture := func() (*localChain, *reservationChunkFailingChain, *reservationProofScanState, Config) {
+		inner := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock)
+		inner.setBlockCounter(blockCounter)
+		return inner,
+			&reservationChunkFailingChain{localChain: inner},
+			newReservationProofScanState(),
+			Config{
+				TransactionLimit: 100,
+				MaxProofHeaders:  DefaultMaxProofHeaders,
+				EthereumNetwork:  ethereum.Developer,
+			}
+	}
+
+	// addEvent tracks a Pending acceptance generation requested at
+	// blockNumber; its wallet has no transactions, so nothing is proved
+	// and the generation simply stays tracked.
+	addEvent := func(inner *localChain, key int64, blockNumber uint64) string {
+		reservationKey := big.NewInt(key)
+		inner.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      reservationKey,
+			RequestNonce:        1,
+			WalletPublicKeyHash: [20]byte{byte(key)},
+			BlockNumber:         blockNumber,
+		})
+		inner.setReservationAction(reservationKey, 1, &tbtc.ReservationAction{
+			State:      tbtc.ReservationActionStatePending,
+			ActionType: tbtc.ReservationActionTypeAcceptance,
+		})
+		return reservationEventKey(reservationKey, 1)
+	}
+
+	prove := func(chain *reservationChunkFailingChain, state *reservationProofScanState, config Config) error {
+		return proveReservationAcceptanceActions(
+			state,
+			config,
+			chain,
+			chain,
+			newReservationProofBitcoinChain(),
+			newProofInfoCache(),
+			nil,
+		)
+	}
+
+	t.Run("every chunk is scanned", func(t *testing.T) {
+		inner, chain, state, config := newFixture()
+		firstChunkKey := addEvent(inner, 1, 100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+
+		if err := prove(chain, state, config); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, key := range []string{firstChunkKey, secondChunkKey} {
+			if _, ok := state.pendingAcceptanceEvents[key]; !ok {
+				t.Errorf("expected event [%s] to be tracked", key)
+			}
+		}
+		if state.acceptanceLastScannedBlock != confirmedTip {
+			t.Errorf("expected the cursor at %d, got %d", confirmedTip, state.acceptanceLastScannedBlock)
+		}
+	})
+
+	t.Run("a failing chunk keeps earlier progress", func(t *testing.T) {
+		inner, chain, state, config := newFixture()
+		firstChunkKey := addEvent(inner, 1, 100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+
+		failStart := reservationEventScanChunkSize
+		chain.failChunkStart = &failStart
+		if err := prove(chain, state, config); err == nil {
+			t.Fatal("expected the failing chunk to be reported")
+		}
+		if _, ok := state.pendingAcceptanceEvents[firstChunkKey]; !ok {
+			t.Error("expected the first chunk's event to be tracked despite the later failure")
+		}
+		if _, ok := state.pendingAcceptanceEvents[secondChunkKey]; ok {
+			t.Error("expected the failed chunk's event not to be tracked yet")
+		}
+		if state.acceptanceLastScannedBlock != reservationEventScanChunkSize-1 {
+			t.Errorf(
+				"expected the cursor at the end of the first chunk %d, got %d",
+				reservationEventScanChunkSize-1,
+				state.acceptanceLastScannedBlock,
+			)
+		}
+
+		chain.failChunkStart = nil
+		if err := prove(chain, state, config); err != nil {
+			t.Fatalf("unexpected error on the resumed pass: %v", err)
+		}
+		if _, ok := state.pendingAcceptanceEvents[secondChunkKey]; !ok {
+			t.Error("expected the resumed pass to find the second chunk's event")
+		}
+		if state.acceptanceLastScannedBlock != confirmedTip {
+			t.Errorf("expected the cursor at %d, got %d", confirmedTip, state.acceptanceLastScannedBlock)
+		}
+	})
+
+	t.Run("the cursor trails the tip", func(t *testing.T) {
+		inner, chain, state, config := newFixture()
+
+		if err := prove(chain, state, config); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// An event at a height the first pass could have reached if it
+		// had scanned to the tip, first visible only now.
+		lateKey := addEvent(inner, 3, uint64(currentBlock)-reservationEventScanConfirmationBlocks/2)
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock + reservationEventScanConfirmationBlocks)
+		inner.setBlockCounter(blockCounter)
+
+		if err := prove(chain, state, config); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := state.pendingAcceptanceEvents[lateKey]; !ok {
+			t.Error("expected the event below the old tip to be found by the next pass")
+		}
+	})
 }

@@ -3,7 +3,6 @@ package spv
 import (
 	"context"
 	"fmt"
-	"math"
 	"math/big"
 	"sort"
 	"time"
@@ -139,14 +138,13 @@ type ReservationActionTimeoutWatcher struct {
 	operatorAddress common.Address
 
 	// activationBlock is the network's reservation activation block
-	// (tbtc.ReservationsActivationBlock): the first event scan starts
-	// from max(activationBlock, currentBlock-lookback), so the watcher
-	// picks up every pending action requested since the feature went
-	// live without scanning genesis on a long-running deployment. math.MaxUint64
-	// is the sentinel for a network without an entry (reservations
-	// inactive) - the first scan still runs, bounded to the lookback
-	// window, since the watcher may have other reasons to exist beyond
-	// reservations.
+	// (tbtc.ReservationsActivationBlock). The first event scan starts
+	// here and walks to the tip in chunks (see reservationScanRange), so
+	// a restart finds every action requested since activation - an
+	// action that timed out but was never notified still holds
+	// capacity, however old it is. math.MaxUint64 marks a network
+	// without an entry: reservations are inactive there, the first scan
+	// is skipped and later scans cover only new blocks.
 	activationBlock uint64
 }
 
@@ -217,52 +215,43 @@ func defaultActionTimeoutNowFn() uint32 {
 	return uint32(time.Now().Unix())
 }
 
-// nextScanRange calculates the start and current block numbers for the
-// next event scan. Item 1 (restart recovery) is scoped to the SPV proof
-// loop and the stale-deposit watcher only; this watcher keeps its
-// original bounded 30-day catch-up window on the first pass
-// (reservationDefaultLookBackBlocks), narrowed to the network's
-// reservation activation block only when that block is both known
-// (tbtc.ReservationsActivationBlock did not return math.MaxUint64) and
-// inside the lookback window already computed - so a network whose
-// activation happened more recently than 30 days ago does not scan
-// further back than activation, but a network with no activation entry
-// (or one older than the lookback window) is unaffected and keeps the
-// original bounded scan. Every later pass starts exactly one block past
-// the previous cursor, unchanged.
-func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
-	lastScannedBlock uint64,
-) (startBlock uint64, currentBlock uint64, err error) {
-	blockCounter, err := ratw.spvChain.BlockCounter()
+// scanActionRequests scans one kind of action-request event from *cursor
+// to the confirmed tip (see reservationScanRange), tracks every requested
+// generation that is not tracked yet and advances *cursor after each
+// chunk. fetch returns the generations requested in one chunk.
+func (ratw *ReservationActionTimeoutWatcher) scanActionRequests(
+	cursor *uint64,
+	fetch func(startBlock, endBlock uint64) ([]*pendingAction, error),
+) error {
+	startBlock, endBlock, scan, err := nextReservationScanRange(
+		ratw.spvChain,
+		*cursor,
+		ratw.activationBlock,
+	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
+		return err
 	}
 
-	currentBlock, err = blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
+	if !scan {
+		*cursor = endBlock
+		return nil
 	}
 
-	if lastScannedBlock != 0 {
-		return lastScannedBlock + 1, currentBlock, nil
-	}
-
-	// First pass: bounded catch-up window. The clamp to the network's
-	// reservation activation block applies only when the activation is
-	// known (not math.MaxUint64) and falls at or below the current tip;
-	// an activation block above the current tip - or an unknown
-	// activation - leaves the bounded lookback range unchanged, so the
-	// scan is ordinary and simply finds nothing while reservations have
-	// not yet activated on this network.
-	start := uint64(0)
-	if currentBlock > reservationDefaultLookBackBlocks {
-		start = currentBlock - reservationDefaultLookBackBlocks
-	}
-	if ratw.activationBlock > start && ratw.activationBlock != math.MaxUint64 &&
-		ratw.activationBlock <= currentBlock {
-		start = ratw.activationBlock
-	}
-	return start, currentBlock, nil
+	return fetchPastEventsInChunks(
+		fetch,
+		startBlock,
+		endBlock,
+		func(actions []*pendingAction, chunkEnd uint64) {
+			for _, action := range actions {
+				key := actionEventKey(action.reservationKey, action.requestNonce)
+				// An already-tracked generation keeps its notifiedAt.
+				if _, tracked := ratw.pendingActions[key]; !tracked {
+					ratw.pendingActions[key] = action
+				}
+			}
+			*cursor = chunkEnd
+		},
+	)
 }
 
 // Run starts the background poll loop. It returns when ctx is done or when
@@ -304,65 +293,55 @@ func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
 func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 	ratw.drainStrandingRechecks()
 
-	// 1. Scan new ReservationAcceptanceRequestedEvents
-	acceptanceStartBlock, acceptanceCurrentBlock, err := ratw.nextScanRange(
-		ratw.acceptanceLastScannedBlock,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get acceptance scan range: [%v]", err)
-	}
-
-	acceptanceEvents, err := ratw.spvChain.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{
-			StartBlock: acceptanceStartBlock,
-			EndBlock:   &acceptanceCurrentBlock,
+	// 1. Scan new acceptance and re-anchor action requests. A scan error
+	// does not skip the timeout checks below: generations found before
+	// the error are already tracked, and the error is returned at the end
+	// of the tick.
+	acceptanceScanErr := ratw.scanActionRequests(
+		&ratw.acceptanceLastScannedBlock,
+		func(startBlock, endBlock uint64) ([]*pendingAction, error) {
+			events, err := ratw.spvChain.PastReservationAcceptanceRequestedEvents(
+				&tbtc.ReservationAcceptanceRequestedEventFilter{
+					StartBlock: startBlock,
+					EndBlock:   &endBlock,
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
+			actions := make([]*pendingAction, len(events))
+			for i, event := range events {
+				actions[i] = &pendingAction{
+					reservationKey: event.ReservationKey,
+					requestNonce:   event.RequestNonce,
+				}
+			}
+			return actions, nil
 		},
 	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get past reservation acceptance requested events: [%v]",
-			err,
-		)
-	}
 
-	for _, event := range acceptanceEvents {
-		key := actionEventKey(event.ReservationKey, event.RequestNonce)
-		ratw.pendingActions[key] = &pendingAction{
-			reservationKey: event.ReservationKey,
-			requestNonce:   event.RequestNonce,
-		}
-	}
-	ratw.acceptanceLastScannedBlock = acceptanceCurrentBlock
-
-	// 2. Scan new ReservationReanchorRequestedEvents
-	reanchorStartBlock, reanchorCurrentBlock, err := ratw.nextScanRange(
-		ratw.reanchorLastScannedBlock,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get reanchor scan range: [%v]", err)
-	}
-
-	reanchorEvents, err := ratw.spvChain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			StartBlock: reanchorStartBlock,
-			EndBlock:   &reanchorCurrentBlock,
+	reanchorScanErr := ratw.scanActionRequests(
+		&ratw.reanchorLastScannedBlock,
+		func(startBlock, endBlock uint64) ([]*pendingAction, error) {
+			events, err := ratw.spvChain.PastReservationReanchorRequestedEvents(
+				&tbtc.ReservationReanchorRequestedEventFilter{
+					StartBlock: startBlock,
+					EndBlock:   &endBlock,
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
+			actions := make([]*pendingAction, len(events))
+			for i, event := range events {
+				actions[i] = &pendingAction{
+					reservationKey: event.ReservationKey,
+					requestNonce:   event.RequestNonce,
+				}
+			}
+			return actions, nil
 		},
 	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get past reservation reanchor requested events: [%v]",
-			err,
-		)
-	}
-
-	for _, event := range reanchorEvents {
-		key := actionEventKey(event.ReservationKey, event.RequestNonce)
-		ratw.pendingActions[key] = &pendingAction{
-			reservationKey: event.ReservationKey,
-			requestNonce:   event.RequestNonce,
-		}
-	}
-	ratw.reanchorLastScannedBlock = reanchorCurrentBlock
 
 	now := ratw.nowFn()
 
@@ -464,6 +443,19 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 				item.notifiedAt = now
 			}
 		}
+	}
+
+	if acceptanceScanErr != nil {
+		return fmt.Errorf(
+			"failed to scan reservation acceptance requests: [%v]",
+			acceptanceScanErr,
+		)
+	}
+	if reanchorScanErr != nil {
+		return fmt.Errorf(
+			"failed to scan reservation re-anchor requests: [%v]",
+			reanchorScanErr,
+		)
 	}
 
 	return nil

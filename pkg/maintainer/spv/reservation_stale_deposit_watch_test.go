@@ -873,7 +873,7 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
 
 	fundingTxHash := bitcoin.Hash{0x05}
 	fundingOutputIndex := uint32(0)
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	if err := inner.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
 		&tbtc.DepositRevealedEvent{
@@ -983,7 +983,7 @@ func TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline(
 
 	fundingTxHash := bitcoin.Hash{0x05}
 	fundingOutputIndex := uint32(1)
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	if err := inner.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
 		&tbtc.DepositRevealedEvent{

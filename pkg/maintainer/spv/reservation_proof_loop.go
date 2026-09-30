@@ -200,47 +200,6 @@ func reservationEventKey(reservationKey *big.Int, requestNonce uint64) string {
 	return fmt.Sprintf("%s:%d", reservationKey.String(), requestNonce)
 }
 
-// reservationProofNextScanRange returns the block range to scan for new
-// pending-action-request events this pass. On the very first pass
-// (lastScannedBlock == 0) the range starts at the network's reservation
-// activation block (see reservationStartupScanStartBlock) so a process
-// restart that happens long after reservations activated still picks up
-// every action generation requested since activation, instead of being
-// bounded by a fixed 30-day lookback. Steady-state passes (lastScannedBlock
-// > 0) scan only the delta since the previous cursor, so no full-history
-// refetch happens on every config.IdleBackoffTime tick.
-//
-// The first pass is a no-op when activationBlock == math.MaxUint64 - the
-// network has no reservations-activation entry and the feature is
-// inactive for it - in which case startBlock is returned as 0 with no
-// currentBlock advance so the caller skips the scan and immediately
-// stores currentBlock as the new cursor.
-func reservationProofNextScanRange(
-	spvChain Chain,
-	lastScannedBlock uint64,
-	activationBlock uint64,
-) (startBlock uint64, currentBlock uint64, skipScan bool, err error) {
-	blockCounter, err := spvChain.BlockCounter()
-	if err != nil {
-		return 0, 0, false, fmt.Errorf("failed to get block counter: [%v]", err)
-	}
-
-	currentBlock, err = blockCounter.CurrentBlock()
-	if err != nil {
-		return 0, 0, false, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	if lastScannedBlock == 0 {
-		start, active := reservationStartupScanStartBlock(activationBlock)
-		if !active {
-			return 0, currentBlock, true, nil
-		}
-		return start, currentBlock, false, nil
-	}
-
-	return lastScannedBlock + 1, currentBlock, false, nil
-}
-
 // maintainReservationProofs runs the SPV proof submission loop for
 // reservation acceptance and re-anchor action generations. It is a
 // dedicated loop, separate from spvMaintainer's generic proofTypes-driven
@@ -331,7 +290,10 @@ func runReservationProofLoop(
 		// One cache per pass, shared by the acceptance and re-anchor proof
 		// rounds below; see proofInfoCache in spv.go.
 		cache := newProofInfoCache()
-		if err := proveReservationAcceptanceActions(
+		// The re-anchor round runs even when the acceptance round fails,
+		// so one failing event scan does not hold back the other kind of
+		// proof; the first error is returned once both rounds are done.
+		acceptanceErr := proveReservationAcceptanceActions(
 			state,
 			config,
 			spvChain,
@@ -339,14 +301,9 @@ func runReservationProofLoop(
 			btcChain,
 			cache,
 			metricsRecorder,
-		); err != nil {
-			return fmt.Errorf(
-				"error while proving reservation acceptance actions: [%v]",
-				err,
-			)
-		}
+		)
 
-		if err := proveReservationReanchorActions(
+		reanchorErr := proveReservationReanchorActions(
 			state,
 			config,
 			spvChain,
@@ -354,18 +311,26 @@ func runReservationProofLoop(
 			btcChain,
 			cache,
 			metricsRecorder,
-		); err != nil {
-			return fmt.Errorf(
-				"error while proving reservation re-anchor actions: [%v]",
-				err,
-			)
-		}
+		)
 
 		// Evict cache entries for wallets with no remaining pending
 		// acceptance or re-anchor actions now that both proof-generation
 		// passes for this iteration have updated the pending-event sets;
 		// see evictStaleWalletTransactionCacheEntries.
 		evictStaleWalletTransactionCacheEntries(state)
+
+		if acceptanceErr != nil {
+			return fmt.Errorf(
+				"error while proving reservation acceptance actions: [%v]",
+				acceptanceErr,
+			)
+		}
+		if reanchorErr != nil {
+			return fmt.Errorf(
+				"error while proving reservation re-anchor actions: [%v]",
+				reanchorErr,
+			)
+		}
 
 		select {
 		case <-time.After(config.IdleBackoffTime):
@@ -389,7 +354,7 @@ func proveReservationAcceptanceActions(
 	cache *proofInfoCache,
 	metricsRecorder MetricsRecorder,
 ) error {
-	startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
+	startBlock, endBlock, scan, err := nextReservationScanRange(
 		spvChain,
 		state.acceptanceLastScannedBlock,
 		tbtc.ReservationsActivationBlock(config.EthereumNetwork),
@@ -398,34 +363,38 @@ func proveReservationAcceptanceActions(
 		return err
 	}
 
-	if skipScan {
-		state.acceptanceLastScannedBlock = currentBlock
-		return nil
-	}
-
-	newEvents, err := fetchPastEventsInChunks[*tbtc.ReservationAcceptanceRequestedEvent](
-		func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
-			return spvChain.PastReservationAcceptanceRequestedEvents(
-				&tbtc.ReservationAcceptanceRequestedEventFilter{
-					StartBlock: chunkStart,
-					EndBlock:   &chunkEnd,
-				},
+	// A scan error does not stop this pass: the chunks fetched before it
+	// are already tracked, and every tracked generation is still proved
+	// below. The error is returned once the pass is done.
+	var scanErr error
+	if scan {
+		if err := fetchPastEventsInChunks(
+			func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+				return spvChain.PastReservationAcceptanceRequestedEvents(
+					&tbtc.ReservationAcceptanceRequestedEventFilter{
+						StartBlock: chunkStart,
+						EndBlock:   &chunkEnd,
+					},
+				)
+			},
+			startBlock,
+			endBlock,
+			func(events []*tbtc.ReservationAcceptanceRequestedEvent, chunkEnd uint64) {
+				for _, event := range events {
+					key := reservationEventKey(event.ReservationKey, event.RequestNonce)
+					state.pendingAcceptanceEvents[key] = event
+				}
+				state.acceptanceLastScannedBlock = chunkEnd
+			},
+		); err != nil {
+			scanErr = fmt.Errorf(
+				"failed to get past reservation acceptance requested "+
+					"events: [%v]",
+				err,
 			)
-		},
-		startBlock,
-		currentBlock,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get past reservation acceptance requested "+
-				"events: [%v]",
-			err,
-		)
-	}
-
-	for _, event := range newEvents {
-		key := reservationEventKey(event.ReservationKey, event.RequestNonce)
-		state.pendingAcceptanceEvents[key] = event
+		}
+	} else {
+		state.acceptanceLastScannedBlock = endBlock
 	}
 
 	// Re-check every tracked event's on-chain action state, evict the
@@ -549,9 +518,7 @@ func proveReservationAcceptanceActions(
 		}
 	}
 
-	state.acceptanceLastScannedBlock = currentBlock
-
-	return nil
+	return scanErr
 }
 
 func isMatchingReservationAcceptanceTransaction(
@@ -677,7 +644,7 @@ func proveReservationReanchorActions(
 	cache *proofInfoCache,
 	metricsRecorder MetricsRecorder,
 ) error {
-	startBlock, currentBlock, skipScan, err := reservationProofNextScanRange(
+	startBlock, endBlock, scan, err := nextReservationScanRange(
 		spvChain,
 		state.reanchorLastScannedBlock,
 		tbtc.ReservationsActivationBlock(config.EthereumNetwork),
@@ -686,33 +653,36 @@ func proveReservationReanchorActions(
 		return err
 	}
 
-	if skipScan {
-		state.reanchorLastScannedBlock = currentBlock
-		return nil
-	}
-
-	newEvents, err := fetchPastEventsInChunks[*tbtc.ReservationReanchorRequestedEvent](
-		func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
-			return spvChain.PastReservationReanchorRequestedEvents(
-				&tbtc.ReservationReanchorRequestedEventFilter{
-					StartBlock: chunkStart,
-					EndBlock:   &chunkEnd,
-				},
+	// See proveReservationAcceptanceActions: a scan error is returned
+	// after the already-tracked generations have been proved.
+	var scanErr error
+	if scan {
+		if err := fetchPastEventsInChunks(
+			func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
+				return spvChain.PastReservationReanchorRequestedEvents(
+					&tbtc.ReservationReanchorRequestedEventFilter{
+						StartBlock: chunkStart,
+						EndBlock:   &chunkEnd,
+					},
+				)
+			},
+			startBlock,
+			endBlock,
+			func(events []*tbtc.ReservationReanchorRequestedEvent, chunkEnd uint64) {
+				for _, event := range events {
+					key := reservationEventKey(event.ReservationKey, event.RequestNonce)
+					state.pendingReanchorEvents[key] = event
+				}
+				state.reanchorLastScannedBlock = chunkEnd
+			},
+		); err != nil {
+			scanErr = fmt.Errorf(
+				"failed to get past reservation re-anchor requested events: [%v]",
+				err,
 			)
-		},
-		startBlock,
-		currentBlock,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to get past reservation re-anchor requested events: [%v]",
-			err,
-		)
-	}
-
-	for _, event := range newEvents {
-		key := reservationEventKey(event.ReservationKey, event.RequestNonce)
-		state.pendingReanchorEvents[key] = event
+		}
+	} else {
+		state.reanchorLastScannedBlock = endBlock
 	}
 
 	// Re-check every tracked event's on-chain action state, evict the
@@ -851,9 +821,7 @@ func proveReservationReanchorActions(
 		}
 	}
 
-	state.reanchorLastScannedBlock = currentBlock
-
-	return nil
+	return scanErr
 }
 
 func isMatchingReservationReanchorTransaction(

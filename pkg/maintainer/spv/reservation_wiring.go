@@ -266,46 +266,22 @@ func WireReservationWatchers(
 	// OnWalletClosed subscription only sees events from this point forward.
 	// We scan past wallet registrations bounded by
 	// reservationDefaultLookBackBlocks and check the ones already
-	// Closed/Terminated now. This is an accepted operational
+	// Closed/Terminated now. The window is not tied to the reservation
+	// activation block: a wallet registered before activation can still
+	// custody reservations. This is an accepted operational
 	// limitation, not a gap covered elsewhere: a wallet that closed or
 	// was terminated more than this bound before the process started
 	// has no path to stranding notification (see the warning logged
 	// below when the bound actually truncates the scan window).
 	// Transient per-wallet errors log warnings rather than failing
 	// client startup.
-	strandingStartupStartBlock := uint64(0)
-	if blockCounter, bcErr := spvChain.BlockCounter(); bcErr != nil {
-		reservationWiringLogger.Warnf(
-			"stranding startup scan failed to get block counter; "+
-				"scanning full history: [%v]",
-			bcErr,
-		)
-	} else if currentBlock, cbErr := blockCounter.CurrentBlock(); cbErr != nil {
-		reservationWiringLogger.Warnf(
-			"stranding startup scan failed to get current block; "+
-				"scanning full history: [%v]",
-			cbErr,
-		)
-	} else if currentBlock > reservationDefaultLookBackBlocks {
-		strandingStartupStartBlock = currentBlock - reservationDefaultLookBackBlocks
-		reservationWiringLogger.Warnf(
-			"stranding startup scan is bounded to wallets registered at "+
-				"block [%d] or later; a wallet registered and already "+
-				"closed/terminated before that block will not be caught "+
-				"by this scan, nor by the live OnWalletClosed "+
-				"subscription, which cannot replay an already-emitted "+
-				"close event - this is an accepted operational "+
-				"limitation, not a gap covered elsewhere",
-			strandingStartupStartBlock,
-		)
-	}
-
-	registeredEvents, err := spvChain.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{StartBlock: strandingStartupStartBlock},
-	)
+	registeredEvents, err := scanReservationStrandingStartupRegistrations(spvChain)
 	if err != nil {
 		reservationWiringLogger.Warnf(
-			"stranding startup scan failed to fetch wallet registration events: [%v]",
+			"stranding startup scan failed to fetch wallet registration "+
+				"events; checking the [%d] registrations fetched before "+
+				"the failure: [%v]",
+			len(registeredEvents),
 			err,
 		)
 	}
@@ -321,64 +297,62 @@ func WireReservationWatchers(
 	// event.
 	var unresolvedWallets [][20]byte
 
-	if err == nil {
-		for _, event := range registeredEvents {
-			var wallet *tbtc.WalletChainData
-			var walletErr error
-			for attempt := range 3 {
-				wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
-				if walletErr == nil {
-					break
-				}
-				reservationWiringLogger.Warnf(
-					"stranding startup scan attempt %d/3 failed to fetch wallet [0x%x]: [%v]",
-					attempt+1,
-					event.WalletPublicKeyHash,
-					walletErr,
-				)
+	for _, event := range registeredEvents {
+		var wallet *tbtc.WalletChainData
+		var walletErr error
+		for attempt := range 3 {
+			wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
+			if walletErr == nil {
+				break
 			}
-			if walletErr != nil {
-				reservationWiringLogger.Warnf(
-					"stranding startup scan giving up on wallet [0x%x] after "+
-						"3 fetch attempts; queuing it for a second-chance "+
-						"retry pass once wiring completes instead of "+
-						"assuming it is Live: [%v]",
-					event.WalletPublicKeyHash,
-					walletErr,
-				)
-				unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
-				continue
+			reservationWiringLogger.Warnf(
+				"stranding startup scan attempt %d/3 failed to fetch wallet [0x%x]: [%v]",
+				attempt+1,
+				event.WalletPublicKeyHash,
+				walletErr,
+			)
+		}
+		if walletErr != nil {
+			reservationWiringLogger.Warnf(
+				"stranding startup scan giving up on wallet [0x%x] after "+
+					"3 fetch attempts; queuing it for a second-chance "+
+					"retry pass once wiring completes instead of "+
+					"assuming it is Live: [%v]",
+				event.WalletPublicKeyHash,
+				walletErr,
+			)
+			unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
+			continue
+		}
+		if wallet.State != tbtc.StateClosed &&
+			wallet.State != tbtc.StateTerminated {
+			continue
+		}
+		var checkErr error
+		for attempt := range 3 {
+			checkErr = strandingWatcher.checkReservationStrandingForWallet(
+				event.WalletPublicKeyHash,
+			)
+			if checkErr == nil {
+				break
 			}
-			if wallet.State != tbtc.StateClosed &&
-				wallet.State != tbtc.StateTerminated {
-				continue
-			}
-			var checkErr error
-			for attempt := range 3 {
-				checkErr = strandingWatcher.checkReservationStrandingForWallet(
-					event.WalletPublicKeyHash,
-				)
-				if checkErr == nil {
-					break
-				}
-				reservationWiringLogger.Warnf(
-					"stranding startup scan attempt %d/3 failed to check "+
-						"wallet [0x%x]: [%v]",
-					attempt+1,
-					event.WalletPublicKeyHash,
-					checkErr,
-				)
-			}
-			if checkErr != nil {
-				reservationWiringLogger.Warnf(
-					"stranding startup scan giving up on wallet [0x%x] "+
-						"after 3 check attempts; its stranded reservations, "+
-						"if any, will not be notified by this startup scan: [%v]",
-					event.WalletPublicKeyHash,
-					checkErr,
-				)
-				continue
-			}
+			reservationWiringLogger.Warnf(
+				"stranding startup scan attempt %d/3 failed to check "+
+					"wallet [0x%x]: [%v]",
+				attempt+1,
+				event.WalletPublicKeyHash,
+				checkErr,
+			)
+		}
+		if checkErr != nil {
+			reservationWiringLogger.Warnf(
+				"stranding startup scan giving up on wallet [0x%x] "+
+					"after 3 check attempts; its stranded reservations, "+
+					"if any, will not be notified by this startup scan: [%v]",
+				event.WalletPublicKeyHash,
+				checkErr,
+			)
+			continue
 		}
 	}
 
@@ -386,10 +360,8 @@ func WireReservationWatchers(
 	// and the action-timeout watcher (first action-request scan) share a
 	// single lookup. math.MaxUint64 is the sentinel from
 	// tbtc.ReservationsActivationBlock for networks without an entry
-	// (incl. ethereum.Unknown): the watchers treat it as "reservations
-	// never activate" and either skip the catch-up scan (stale-deposit
-	// watcher) or fall back to the bounded lookback window
-	// (action-timeout watcher).
+	// (incl. ethereum.Unknown): both watchers skip their first catch-up
+	// scan there (see reservationScanRange).
 	activationBlock := tbtc.ReservationsActivationBlock(ethNetwork)
 
 	staleDepositWatcher := NewReservationStaleDepositWatcher(
@@ -628,6 +600,57 @@ func reservationSelfCheckMisconfigured(
 	return !pairedFlagEnabled &&
 		registration.scanOK && staleDeposit.scanOK && actionTimeout.scanOK &&
 		registration.count == 0 && staleDeposit.count == 0 && actionTimeout.count == 0
+}
+
+// scanReservationStrandingStartupRegistrations fetches the wallet
+// registrations of the last reservationDefaultLookBackBlocks blocks for
+// the stranding startup scan, in chunks (see fetchPastEventsInChunks). On
+// a chunk error it returns the registrations fetched before the failing
+// chunk together with the error.
+func scanReservationStrandingStartupRegistrations(
+	spvChain Chain,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	blockCounter, err := spvChain.BlockCounter()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	startBlock := uint64(0)
+	if currentBlock > reservationDefaultLookBackBlocks {
+		startBlock = currentBlock - reservationDefaultLookBackBlocks
+		reservationWiringLogger.Warnf(
+			"stranding startup scan is bounded to wallets registered at "+
+				"block [%d] or later; a wallet registered and already "+
+				"closed/terminated before that block will not be caught "+
+				"by this scan, nor by the live OnWalletClosed "+
+				"subscription, which cannot replay an already-emitted "+
+				"close event - this is an accepted operational "+
+				"limitation, not a gap covered elsewhere",
+			startBlock,
+		)
+	}
+
+	var registeredEvents []*tbtc.NewWalletRegisteredEvent
+	err = fetchPastEventsInChunks(
+		func(chunkStart, chunkEnd uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			return spvChain.PastNewWalletRegisteredEvents(
+				&tbtc.NewWalletRegisteredEventFilter{
+					StartBlock: chunkStart,
+					EndBlock:   &chunkEnd,
+				},
+			)
+		},
+		startBlock,
+		currentBlock,
+		func(events []*tbtc.NewWalletRegisteredEvent, _ uint64) {
+			registeredEvents = append(registeredEvents, events...)
+		},
+	)
+	return registeredEvents, err
 }
 
 // retryReservationStrandingStartupScan gives the startup catch-up scan's

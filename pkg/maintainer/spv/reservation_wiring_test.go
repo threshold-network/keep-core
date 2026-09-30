@@ -550,12 +550,11 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 	})
 	fundingTxHash := bitcoin.Hash{0x02}
 	fundingOutputIndex := uint32(0)
-	// currentBlock (1000) does not exceed staleDepositRevealScanLookBackBlocks,
-	// so pollTick's own startBlock computation stays 0 - mirror that
-	// here rather than subtracting the lookback bound directly (which
-	// would underflow uint64 for a currentBlock this small).
+	// The reveal sits below the confirmed tip (currentBlock 1000 minus
+	// reservationEventScanConfirmationBlocks), inside the first scan's
+	// activation-to-tip range on the Developer network.
 	startBlock := uint64(0)
-	endBlock := uint64(1000)
+	endBlock := uint64(900)
 	if err := spvChain.addPastDepositRevealedEvent(
 		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
 		&tbtc.DepositRevealedEvent{
@@ -685,7 +684,7 @@ func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *test
 		State:               tbtc.ReservationStateActive,
 	})
 
-	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Unknown); err != nil {
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -895,7 +894,7 @@ func TestRunStaleDepositPollTick_SnapshotsRefundDeadlineFromRevealEvent(t *testi
 	})
 
 	startBlock := currentBlock - reservationDefaultLookBackBlocks
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	fundingTxHash := bitcoin.Hash{0x01}
 	fundingOutputIndex := uint32(0)
 
@@ -960,7 +959,7 @@ func TestRunStaleDepositPollTick_EvictsOnClearedWallet(t *testing.T) {
 	})
 
 	startBlock := currentBlock - reservationDefaultLookBackBlocks
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	fundingTxHash := bitcoin.Hash{0x03}
 	fundingOutputIndex := uint32(0)
 
@@ -1014,7 +1013,7 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 	})
 
 	startBlock := currentBlock - reservationDefaultLookBackBlocks
-	endBlock := currentBlock
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
 	fundingTxHash := bitcoin.Hash{0x04}
 	fundingOutputIndex := uint32(0)
 
@@ -1215,4 +1214,46 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	// recordReservationWatcherDeath against the typed-nil recorder;
 	// a crash would take the whole test process down, so surviving to
 	// here (with both signals observed) is the assertion.
+}
+
+// TestScanReservationStrandingStartupRegistrations verifies that the
+// stranding startup scan walks the last reservationDefaultLookBackBlocks
+// blocks in chunks and returns every registration inside that window
+// exactly once, and none before it.
+func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
+	const windowStart = uint64(50_000)
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(windowStart + reservationDefaultLookBackBlocks)
+	spvChain.setBlockCounter(blockCounter)
+
+	blocks := []uint64{
+		windowStart - 1,   // before the window
+		windowStart + 100, // first chunk
+		windowStart + reservationEventScanChunkSize + 100, // second chunk
+	}
+	for i, blockNumber := range blocks {
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			WalletPublicKeyHash: walletPKHAt(byte(i + 1)),
+			BlockNumber:         blockNumber,
+		})
+	}
+
+	events, err := scanReservationStrandingStartupRegistrations(spvChain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expected the 2 registrations inside the window, got %d", len(events))
+	}
+	if events[0].BlockNumber != blocks[1] || events[1].BlockNumber != blocks[2] {
+		t.Errorf(
+			"expected registrations at blocks %d and %d, got %d and %d",
+			blocks[1],
+			blocks[2],
+			events[0].BlockNumber,
+			events[1].BlockNumber,
+		)
+	}
 }
