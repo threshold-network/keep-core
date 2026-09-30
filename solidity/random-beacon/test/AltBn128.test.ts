@@ -1,4 +1,5 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
 import type { TestAltBn128 } from "../typechain"
@@ -16,19 +17,19 @@ describe("AltBn128", () => {
   const fixture = async () => {
     const TestAltBn128 = await ethers.getContractFactory("TestAltBn128")
     testAltBn128 = await TestAltBn128.deploy()
-    await testAltBn128.deployed()
+    await testAltBn128.waitForDeployment()
 
     return testAltBn128
   }
 
   beforeEach("load test fixture", async () => {
-    testAltBn128 = await waffle.loadFixture(fixture)
+    testAltBn128 = await loadFixture(fixture)
   })
 
   describe("g1Unmarshal", async () => {
     it("should not accept less than 64 bytes", async () => {
       await expect(
-        testAltBn128.publicG1Unmarshal(g1.slice(0, -2))
+        testAltBn128.publicG1Unmarshal(g1.slice(0, -2)),
       ).to.be.revertedWith("Invalid G1 bytes length")
     })
 
@@ -39,7 +40,7 @@ describe("AltBn128", () => {
 
     it("should not accept more than 64 bytes", async () => {
       await expect(
-        testAltBn128.publicG1Unmarshal(`${g1}ff`)
+        testAltBn128.publicG1Unmarshal(`${g1}ff`),
       ).to.be.revertedWith("Invalid G1 bytes length")
     })
   })
@@ -47,7 +48,7 @@ describe("AltBn128", () => {
   describe("g2Unmarshal", async () => {
     it("should not accept less than 128 bytes", async () => {
       await expect(
-        testAltBn128.publicG2Unmarshal(g2.slice(0, -2))
+        testAltBn128.publicG2Unmarshal(g2.slice(0, -2)),
       ).to.be.revertedWith("Invalid G2 bytes length")
     })
 
@@ -58,7 +59,7 @@ describe("AltBn128", () => {
 
     it("should not accept more than 128 bytes", async () => {
       await expect(
-        testAltBn128.publicG2Unmarshal(`${g2}ff`)
+        testAltBn128.publicG2Unmarshal(`${g2}ff`),
       ).to.be.revertedWith("Invalid G2 bytes length")
     })
   })
@@ -66,7 +67,7 @@ describe("AltBn128", () => {
   describe("g2Decompress", async () => {
     it("should not accept less than 64 bytes", async () => {
       await expect(
-        testAltBn128.publicG2Decompress(g2Compressed.slice(0, -2))
+        testAltBn128.publicG2Decompress(g2Compressed.slice(0, -2)),
       ).to.be.revertedWith("Invalid G2 compressed bytes length")
     })
 
@@ -77,7 +78,7 @@ describe("AltBn128", () => {
 
     it("should not accept more than 64 bytes", async () => {
       await expect(
-        testAltBn128.publicG2Decompress(`${g2Compressed}ff`)
+        testAltBn128.publicG2Decompress(`${g2Compressed}ff`),
       ).to.be.revertedWith("Invalid G2 compressed bytes length")
     })
   })

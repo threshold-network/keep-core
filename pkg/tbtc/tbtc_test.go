@@ -19,7 +19,10 @@ func TestApplyWalletTxFeePolicy(t *testing.T) {
 		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
 		WalletTxFeeBufferPercent = DefaultWalletTxFeeBufferPercent
 
-		applyWalletTxFeePolicy(Config{})
+		err := applyWalletTxFeePolicy(Config{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		if MinWalletTxSatPerVByteFee != DefaultWalletTxSatPerVByteFloor {
 			t.Errorf(
@@ -43,10 +46,13 @@ func TestApplyWalletTxFeePolicy(t *testing.T) {
 	// in warnIfProposedWalletTxFeeBelowBufferedFloor both read the
 	// same package vars, so a single tuning here propagates to both.
 	t.Run("non-zero config overrides defaults", func(t *testing.T) {
-		applyWalletTxFeePolicy(Config{
+		err := applyWalletTxFeePolicy(Config{
 			WalletTxSatPerVByteFloor: 7,
 			WalletTxFeeBufferPercent: 30,
 		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		if MinWalletTxSatPerVByteFee != 7 {
 			t.Errorf(
@@ -69,9 +75,12 @@ func TestApplyWalletTxFeePolicy(t *testing.T) {
 		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
 		WalletTxFeeBufferPercent = DefaultWalletTxFeeBufferPercent
 
-		applyWalletTxFeePolicy(Config{
+		err := applyWalletTxFeePolicy(Config{
 			WalletTxSatPerVByteFloor: 9,
 		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		if MinWalletTxSatPerVByteFee != 9 {
 			t.Errorf(
@@ -82,6 +91,46 @@ func TestApplyWalletTxFeePolicy(t *testing.T) {
 		if WalletTxFeeBufferPercent != DefaultWalletTxFeeBufferPercent {
 			t.Errorf(
 				"expected default buffer percent [%d], got [%d]",
+				DefaultWalletTxFeeBufferPercent,
+				WalletTxFeeBufferPercent,
+			)
+		}
+	})
+
+	t.Run("negative floor returns error and preserves state", func(t *testing.T) {
+		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
+		WalletTxFeeBufferPercent = DefaultWalletTxFeeBufferPercent
+
+		err := applyWalletTxFeePolicy(Config{
+			WalletTxSatPerVByteFloor: -1,
+		})
+		if err == nil {
+			t.Fatalf("expected error for negative floor, got nil")
+		}
+
+		if MinWalletTxSatPerVByteFee != DefaultWalletTxSatPerVByteFloor {
+			t.Errorf(
+				"expected floor to stay [%d], got [%d]",
+				DefaultWalletTxSatPerVByteFloor,
+				MinWalletTxSatPerVByteFee,
+			)
+		}
+	})
+
+	t.Run("negative buffer percent returns error and preserves state", func(t *testing.T) {
+		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
+		WalletTxFeeBufferPercent = DefaultWalletTxFeeBufferPercent
+
+		err := applyWalletTxFeePolicy(Config{
+			WalletTxFeeBufferPercent: -1,
+		})
+		if err == nil {
+			t.Fatalf("expected error for negative buffer percent, got nil")
+		}
+
+		if WalletTxFeeBufferPercent != DefaultWalletTxFeeBufferPercent {
+			t.Errorf(
+				"expected buffer percent to stay [%d], got [%d]",
 				DefaultWalletTxFeeBufferPercent,
 				WalletTxFeeBufferPercent,
 			)

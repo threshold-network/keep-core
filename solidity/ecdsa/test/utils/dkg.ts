@@ -2,18 +2,23 @@
 
 import { ethers } from "hardhat"
 import { expect } from "chai"
-import { BigNumber } from "ethers"
+
+import requireResult from "../helpers/chain"
 
 import { selectGroup } from "./groups"
 
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { BigNumberish, ContractTransaction, BytesLike } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
+import type {
+  BigNumberish,
+  ContractTransactionResponse,
+  BytesLike,
+} from "ethers"
 import type { SortitionPool, WalletRegistry } from "../../typechain"
 import type { Operator } from "./operators"
 import type {
   DkgResultSubmittedEvent,
-  ResultStruct,
-} from "../../typechain/EcdsaDkg"
+  EcdsaDkg,
+} from "../../typechain/contracts/WalletRegistry"
 
 const { provider } = ethers
 
@@ -34,15 +39,15 @@ export const noMisbehaved: number[] = []
 
 export function calculateDkgSeed(
   relayEntry: BigNumberish,
-  blockNumber: BigNumberish
-): BigNumber {
-  return ethers.BigNumber.from(
-    ethers.utils.keccak256(
-      ethers.utils.solidityPack(
+  blockNumber: BigNumberish,
+): bigint {
+  return BigInt(
+    ethers.keccak256(
+      ethers.solidityPacked(
         ["uint256", "uint256"],
-        [ethers.BigNumber.from(relayEntry), ethers.BigNumber.from(blockNumber)]
-      )
-    )
+        [BigInt(relayEntry), BigInt(blockNumber)],
+      ),
+    ),
   )
 }
 
@@ -52,22 +57,22 @@ export function calculateDkgSeed(
 export async function signAndSubmitCorrectDkgResult(
   walletRegistry: WalletRegistry,
   groupPublicKey: BytesLike,
-  seed: BigNumber,
+  seed: bigint,
   startBlock: number,
   misbehavedIndices = noMisbehaved,
   submitterIndex = 1,
-  numberOfSignatures = 51
+  numberOfSignatures = 51,
 ): Promise<{
   signers: Operator[]
   dkgResult: DkgResult
   dkgResultHash: string
   submitter: SignerWithAddress
-  submitterInitialBalance: BigNumber
-  transaction: ContractTransaction
+  submitterInitialBalance: bigint
+  transaction: ContractTransactionResponse
 }> {
   const sortitionPool = (await ethers.getContractAt(
     "SortitionPool",
-    await walletRegistry.sortitionPool()
+    await walletRegistry.sortitionPool(),
   )) as SortitionPool
 
   const signers = await selectGroup(sortitionPool, seed)
@@ -81,7 +86,7 @@ export async function signAndSubmitCorrectDkgResult(
       startBlock,
       misbehavedIndices,
       submitterIndex,
-      numberOfSignatures
+      numberOfSignatures,
     )),
   }
 }
@@ -99,13 +104,13 @@ export async function signAndSubmitArbitraryDkgResult(
   startBlock: number,
   misbehavedIndices: number[],
   submitterIndex = 1,
-  numberOfSignatures = 51
+  numberOfSignatures = 51,
 ): Promise<{
   dkgResult: DkgResult
   dkgResultHash: string
   submitter: SignerWithAddress
-  submitterInitialBalance: BigNumber
-  transaction: ContractTransaction
+  submitterInitialBalance: bigint
+  transaction: ContractTransactionResponse
 }> {
   const { dkgResult } = await signDkgResult(
     signers,
@@ -113,19 +118,19 @@ export async function signAndSubmitArbitraryDkgResult(
     misbehavedIndices,
     startBlock,
     submitterIndex,
-    numberOfSignatures
+    numberOfSignatures,
   )
 
-  const dkgResultHash = ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(
+  const dkgResultHash = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
       [DKG_RESULT_PARAMS_SIGNATURE],
-      [dkgResult]
-    )
+      [dkgResult],
+    ),
   )
 
   const submitter = signers[submitterIndex - 1].signer
   const submitterInitialBalance = await provider.getBalance(
-    await submitter.getAddress()
+    await submitter.getAddress(),
   )
 
   return {
@@ -147,12 +152,12 @@ export async function signAndSubmitUnrecoverableDkgResult(
   startBlock: number,
   misbehavedIndices: number[],
   submitterIndex = 1,
-  numberOfSignatures = 51
+  numberOfSignatures = 51,
 ): Promise<{
   dkgResult: DkgResult
   dkgResultHash: string
   submitter: SignerWithAddress
-  transaction: ContractTransaction
+  transaction: ContractTransactionResponse
 }> {
   const { dkgResult } = await signDkgResult(
     signers,
@@ -160,21 +165,21 @@ export async function signAndSubmitUnrecoverableDkgResult(
     misbehavedIndices,
     startBlock,
     submitterIndex,
-    numberOfSignatures
+    numberOfSignatures,
   )
 
   // Break the result
   const signatureHexStrLength = 2 * 65
   const unrecoverableSignatures = `0x${"a".repeat(
-    signatureHexStrLength * numberOfSignatures
+    signatureHexStrLength * numberOfSignatures,
   )}`
   dkgResult.signatures = unrecoverableSignatures
 
-  const dkgResultHash = ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(
+  const dkgResultHash = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
       [DKG_RESULT_PARAMS_SIGNATURE],
-      [dkgResult]
-    )
+      [dkgResult],
+    ),
   )
 
   const submitter = signers[submitterIndex - 1].signer
@@ -193,17 +198,17 @@ export async function signDkgResult(
   misbehavedMembersIndices: number[],
   startBlock: number,
   submitterIndex = 1,
-  numberOfSignatures = 51
+  numberOfSignatures = 51,
 ): Promise<{
   dkgResult: DkgResult
   signingMembersIndices: number[]
   signaturesBytes: string
 }> {
-  const resultHash = ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(
+  const resultHash = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
       ["uint256", "bytes", "uint8[]", "uint256"],
-      [hardhatNetworkId, groupPublicKey, misbehavedMembersIndices, startBlock]
-    )
+      [hardhatNetworkId, groupPublicKey, misbehavedMembersIndices, startBlock],
+    ),
   )
 
   const members: number[] = []
@@ -223,13 +228,13 @@ export async function signDkgResult(
     signingMembersIndices.push(signerIndex)
 
     const signature = await ethersSigner.signMessage(
-      ethers.utils.arrayify(resultHash)
+      ethers.getBytes(resultHash),
     )
 
     signatures.push(signature)
   }
 
-  const signaturesBytes: string = ethers.utils.hexConcat(signatures)
+  const signaturesBytes: string = ethers.concat(signatures)
 
   const dkgResult: DkgResult = {
     submitterMemberIndex: submitterIndex,
@@ -247,9 +252,9 @@ export async function signDkgResult(
 export async function submitDkgResult(
   walletRegistry: WalletRegistry,
   dkgResult: DkgResult,
-  submitter: SignerWithAddress
+  submitter: SignerWithAddress,
 ): Promise<{
-  transaction: ContractTransaction
+  transaction: ContractTransactionResponse
 }> {
   const transaction = await walletRegistry
     .connect(submitter)
@@ -261,7 +266,7 @@ export async function submitDkgResult(
 // Creates a members hash that actively participated in dkg
 export function hashDKGMembers(
   members: number[],
-  misbehavedMembersIndices?: number[]
+  misbehavedMembersIndices?: number[],
 ): string {
   if (misbehavedMembersIndices && misbehavedMembersIndices.length > 0) {
     const activeDkgMembers = [...members]
@@ -271,86 +276,90 @@ export function hashDKGMembers(
       }
     }
 
-    return ethers.utils.keccak256(
-      ethers.utils.defaultAbiCoder.encode(["uint32[]"], [activeDkgMembers])
+    return ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        ["uint32[]"],
+        [activeDkgMembers],
+      ),
     )
   }
 
-  return ethers.utils.keccak256(
-    ethers.utils.defaultAbiCoder.encode(["uint32[]"], [members])
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(["uint32[]"], [members]),
   )
 }
 
 export interface DkgResultSubmittedEventArgs {
   resultHash: string
-  seed: BigNumber
-  result: ResultStruct
+  seed: bigint
+  result: EcdsaDkg.ResultStruct
 }
 
 // Decode this event explicitly. The assertion was introduced as a workaround
 // for Waffle's inability to verify events with an array nested in a struct.
 // See: https://github.com/EthWorks/Waffle/issues/245
 export async function expectDkgResultSubmittedEvent(
-  tx: ContractTransaction,
-  expectedArgs: DkgResultSubmittedEventArgs
+  tx: ContractTransactionResponse,
+  expectedArgs: DkgResultSubmittedEventArgs,
 ): Promise<void> {
   const eventName = "DkgResultSubmitted"
 
-  const event: DkgResultSubmittedEvent = (await tx.wait()).events.find(
-    (e) => e.event === eventName
-  ) as unknown as DkgResultSubmittedEvent
+  const event = requireResult(await tx.wait()).logs.find(
+    (log): log is DkgResultSubmittedEvent.Log =>
+      log instanceof ethers.EventLog && log.eventName === eventName,
+  )
 
-  await expect(event, `Event ${eventName} not emitted`).to.be.not.null
+  if (!event) {
+    throw new Error(`Event ${eventName} not emitted`)
+  }
 
   const actualArgs = event.args
 
   await expect(actualArgs.length, "invalid event args length").to.be.equal(
-    Object.keys(expectedArgs).length
+    Object.keys(expectedArgs).length,
   )
 
   await expect(
     actualArgs.result.length,
-    "invalid result args length"
+    "invalid result args length",
   ).to.be.equal(Object.keys(expectedArgs.result).length)
 
   await expect(actualArgs.resultHash, "invalid resultHash").to.be.equal(
-    expectedArgs.resultHash
+    expectedArgs.resultHash,
   )
 
   await expect(actualArgs.seed, "invalid seed").to.be.equal(expectedArgs.seed)
 
   await expect(
     actualArgs.result.submitterMemberIndex,
-    "invalid submitterMemberIndex"
+    "invalid submitterMemberIndex",
   ).to.be.equal(expectedArgs.result.submitterMemberIndex)
 
   await expect(
     actualArgs.result.groupPubKey,
-    "invalid groupPubKey"
+    "invalid groupPubKey",
   ).to.be.equal(expectedArgs.result.groupPubKey)
 
   await expect(
     actualArgs.result.misbehavedMembersIndices,
-    "invalid misbehavedMembersIndices"
-  ).to.be.deep.equal(expectedArgs.result.misbehavedMembersIndices)
+    "invalid misbehavedMembersIndices",
+  ).to.be.deep.equal(expectedArgs.result.misbehavedMembersIndices.map(BigInt))
 
   await expect(actualArgs.result.signatures, "invalid signatures").to.be.equal(
-    expectedArgs.result.signatures
+    expectedArgs.result.signatures,
   )
 
   await expect(
     actualArgs.result.signingMembersIndices,
-    "invalid signingMembersIndices"
-  ).to.be.deep.equal(
-    expectedArgs.result.signingMembersIndices.map(BigNumber.from)
-  )
+    "invalid signingMembersIndices",
+  ).to.be.deep.equal(expectedArgs.result.signingMembersIndices.map(BigInt))
 
   await expect(actualArgs.result.members, "invalid members").to.be.deep.equal(
-    expectedArgs.result.members
+    expectedArgs.result.members.map(BigInt),
   )
 
   await expect(
     actualArgs.result.membersHash,
-    "invalid membersHash"
+    "invalid membersHash",
   ).to.be.equal(expectedArgs.result.membersHash)
 }

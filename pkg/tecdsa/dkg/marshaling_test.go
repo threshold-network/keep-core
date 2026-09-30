@@ -67,12 +67,14 @@ func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:           sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &ephemeralPublicKeyMessage{})
+		if err := pbutils.RoundTrip(message, &ephemeralPublicKeyMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzEphemeralPublicKeyMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&ephemeralPublicKeyMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&ephemeralPublicKeyMessage{})
 }
 
 func TestTssRoundOneMessage_MarshalingRoundtrip(t *testing.T) {
@@ -115,12 +117,14 @@ func TestFuzzTssRoundOneMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundOneMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundOneMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundOneMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundOneMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundOneMessage{})
 }
 
 func TestTssRoundTwoMessage_MarshalingRoundtrip(t *testing.T) {
@@ -170,12 +174,14 @@ func TestFuzzTssRoundTwoMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundTwoMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundTwoMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundTwoMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundTwoMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundTwoMessage{})
 }
 
 func TestTssRoundThreeMessage_MarshalingRoundtrip(t *testing.T) {
@@ -218,12 +224,14 @@ func TestFuzzTssRoundThreeMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundThreeMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundThreeMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundThreeMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundThreeMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundThreeMessage{})
 }
 
 func TestTssFinalizationMessage_MarshalingRoundtrip(t *testing.T) {
@@ -262,12 +270,14 @@ func TestFuzzTssFinalizationMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID: sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssFinalizationMessage{})
+		if err := pbutils.RoundTrip(message, &tssFinalizationMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssFinalizationMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssFinalizationMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssFinalizationMessage{})
 }
 
 func TestResultSignatureMessage_MarshalingRoundtrip(t *testing.T) {
@@ -316,12 +326,14 @@ func TestFuzzResultSignatureMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:  sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &resultSignatureMessage{})
+		if err := pbutils.RoundTrip(message, &resultSignatureMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzResultSignatureMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&resultSignatureMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&resultSignatureMessage{})
 }
 
 func TestPreParamsMarshalling(t *testing.T) {

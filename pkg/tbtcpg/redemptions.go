@@ -2,6 +2,7 @@ package tbtcpg
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"time"
@@ -237,8 +238,17 @@ func (rt *RedemptionTask) ProposeRedemption(
 		txMaxTotalFee := redemptionParameters.TxMaxTotalFee
 
 		maxTotalFee := txMaxTotalFee
-		if perRequestMaxTotalFee := txMaxFee * uint64(len(redeemersOutputScripts)); perRequestMaxTotalFee < maxTotalFee {
-			maxTotalFee = perRequestMaxTotalFee
+		requestCount := uint64(len(redeemersOutputScripts))
+		// Skip the per-request cap when (a) no per-request cap is configured
+		// (txMaxFee == 0) or (b) the aggregate `txMaxFee * requestCount` would
+		// overflow uint64. In the overflow case we fall back to txMaxTotalFee
+		// rather than wrapping to a small value and silently rejecting every
+		// fee estimate; the on-chain per-request cap still applies regardless
+		// of how the off-chain ceiling was derived.
+		if txMaxFee == 0 || requestCount <= math.MaxUint64/txMaxFee {
+			if perRequestMaxTotalFee := txMaxFee * requestCount; perRequestMaxTotalFee < maxTotalFee {
+				maxTotalFee = perRequestMaxTotalFee
+			}
 		}
 
 		estimatedFee, err := EstimateRedemptionFee(
@@ -270,7 +280,7 @@ func (rt *RedemptionTask) ProposeRedemption(
 		// diagnostic rather than an exact predictor.
 		requestsCount := int64(len(redeemersOutputScripts))
 		maxShare := fee/requestsCount + fee%requestsCount
-		if uint64(maxShare) > txMaxFee {
+		if maxShare < 0 || uint64(maxShare) > txMaxFee {
 			taskLogger.Warnf(
 				"floored redemption fee share [%d] exceeds the per-request "+
 					"maximum fee [%d]; the proposal will likely be rejected "+
@@ -562,7 +572,7 @@ func EstimateRedemptionFee(
 	// A raw estimate already above the maximum means the redemption is
 	// uneconomical to perform at the required fee; return an error rather than
 	// clamping to the maximum and broadcasting an underpriced transaction.
-	if uint64(totalFee) > maxTotalFee {
+	if totalFee < 0 || uint64(totalFee) > maxTotalFee {
 		return 0, fmt.Errorf("estimated fee exceeds the maximum fee")
 	}
 

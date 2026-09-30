@@ -2,6 +2,8 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
+	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -352,7 +354,10 @@ type DepositRevealedEvent struct {
 	BlockNumber         uint64
 }
 
-func (dre *DepositRevealedEvent) unpack(extraData *[32]byte) *Deposit {
+func (dre *DepositRevealedEvent) unpack(extraData *[32]byte) (*Deposit, error) {
+	if dre.Amount > math.MaxInt64 {
+		return nil, fmt.Errorf("deposit amount exceeds int64 range: [%v]", dre.Amount)
+	}
 	return &Deposit{
 		Utxo: &bitcoin.UnspentTransactionOutput{
 			Outpoint: &bitcoin.TransactionOutpoint{
@@ -368,7 +373,7 @@ func (dre *DepositRevealedEvent) unpack(extraData *[32]byte) *Deposit {
 		RefundLocktime:      dre.RefundLocktime,
 		Vault:               dre.Vault,
 		ExtraData:           extraData,
-	}
+	}, nil
 }
 
 func (dre *DepositRevealedEvent) GetWalletPublicKeyHash() [20]byte {

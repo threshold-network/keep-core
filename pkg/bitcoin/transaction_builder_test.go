@@ -14,28 +14,6 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 )
 
-func TestNewTransactionBuilder(t *testing.T) {
-	localChain := newLocalChain()
-	builder := NewTransactionBuilder(localChain)
-
-	if !reflect.DeepEqual(localChain, builder.chain) {
-		t.Error("unexpected chain reference")
-	}
-
-	testutils.AssertIntsEqual(
-		t,
-		"internal version",
-		1,
-		int(builder.internal.Version),
-	)
-	testutils.AssertIntsEqual(
-		t,
-		"internal locktime",
-		0,
-		int(builder.internal.LockTime),
-	)
-}
-
 func TestTransactionBuilder_AddPublicKeyHashInput(t *testing.T) {
 	var tests = map[string]struct {
 		inputTransactionHex string

@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"sort"
 	"testing"
+	"time"
 
 	bn256 "github.com/ethereum/go-ethereum/crypto/bn256/cloudflare"
 
@@ -245,15 +247,15 @@ func BenchmarkAggregateBLS(b *testing.B) {
 	}
 }
 
-// BenchmarkThresholdVerify benchmarks threshold signature recovery with a
-// 51-of-100 configuration representative of production beacon groups.
+// BenchmarkThresholdVerify benchmarks threshold signature recovery with the
+// 33-of-64 configuration used by the production random beacon.
 func BenchmarkThresholdVerify(b *testing.B) {
 	pi, _ := new(big.Int).SetString(
 		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
 	message := new(bn256.G1).ScalarBaseMult(pi)
 
-	const numPlayers = 100
-	const threshold = 51
+	const numPlayers = 64
+	const threshold = 33
 
 	var masterSecretKey []*big.Int
 	var signatureShares []*SignatureShare
@@ -273,8 +275,32 @@ func BenchmarkThresholdVerify(b *testing.B) {
 		})
 	}
 
+	const minimumLatencySamples = 100
+	latencies := make([]time.Duration, 0, max(b.N, minimumLatencySamples))
 	b.ResetTimer()
 	for range b.N {
+		start := time.Now()
 		_, _ = RecoverSignature(signatureShares[:threshold], threshold)
+		latencies = append(latencies, time.Since(start))
 	}
+	b.StopTimer()
+
+	// Keep p99 meaningful even when Go calibrates a short benchmark run to
+	// fewer than 100 timed iterations.
+	for len(latencies) < minimumLatencySamples {
+		start := time.Now()
+		_, _ = RecoverSignature(signatureShares[:threshold], threshold)
+		latencies = append(latencies, time.Since(start))
+	}
+
+	sort.Slice(latencies, func(i, j int) bool {
+		return latencies[i] < latencies[j]
+	})
+	reportPercentile := func(percentile int, unit string) {
+		index := (percentile*len(latencies)+99)/100 - 1
+		b.ReportMetric(float64(latencies[index].Nanoseconds()), unit)
+	}
+	reportPercentile(50, "p50-ns/op")
+	reportPercentile(95, "p95-ns/op")
+	reportPercentile(99, "p99-ns/op")
 }

@@ -57,6 +57,7 @@ func EvaluateRetryParticipantsForSigning(
 
 	// #nosec G404 (insecure random number source (rand))
 	// Shuffling operators for retries does not require secure randomness.
+	// #nosec G115 -- Retry seed arithmetic intentionally wraps modulo 2^64 for compatibility.
 	rng := rand.New(rand.NewSource(seed + int64(retryCount)))
 
 	operators := make([]chain.Address, len(operatorToSeatCount))

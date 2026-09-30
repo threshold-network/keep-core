@@ -15,13 +15,13 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/exp/slices"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/config"
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
 	ethereumBeacon "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen"
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -87,6 +87,13 @@ var cmdFlagsTests = map[string]struct {
 		flagValue:             "tcp://url.to.electrum:18332",
 		expectedValueFromFlag: "tcp://url.to.electrum:18332",
 		defaultValue:          "",
+	},
+	"bitcoin.electrum.fallbackURLs": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Bitcoin.Electrum.FallbackURLs },
+		flagName:              "--bitcoin.electrum.fallbackURLs",
+		flagValue:             "wss://one.example:443,wss://two.example:443",
+		expectedValueFromFlag: []string{"wss://one.example:443", "wss://two.example:443"},
+		defaultValue:          []string{},
 	},
 	"bitcoin.electrum.connectTimeout": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Bitcoin.Electrum.ConnectTimeout },

@@ -1,5 +1,7 @@
 module.exports = {
-  ...require("@thesis-co/prettier-config"),
+  semi: false,
+  trailingComma: "all",
+  plugins: ["prettier-plugin-solidity"],
   overrides: [
     {
       files: "*.sol",

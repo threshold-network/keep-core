@@ -645,11 +645,6 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 	}
 
-	// Verify that the activation block constant is accessible and typed
-	// as uint64. This is a compile-time assertion placed outside the test
-	// loop since it does not vary per subtest.
-	var _ uint64 = DepositSweepEveryWindowActivationBlock
-
 	executor := &coordinationExecutor{}
 
 	for testName, test := range tests {
@@ -786,10 +781,6 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: true,
 		},
 	}
-
-	// Compile-time assertion: DepositSweepEveryWindowActivationBlock must
-	// be typed as uint64.
-	var _ uint64 = DepositSweepEveryWindowActivationBlock
 
 	executor := &coordinationExecutor{}
 

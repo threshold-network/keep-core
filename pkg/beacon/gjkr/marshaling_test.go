@@ -67,12 +67,14 @@ func TestFuzzEphemeralPublicKeyMessageRoundtrip(t *testing.T) {
 			sessionID:           sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &EphemeralPublicKeyMessage{})
+		if err := pbutils.RoundTrip(message, &EphemeralPublicKeyMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzEphemeralPublicKeyMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&EphemeralPublicKeyMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&EphemeralPublicKeyMessage{})
 }
 
 func TestMemberCommitmentsMessageRoundtrip(t *testing.T) {
@@ -119,12 +121,14 @@ func TestFuzzMemberCommitmentsMessageRoundtrip(t *testing.T) {
 			sessionID:   sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MemberCommitmentsMessage{})
+		if err := pbutils.RoundTrip(message, &MemberCommitmentsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMemberCommitmentsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MemberCommitmentsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MemberCommitmentsMessage{})
 }
 
 func TestPeerSharesMessageRoundtrip(t *testing.T) {
@@ -191,12 +195,14 @@ func TestFuzzPeerSharesMessageRoundtrip(t *testing.T) {
 			sessionID: sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &PeerSharesMessage{})
+		if err := pbutils.RoundTrip(message, &PeerSharesMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzPeerSharesMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&PeerSharesMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&PeerSharesMessage{})
 }
 
 func TestSecretSharesAccusationsMessageRoundtrip(t *testing.T) {
@@ -252,12 +258,14 @@ func TestFuzzSecretSharesAccusationsMessageRoundtrip(t *testing.T) {
 			sessionID:          sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &SecretSharesAccusationsMessage{})
+		if err := pbutils.RoundTrip(message, &SecretSharesAccusationsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzSecretSharesAccusationsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&SecretSharesAccusationsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&SecretSharesAccusationsMessage{})
 }
 
 func TestMemberPublicKeySharePointsMessageRoundtrip(t *testing.T) {
@@ -305,12 +313,14 @@ func TestFuzzMemberPublicKeySharePointsMessageRoundtrip(t *testing.T) {
 			sessionID:            sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MemberPublicKeySharePointsMessage{})
+		if err := pbutils.RoundTrip(message, &MemberPublicKeySharePointsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMemberPublicKeySharePointsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MemberPublicKeySharePointsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MemberPublicKeySharePointsMessage{})
 }
 
 func TestPointsAccusationsMessageRoundtrip(t *testing.T) {
@@ -366,12 +376,14 @@ func TestFuzzPointsAccusationsMessageRoundtrip(t *testing.T) {
 			sessionID:          sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &PointsAccusationsMessage{})
+		if err := pbutils.RoundTrip(message, &PointsAccusationsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzPointsAccusationsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&PointsAccusationsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&PointsAccusationsMessage{})
 }
 
 func TestMisbehavedEphemeralKeysMessageRoundtrip(t *testing.T) {
@@ -427,12 +439,14 @@ func TestFuzzMisbehavedEphemeralKeysMessageRoundtrip(t *testing.T) {
 			sessionID:   sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MisbehavedEphemeralKeysMessage{})
+		if err := pbutils.RoundTrip(message, &MisbehavedEphemeralKeysMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMisbehavedEphemeralKeysMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MisbehavedEphemeralKeysMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MisbehavedEphemeralKeysMessage{})
 }
 
 // --- Benchmarks ---

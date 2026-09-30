@@ -1,0 +1,28 @@
+diff --git a/export/deploy/07_deploy_token_staking.js b/export/deploy/07_deploy_token_staking.js
+--- a/export/deploy/07_deploy_token_staking.js
++++ b/export/deploy/07_deploy_token_staking.js
+@@ -62,10 +62,10 @@
+                         })];
+                 case 4:
+                     tokenStaking = _a.sent();
+-                    tokenStakingAddress = tokenStaking.address;
++                    tokenStakingAddress = tokenStaking.target;
+                     log("Deployed TokenStaking with TransparentProxy at ".concat(tokenStakingAddress));
+                     implementationInterface = tokenStaking.interface;
+-                    jsonAbi = implementationInterface.format(hardhat_1.ethers.utils.FormatTypes.json);
++                    jsonAbi = implementationInterface.formatJson();
+                     tokenStakingDeployment = {
+                         address: tokenStakingAddress,
+                         abi: JSON.parse(jsonAbi),
+diff --git a/export/deploy/30_deploy_tokenholder_timelock.js b/export/deploy/30_deploy_tokenholder_timelock.js
+--- a/export/deploy/30_deploy_tokenholder_timelock.js
++++ b/export/deploy/30_deploy_tokenholder_timelock.js
+@@ -51,7 +51,7 @@
+                 case 1:
+                     deployer = (_a.sent()).deployer;
+                     proposers = [];
+-                    executors = [ethers_1.ethers.constants.AddressZero];
++                    executors = [ethers_1.ethers.ZeroAddress];
+                     minDelay = 172800 // 2 days in seconds (2 * 24 * 60 * 60)
+                     ;
+                     return [4 /*yield*/, deployments.deploy("TokenholderTimelock", {

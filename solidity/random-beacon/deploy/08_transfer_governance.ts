@@ -10,14 +10,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   await helpers.ownable.transferOwnership(
     "RandomBeaconGovernance",
     governance,
-    deployer
+    deployer,
   )
 
   await deployments.execute(
     "RandomBeacon",
     { from: deployer, log: true, waitConfirmations: 1 },
     "transferGovernance",
-    RandomBeaconGovernance.address
+    RandomBeaconGovernance.address,
   )
 }
 

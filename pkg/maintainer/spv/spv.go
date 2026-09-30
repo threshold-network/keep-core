@@ -70,7 +70,11 @@ func Initialize(
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
 	metricsRecorder MetricsRecorder,
-) {
+) error {
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("cannot validate spv maintainer config: [%w]", err)
+	}
+
 	spvMaintainer := &spvMaintainer{
 		config:          config,
 		spvChain:        spvChain,
@@ -80,6 +84,8 @@ func Initialize(
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
+
+	return nil
 }
 
 // proofTypes holds the information about proof types supported by the
@@ -346,7 +352,7 @@ func isInputCurrentWalletsMainUTXO(
 	if err != nil {
 		return false, fmt.Errorf("failed to get previous transaction: [%v]", err)
 	}
-	if fundingOutputIndex >= uint32(len(previousTransaction.Outputs)) {
+	if uint64(fundingOutputIndex) >= uint64(len(previousTransaction.Outputs)) {
 		return false, fmt.Errorf(
 			"funding output index [%d] out of range for transaction [%s] "+
 				"with [%d] outputs",

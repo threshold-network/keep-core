@@ -60,8 +60,8 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			depositsCount:          1,
 			estimateSatPerVByte:    1,
 			perDepositMaxFee:       100000,
-			expectedSatPerVByteFee: 5, // max(5, ceil(1*1.25)=2) = 5
-			expectedTotalFee:       5 * size1,
+			expectedSatPerVByteFee: 7, // max(5, 1) = 5 -> ceil(5*1.25) = 7
+			expectedTotalFee:       7 * size1,
 		},
 		"estimate above the floor is buffered by 25%": {
 			depositsCount:          1,

@@ -85,13 +85,13 @@ func (skgm *symmetricKeyGeneratingMember) generateSymmetricKeys(
 			ephemeralPubKeyMessage.ephemeralPublicKeys[skgm.id],
 		)
 		if err != nil {
-			// A single member's malformed key must not abort this member's
-			// entire round. Before the deferred-parse optimization, an
-			// unparseable key failed message unmarshaling at the network
-			// layer, so the whole message was dropped and the sender was
-			// simply treated as absent. Preserve that behavior here: skip
-			// the sender and mark it inactive instead of returning a fatal
-			// error that aborts this member's async state.
+			// Mark the sender inactive on malformed key so the protocol can
+			// continue without it instead of aborting this member's async
+			// state. This preserves the pre-deferred-parse behavior, where
+			// network-layer unmarshaling dropped the whole message and the
+			// round waited for context end; in the current code the unmarshal
+			// happens at this site so the equivalent behavior is to skip the
+			// sender here.
 			skgm.logger.Warnf(
 				"[member:%v] could not unmarshal ephemeral public key "+
 					"from member [%v]: [%v]; marking member as inactive",

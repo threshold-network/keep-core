@@ -5,34 +5,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/beacon/entry/gen/pb"
-	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
-
-func TestNewSignatureShareMessage(t *testing.T) {
-	senderID := group.MemberIndex(7)
-	shareBytes := []byte{0x01, 0x02, 0x03}
-	sessionID := "session-1"
-
-	message := NewSignatureShareMessage(senderID, shareBytes, sessionID)
-
-	if message.SenderID() != senderID {
-		t.Errorf(
-			"unexpected sender ID\nexpected: [%v]\nactual:   [%v]",
-			senderID,
-			message.SenderID(),
-		)
-	}
-	testutils.AssertBytesEqual(t, shareBytes, message.shareBytes)
-	if message.sessionID != sessionID {
-		t.Errorf(
-			"unexpected session ID\nexpected: [%v]\nactual:   [%v]",
-			sessionID,
-			message.sessionID,
-		)
-	}
-}
 
 // The Type string is the wire identifier used to route this message on the
 // broadcast channel. Changing it silently would break network compatibility

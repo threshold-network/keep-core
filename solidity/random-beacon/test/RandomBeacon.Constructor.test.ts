@@ -3,7 +3,7 @@ import { expect } from "chai"
 
 import type { RandomBeacon__factory, SortitionPool } from "../typechain"
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 
 const { to1e18 } = helpers.number
 
@@ -17,7 +17,6 @@ describe("RandomBeacon - Constructor", () => {
   let RandomBeacon: RandomBeacon__factory
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[tToken, staking, dkgValidator, reimbursementPool] =
       await getUnnamedAccounts()
 
@@ -27,31 +26,31 @@ describe("RandomBeacon - Constructor", () => {
     const SortitionPool = await ethers.getContractFactory("SortitionPool")
     sortitionPool = (await SortitionPool.deploy(
       tToken,
-      to1e18(1)
+      to1e18(1),
     )) as SortitionPool
 
     const BLS = await ethers.getContractFactory("BLS")
     const bls = await BLS.deploy()
-    await bls.deployed()
+    await bls.waitForDeployment()
 
     const Authorization = await ethers.getContractFactory("BeaconAuthorization")
     const authorization = await Authorization.deploy()
-    await authorization.deployed()
+    await authorization.waitForDeployment()
 
     const BeaconDkg = await ethers.getContractFactory("BeaconDkg")
     const dkg = await BeaconDkg.deploy()
-    await dkg.deployed()
+    await dkg.waitForDeployment()
 
     const BeaconInactivity = await ethers.getContractFactory("BeaconInactivity")
     const inactivity = await BeaconInactivity.deploy()
-    await inactivity.deployed()
+    await inactivity.waitForDeployment()
 
     RandomBeacon = await ethers.getContractFactory("RandomBeacon", {
       libraries: {
-        BLS: bls.address,
-        BeaconAuthorization: authorization.address,
-        BeaconDkg: dkg.address,
-        BeaconInactivity: inactivity.address,
+        BLS: await bls.getAddress(),
+        BeaconAuthorization: await authorization.getAddress(),
+        BeaconDkg: await dkg.getAddress(),
+        BeaconInactivity: await inactivity.getAddress(),
       },
     })
   })
@@ -61,12 +60,12 @@ describe("RandomBeacon - Constructor", () => {
       it("should work", async () => {
         await expect(
           RandomBeacon.deploy(
-            sortitionPool.address,
+            await sortitionPool.getAddress(),
             tToken,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).not.to.be.reverted
       })
     })
@@ -79,8 +78,8 @@ describe("RandomBeacon - Constructor", () => {
             tToken,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -89,12 +88,12 @@ describe("RandomBeacon - Constructor", () => {
       it("should revert", async () => {
         await expect(
           RandomBeacon.deploy(
-            sortitionPool.address,
+            await sortitionPool.getAddress(),
             ZERO_ADDRESS,
             staking,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -103,12 +102,12 @@ describe("RandomBeacon - Constructor", () => {
       it("should revert", async () => {
         await expect(
           RandomBeacon.deploy(
-            sortitionPool.address,
+            await sortitionPool.getAddress(),
             tToken,
             ZERO_ADDRESS,
             dkgValidator,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -117,12 +116,12 @@ describe("RandomBeacon - Constructor", () => {
       it("should revert", async () => {
         await expect(
           RandomBeacon.deploy(
-            sortitionPool.address,
+            await sortitionPool.getAddress(),
             tToken,
             staking,
             ZERO_ADDRESS,
-            reimbursementPool
-          )
+            reimbursementPool,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })
@@ -131,12 +130,12 @@ describe("RandomBeacon - Constructor", () => {
       it("should revert", async () => {
         await expect(
           RandomBeacon.deploy(
-            sortitionPool.address,
+            await sortitionPool.getAddress(),
             tToken,
             staking,
             dkgValidator,
-            ZERO_ADDRESS
-          )
+            ZERO_ADDRESS,
+          ),
         ).to.be.revertedWith("Zero-address reference")
       })
     })

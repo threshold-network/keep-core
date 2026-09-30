@@ -184,3 +184,14 @@ func TestIdentityConverter_TssPartyIDToMemberIndex_Corrupted(t *testing.T) {
 
 	testutils.AssertIntsEqual(t, "member ID", 0, int(memberIndex))
 }
+
+func TestIdentityConverter_TssPartyIDToMemberIndex_Overflow(t *testing.T) {
+	converter := &identityConverter{seed: big.NewInt(300)}
+	partyID := tss.NewPartyID("556", "member-256", big.NewInt(556))
+
+	// index (556 - 300 = 256) exceeds group.MaxMemberIndex; the party ID is
+	// considered corrupted and MemberIndex(0) is returned.
+	memberIndex := converter.TssPartyIDToMemberIndex(partyID)
+
+	testutils.AssertIntsEqual(t, "member ID", 0, int(memberIndex))
+}

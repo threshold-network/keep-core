@@ -6,17 +6,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/cmd/flag"
-	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/config/network"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/cmd/flag"
 	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
+	"github.com/keep-network/keep-core/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -162,6 +162,17 @@ func initBitcoinElectrumFlags(cmd *cobra.Command, cfg *config.Config) {
 		"bitcoin.electrum.url",
 		"",
 		"URL to the Electrum server in format: `scheme://hostname:port`.",
+	)
+
+	cmd.Flags().StringSliceVar(
+		&cfg.Bitcoin.Electrum.FallbackURLs,
+		"bitcoin.electrum.fallbackURLs",
+		[]string{},
+		"Comma-separated list of alternate Electrum server URLs used for "+
+			"failover when the primary server becomes unavailable. When no "+
+			"primary URL is configured, these are appended behind the "+
+			"auto-selected embedded primary; an explicitly configured "+
+			"primary URL remains preferred, with these tried on failure.",
 	)
 
 	cmd.Flags().DurationVar(

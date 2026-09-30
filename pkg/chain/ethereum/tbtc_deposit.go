@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
@@ -167,6 +167,10 @@ func (tc *TbtcChain) SubmitDepositSweepProofWithReimbursement(
 	mainUTXO bitcoin.UnspentTransactionOutput,
 	vault common.Address,
 ) error {
+	if mainUTXO.Value < 0 {
+		return fmt.Errorf("invalid main UTXO value: [%v]", mainUTXO.Value)
+	}
+
 	bitcoinTxInfo := tbtcabi.BitcoinTxInfo3{
 		Version:      transaction.SerializeVersion(),
 		InputVector:  transaction.SerializeInputs(),
@@ -175,7 +179,7 @@ func (tc *TbtcChain) SubmitDepositSweepProofWithReimbursement(
 	}
 	sweepProof := tbtcabi.BitcoinTxProof2{
 		MerkleProof:      proof.MerkleProof,
-		TxIndexInBlock:   big.NewInt(int64(proof.TxIndexInBlock)),
+		TxIndexInBlock:   new(big.Int).SetUint64(uint64(proof.TxIndexInBlock)),
 		BitcoinHeaders:   proof.BitcoinHeaders,
 		CoinbasePreimage: proof.CoinbasePreimage,
 		CoinbaseProof:    proof.CoinbaseProof,
