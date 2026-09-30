@@ -126,34 +126,68 @@ jobs:
     # plus the Bridge/WalletProposalValidator reservation-methods patch
     # fragments) whenever @keep-network/tbtc-v2 hasn't yet published the
     # real reservation contracts under the `development` npm tag (see
-    # threshold-network/keep-core#4281). That vendored copy can silently
-    # drift from the ABI compiled from the pinned upstream tbtc-v2 ref
-    # (TBTC_V2_REF below) with no build failure. This job compiles the
-    # real tbtc-v2 Solidity contracts directly and diffs their ABI against
-    # the vendored fallback, failing loudly on any divergence. Cheap
-    # (checkout + yarn install + hardhat compile + one jq diff) and
+    # threshold-network/keep-core#4281). Those vendored copies can silently
+    # drift from the ABI compiled from the pinned upstream tbtc-v2 commit
+    # (TBTC_V2_REF below) with no build failure, and the same drift can
+    # accumulate in the committed Go bindings themselves. This job
+    # compiles the real tbtc-v2 Solidity contracts at that commit and
+    # compares both the vendored copies and the ABI embedded in the
+    # committed generated Go bindings against the compiled artifacts,
+    # failing loudly on any divergence. The comparisons are whole-function/
+    # whole-event entries (name, inputs including struct components,
+    # outputs, stateMutability) canonicalized with jq -S, so they catch
+    # missing/renamed functions, added/removed/reordered parameters, and
+    # type changes alike, on each side:
+    #   - the full canonicalized .abi array of
+    #     ReservationRouter.fallback-artifact.json against the compiled
+    #     ReservationRouter artifact,
+    #   - the isReservedDeposit entry of
+    #     Bridge.reservation-methods-fallback.json against the compiled
+    #     Bridge artifact,
+    #   - the validateReservationAnchorProposal /
+    #     validateReservationReanchorProposal entries of
+    #     WalletProposalValidator.reservation-methods-fallback.json
+    #     against the compiled WalletProposalValidator artifact,
+    #   - the inKindFeeDebtSat and tbtcToken entries of
+    #     ReservationVault.fallback-artifact.json against the compiled
+    #     ReservationVault artifact,
+    # and, extracted from the <Name>MetaData.ABI string in
+    # pkg/chain/ethereum/tbtc/gen/abi/<Name>.go with
+    # `go run ./checkabi`,
+    #   - the full canonicalized ABI of the committed ReservationRouter
+    #     binding against the compiled ReservationRouter artifact,
+    #   - the isReservedDeposit entry of the committed Bridge binding
+    #     against the compiled Bridge artifact,
+    #   - the validateReservationAnchorProposal /
+    #     validateReservationReanchorProposal entries of the committed
+    #     WalletProposalValidator binding against the compiled
+    #     WalletProposalValidator artifact,
+    #   - the inKindFeeDebtSat and tbtcToken entries of the committed
+    #     ReservationVault binding against the compiled ReservationVault
+    #     artifact.
+    # Cheap (checkout + yarn install + hardhat compile + a go-run ABI
+    # extraction + jq diffs) and
     # runs whenever the Client workflow runs, without an additional
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: threshold-network/tbtc-v2#1112 (which adds
-    # ReservationRouter.sol) merged into tbtc-v2's own `reservations-upgrade`
-    # integration branch, not `main` - mirrors this repo's own
-    # `reservations-epic` staging pattern. `main` does not carry the
-    # reservation contracts yet (verified: no ReservationRouter.sol there
-    # as of this job's authoring), so pointing here at `main` would make
-    # every run of this job fail unconditionally. Once the reservations
-    # work lands on tbtc-v2's `main`, switch `TBTC_V2_REF` back to `main`.
+    # tbtc-v2 ref: pinned to commit 9f8f5ef1 - the tip of threshold-network/tbtc-v2's
+    # `reservations-upgrade` integration branch (which merged
+    # threshold-network/tbtc-v2#1112, adding ReservationRouter.sol, into
+    # that branch, not `main`). A full commit hash is pinned rather than
+    # the branch name because a branch ref can move after this repo's
+    # generated bindings and vendored fragments are produced, and the
+    # diff above would then fail without any visible cause. `main` does
+    # not carry the reservation contracts yet (verified: no
+    # ReservationRouter.sol there as of this job's authoring), so
+    # pointing here at `main` would make every run of this job fail
+    # unconditionally. When the reservations work lands on tbtc-v2's
+    # `main`, switch `TBTC_V2_REF` back to `main`.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: reservations-upgrade
+      TBTC_V2_REF: 9f8f5ef1ca82f423571225066a291a6a0f963aac
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: "go.mod"
 
       - name: Checkout tbtc-v2 (${{ env.TBTC_V2_REF }})
         uses: actions/checkout@v4
@@ -166,6 +200,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
 
       - name: Compile tbtc-v2 Solidity contracts
         working-directory: tbtc-v2-upstream/solidity
@@ -189,16 +228,30 @@ jobs:
           yarn install
           yarn build
 
-      - name: Verify vendored ReservationRouter fallback matches the real compiled ABI
+      - name: Verify vendored reservation fallbacks and committed Go bindings match the real compiled ABIs
         run: |
           set -e
-          ARTIFACT="tbtc-v2-upstream/solidity/build/contracts/bridge/ReservationRouter.sol/ReservationRouter.json"
-          if [ ! -f "$ARTIFACT" ]; then
-            echo "::error::$ARTIFACT was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries ReservationRouter.sol (or its build path moved). Update TBTC_V2_REF above to the branch/tag that does."
+          BASE_BRIDGE="tbtc-v2-upstream/solidity/build/contracts/bridge"
+          BASE_VAULT="tbtc-v2-upstream/solidity/build/contracts/vault"
+          for artifact in \
+            "ReservationRouter.sol/ReservationRouter.json" \
+            "Bridge.sol/Bridge.json" \
+            "WalletProposalValidator.sol/WalletProposalValidator.json" \
+          ; do
+            if [ ! -f "$BASE_BRIDGE/$artifact" ]; then
+              echo "::error::$BASE_BRIDGE/$artifact was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries it (or its build path moved). Update TBTC_V2_REF above to the commit that does."
+              exit 1
+            fi
+          done
+          if [ ! -f "$BASE_VAULT/ReservationVault.sol/ReservationVault.json" ]; then
+            echo "::error::$BASE_VAULT/ReservationVault.sol/ReservationVault.json was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries it (or its build path moved). Update TBTC_V2_REF above to the commit that does."
             exit 1
           fi
           mkdir -p "tmp/contracts/development/@keep-network/tbtc-v2/artifacts"
-          cp "$ARTIFACT" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
+          cp "$BASE_BRIDGE/ReservationRouter.sol/ReservationRouter.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
+          cp "$BASE_BRIDGE/Bridge.sol/Bridge.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/Bridge.json"
+          cp "$BASE_BRIDGE/WalletProposalValidator.sol/WalletProposalValidator.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/WalletProposalValidator.json"
+          cp "$BASE_VAULT/ReservationVault.sol/ReservationVault.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationVault.json"
           make -C pkg/chain/ethereum/tbtc/gen verify-vendored-fallback
 
   client-build-test-publish:

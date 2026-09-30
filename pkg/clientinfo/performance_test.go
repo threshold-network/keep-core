@@ -499,11 +499,13 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 	}
 }
 
-// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip counters
-// are registered upfront so they appear in the metrics endpoint before any
-// increment. The spv.go maintainer emits IncrementCounter calls for these
-// counters from the relay-range and exceeded-max-headers skip branches; a
-// missing upfront registration would cause the values to be silently dropped
+// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip
+// counters and the reservation watcher-death counter are registered
+// upfront so they appear in the metrics endpoint before any increment.
+// The spv.go maintainer and WireReservationWatchers emit IncrementCounter
+// calls for these counters from the relay-range, exceeded-max-headers
+// skip branches and the watcher panic/error death paths; a missing
+// upfront registration would cause the values to be silently dropped
 // from /metrics because the lazy-create-without-register path in
 // IncrementCounter never calls ObserveApplicationSource.
 func TestSpvProofSkipCountersRegistered(t *testing.T) {
@@ -516,6 +518,7 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 	expectedCounters := []string{
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
+		MetricSpvReservationWatcherDeathsTotal,
 	}
 
 	for _, counterName := range expectedCounters {
@@ -714,10 +717,11 @@ func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T)
 	}
 }
 
-// TestReservationGaugesRegistered verifies the four reservation saturation
-// gauges (active_reservations_count, max_active_reservations,
-// live_wallets_count, wallet_reservations_count) are registered upfront
-// with a 0 value when reservations are enabled.
+// TestReservationGaugesRegistered verifies the six reservation gauges
+// (active_reservations_count, max_active_reservations, live_wallets_count,
+// wallet_reservations_count, reservation_vault_fee_debt_sat,
+// reservation_vault_fee_reserve_tbtc) are registered upfront with a 0
+// value when reservations are enabled.
 func TestReservationGaugesRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -730,6 +734,8 @@ func TestReservationGaugesRegistered(t *testing.T) {
 		MetricReservationMaxActiveReservations,
 		MetricReservationLiveWalletsCount,
 		MetricReservationWalletReservationsCount,
+		MetricReservationVaultFeeDebtSat,
+		MetricReservationVaultFeeReserveTbtc,
 	}
 
 	for _, name := range reservationGauges {
@@ -757,11 +763,12 @@ func TestReservationGaugesRegistered(t *testing.T) {
 }
 
 // TestReservationGaugesNotRegisteredWhenReservationsDisabled verifies the
-// four reservation saturation gauges are absent (not just zero) when the
-// m1 reservations feature is disabled. Unlike these gauges, the
+// six reservation gauges are absent (not just zero) when the m1
+// reservations feature is disabled. Unlike these gauges, the
 // wallet_action_reservation_* counters and histograms remain registered
-// regardless of the flag (see TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag)
-// since reservation action execution itself is not gated on it.
+// regardless of the flag (see
+// TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag) since
+// reservation action execution itself is not gated on it.
 func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -774,6 +781,8 @@ func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 		MetricReservationMaxActiveReservations,
 		MetricReservationLiveWalletsCount,
 		MetricReservationWalletReservationsCount,
+		MetricReservationVaultFeeDebtSat,
+		MetricReservationVaultFeeReserveTbtc,
 	}
 
 	for _, name := range reservationGauges {

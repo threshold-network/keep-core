@@ -204,6 +204,11 @@ type ReservationAction struct {
 	// FeePaid indicates the generation was created through a fee-paying vault
 	// entry point.
 	FeePaid bool
+	// SourceAnchorUtxoHash is the keccak256 hash of the reservation anchor
+	// outpoint snapshotted when a re-anchor generation was requested,
+	// matching the Bridge's anchorUtxoHash (Reservation.sol). It is zero
+	// for other action types.
+	SourceAnchorUtxoHash [32]byte
 	// Redeemer is the address that can reclaim escrow after a redemption
 	// timeout. It is empty for other action types.
 	Redeemer chain.Address
@@ -218,6 +223,15 @@ type ReservationAction struct {
 	// IsPartial indicates a redemption spends only Amount and must re-anchor
 	// the remaining reservation value back to the custodying wallet.
 	IsPartial bool
+	// TermSeconds is the custody term snapshotted when the generation was
+	// requested. It also bounds the late-acceptance settlement window
+	// (timeoutAt + termSeconds), so proof submitters must read it from the
+	// action, not from the live governance parameter.
+	TermSeconds uint32
+	// MinAmount is the minimum reservation amount snapshotted when the
+	// generation was requested. Settlement and signer validation both
+	// enforce this snapshot, not the live governance parameter.
+	MinAmount uint64
 }
 
 // ReservationParameters represents the on-chain values of the Bridge

@@ -158,6 +158,11 @@ type ReservationReanchorData struct {
 	RequestNonce        uint64
 	HasPendingAction    bool
 	PendingActionState  tbtc.ReservationActionState
+	// TimeoutAt, when non-zero, sets the seeded pending action's
+	// TimeoutAt (used by the safety-margin gate). When zero the driver
+	// defaults to a far-future value so scenarios not exercising the
+	// gate do not have to pin a concrete epoch.
+	TimeoutAt uint32
 }
 
 // ReservationReanchorTestScenario represents a test scenario of preparing a
@@ -178,6 +183,13 @@ type ReservationReanchorTestScenario struct {
 
 	MovingFundsDustThreshold uint64
 	ReservationTxMaxFee      uint64
+	// MaxReservationsPerWallet governs the count headroom
+	// Reservation.sol's requestReservationReanchor reserves for the
+	// re-anchor target. The driver falls back to a sensible default (5)
+	// when this is zero so existing scenarios that do not pin it still
+	// describe a target wallet with room for one re-anchor; scenarios
+	// that test the cap itself can set this explicitly.
+	MaxReservationsPerWallet uint32
 	EstimateSatPerVByteFee   int64
 	ReanchorTxFee            int64
 

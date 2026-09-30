@@ -2,6 +2,8 @@ package spv
 
 import (
 	"time"
+
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 )
 
 const (
@@ -91,4 +93,17 @@ type Config struct {
 	// ([Tbtc] in the client and [Maintainer.Spv] in the maintainer) for
 	// the reservation feature to work end-to-end.
 	ReservationProofsEnabled bool
+
+	// EthereumNetwork is the Ethereum network this SPV maintainer
+	// process runs against, set by the process command (the maintainer
+	// command copies it from its own [ethereum] config section) rather
+	// than read from a config file or CLI flag. It feeds the
+	// reservation activation-block lookup (see
+	// tbtc.ReservationsActivationBlock), which bounds every
+	// reservation watcher's startup catch-up scan: a network without
+	// an activation entry is treated as reservations-inactive and its
+	// startup scans are skipped. The zero value (an unknown network)
+	// behaves exactly like a missing activation entry: reservation
+	// startup scans are skipped on it.
+	EthereumNetwork ethereum.Network
 }

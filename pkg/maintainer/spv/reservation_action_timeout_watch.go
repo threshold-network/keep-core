@@ -3,6 +3,7 @@ package spv
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"time"
@@ -62,7 +63,8 @@ const reservationActionTimeoutMaxChecksPerTick = 50
 type ReservationActionTimeoutWatcher struct {
 	spvChain Chain
 	// nowFn returns the current UNIX timestamp the watcher treats as "now"
-	// for `now > timeoutAt` comparisons. Tests override it to drive the
+	// for `now >= timeoutAt` comparisons, mirroring the contract's
+	// block.timestamp >= timeoutAt gate. Tests override it to drive the
 	// deadline forward; production wires it to time.Now in UTC.
 	nowFn func() uint32
 	// interval is how often the background poll loop re-checks pending
@@ -135,6 +137,17 @@ type ReservationActionTimeoutWatcher struct {
 	// post-construction setter, so a watcher can never be constructed in
 	// a partially-initialized state that would silently skip staggering.
 	operatorAddress common.Address
+
+	// activationBlock is the network's reservation activation block
+	// (tbtc.ReservationsActivationBlock): the first event scan starts
+	// from max(activationBlock, currentBlock-lookback), so the watcher
+	// picks up every pending action requested since the feature went
+	// live without scanning genesis on a long-running deployment. math.MaxUint64
+	// is the sentinel for a network without an entry (reservations
+	// inactive) - the first scan still runs, bounded to the lookback
+	// window, since the watcher may have other reasons to exist beyond
+	// reservations.
+	activationBlock uint64
 }
 
 type pendingAction struct {
@@ -184,6 +197,7 @@ func NewReservationActionTimeoutWatcher(
 	pollInterval time.Duration,
 	operatorAddress common.Address,
 	strandingWatcher *reservationStrandingWatcher,
+	activationBlock uint64,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
 		spvChain:                spvChain,
@@ -193,6 +207,7 @@ func NewReservationActionTimeoutWatcher(
 		operatorAddress:         operatorAddress,
 		strandingWatcher:        strandingWatcher,
 		strandingRecheckWallets: make(map[[20]byte]struct{}),
+		activationBlock:         activationBlock,
 	}
 }
 
@@ -203,15 +218,51 @@ func defaultActionTimeoutNowFn() uint32 {
 }
 
 // nextScanRange calculates the start and current block numbers for the
-// next event scan. It delegates to the shared reservationProofNextScanRange
-// helper (see reservation_proof_loop.go): this watcher's own incremental
-// scan shape (bounded catch-up window on the first pass, resume-from-cursor
-// thereafter) is identical to the proof loop's, so both now share one
-// implementation instead of two independently-maintained copies.
+// next event scan. Item 1 (restart recovery) is scoped to the SPV proof
+// loop and the stale-deposit watcher only; this watcher keeps its
+// original bounded 30-day catch-up window on the first pass
+// (reservationDefaultLookBackBlocks), narrowed to the network's
+// reservation activation block only when that block is both known
+// (tbtc.ReservationsActivationBlock did not return math.MaxUint64) and
+// inside the lookback window already computed - so a network whose
+// activation happened more recently than 30 days ago does not scan
+// further back than activation, but a network with no activation entry
+// (or one older than the lookback window) is unaffected and keeps the
+// original bounded scan. Every later pass starts exactly one block past
+// the previous cursor, unchanged.
 func (ratw *ReservationActionTimeoutWatcher) nextScanRange(
 	lastScannedBlock uint64,
 ) (startBlock uint64, currentBlock uint64, err error) {
-	return reservationProofNextScanRange(ratw.spvChain, lastScannedBlock)
+	blockCounter, err := ratw.spvChain.BlockCounter()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+
+	currentBlock, err = blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	if lastScannedBlock != 0 {
+		return lastScannedBlock + 1, currentBlock, nil
+	}
+
+	// First pass: bounded catch-up window. The clamp to the network's
+	// reservation activation block applies only when the activation is
+	// known (not math.MaxUint64) and falls at or below the current tip;
+	// an activation block above the current tip - or an unknown
+	// activation - leaves the bounded lookback range unchanged, so the
+	// scan is ordinary and simply finds nothing while reservations have
+	// not yet activated on this network.
+	start := uint64(0)
+	if currentBlock > reservationDefaultLookBackBlocks {
+		start = currentBlock - reservationDefaultLookBackBlocks
+	}
+	if ratw.activationBlock > start && ratw.activationBlock != math.MaxUint64 &&
+		ratw.activationBlock <= currentBlock {
+		start = ratw.activationBlock
+	}
+	return start, currentBlock, nil
 }
 
 // Run starts the background poll loop. It returns when ctx is done or when
@@ -392,7 +443,10 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			)
 		}
 
-		if now > deadline {
+		// The comparison is inclusive because the contract itself
+		// accepts the notification at exactly action.timeoutAt
+		// (block.timestamp >= timeoutAt); see checkReservationActionTimeout.
+		if now >= deadline {
 			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
 				now,
@@ -458,8 +512,10 @@ func (ratw *ReservationActionTimeoutWatcher) nextActionCheckBatch() []string {
 
 // CheckReservationActionTimeouts inspects the current action generation of a
 // single reservation and notifies the Bridge if it is Pending and its
-// TimeoutAt has elapsed. The caller controls the iteration; the watcher
-// does not background-loop on its own (see Run for the poll-driven caller).
+// TimeoutAt has been reached or passed (now >= TimeoutAt - the same
+// inclusive boundary the contract itself accepts). The caller controls
+// the iteration; the watcher does not background-loop on its own (see
+// Run for the poll-driven caller).
 //
 // Parameters:
 //
@@ -558,7 +614,13 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 		return false, nil
 	}
 
-	if now <= action.TimeoutAt {
+	// The contract accepts a timeout notification at exactly
+	// action.timeoutAt (Reservation.sol: require(block.timestamp >=
+	// action.timeoutAt)), so the watcher must skip only while the
+	// deadline is still strictly ahead: a tick at now == TimeoutAt
+	// already finds the action timed out, and skipping it would delay
+	// capacity release by a full poll interval.
+	if now < action.TimeoutAt {
 		logger.Debugf(
 			"reservation [%v] action nonce %d timeout at [%d] "+
 				"not yet reached (now=%d); skipping",

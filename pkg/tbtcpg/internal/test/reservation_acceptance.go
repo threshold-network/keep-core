@@ -37,8 +37,50 @@ type ReservedDepositScenario struct {
 	SweptAt                int64
 	Vault                  string
 
+	// PendingAcceptanceAction, when non-nil, instructs the test driver to
+	// seed the deposit's current generation as a Pending Acceptance action
+	// record targeting WalletPublicKeyHash. The acceptance task only
+	// proposes against deposits whose current generation is exactly that
+	// record (mirroring WalletProposalValidator.sol's
+	// validateReservationAnchorProposal precondition), so scenarios that
+	// expect a proposal must seed one here with the live parameters'
+	// snapshots as they stood at the depositor's request time. Scenarios
+	// that expect rejection at any earlier cap gate (wallet state, per-wallet
+	// count, per-wallet amount, single-amount, global total, per-deposit
+	// minimum) leave this nil and reject before any action lookup happens.
+	PendingAcceptanceAction *PendingAcceptanceActionScenario
+
 	parsedFundingTxHash bitcoin.Hash
 	parsedFundingTx     *bitcoin.Transaction
+	parsedWalletPKH     [20]byte
+	parsedPendingAction *tbtc.ReservationAction
+}
+
+// PendingAcceptanceAction returns the *tbtc.ReservationAction the driver
+// should seed for the depositor's Pending Acceptance generation. It is
+// built once on Materialize and cached on the scenario so the JSON
+// fields are not re-parsed on every driver call.
+func (rds *ReservedDepositScenario) PendingAcceptanceActionValue() *tbtc.ReservationAction {
+	return rds.parsedPendingAction
+}
+
+// PendingAcceptanceActionScenario captures the snapshotted fields a
+// depositor's requestReservationAcceptance call writes onto the action
+// record the acceptance task consumes. The driver seeds the deposit's
+// current reservation and the corresponding action record from this
+// description.
+type PendingAcceptanceActionScenario struct {
+	RequestNonce              uint64
+	TxMaxFee                  uint64
+	MinAmount                 uint64
+	TermSeconds               uint32
+	TargetWalletPublicKeyHash string
+	// TimeoutAt, when non-zero, sets the action record's snapshotted
+	// timeout. Zero is treated as "unset" and the driver defaults to a
+	// far-future value (now + 24 hours) so scenarios that do not intend
+	// to exercise the timeout safety margin gate do not have to pin a
+	// concrete epoch.
+	TimeoutAt uint32
 }
 
 // ReservationAcceptanceTestScenario represents one test scenario for the
@@ -143,6 +185,14 @@ func LoadReservationAcceptanceTestScenario() (
 func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 	data []byte,
 ) error {
+	type pendingAcceptanceActionScenarioJSON struct {
+		RequestNonce              uint64
+		TxMaxFee                  uint64
+		MinAmount                 uint64
+		TermSeconds               uint32
+		TargetWalletPublicKeyHash string
+	}
+
 	type reservedDepositScenarioJSON struct {
 		FundingTxHash          string
 		FundingOutputIndex     uint32
@@ -158,6 +208,8 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 		Age                    int64
 		SweptAt                int64
 		Vault                  string
+
+		PendingAcceptanceAction *pendingAcceptanceActionScenarioJSON
 	}
 
 	type scenario struct {
@@ -284,25 +336,37 @@ func (rats *ReservationAcceptanceTestScenario) UnmarshalJSON(
 			fundingTx = txFromHex(rd.FundingTxHex)
 		}
 
+		var pendingAction *PendingAcceptanceActionScenario
+		if rd.PendingAcceptanceAction != nil {
+			pendingAction = &PendingAcceptanceActionScenario{
+				RequestNonce:              rd.PendingAcceptanceAction.RequestNonce,
+				TxMaxFee:                  rd.PendingAcceptanceAction.TxMaxFee,
+				MinAmount:                 rd.PendingAcceptanceAction.MinAmount,
+				TermSeconds:               rd.PendingAcceptanceAction.TermSeconds,
+				TargetWalletPublicKeyHash: rd.PendingAcceptanceAction.TargetWalletPublicKeyHash,
+			}
+		}
+
 		rats.ReservedDeposits = append(
 			rats.ReservedDeposits,
 			&ReservedDepositScenario{
-				FundingTxHash:          rd.FundingTxHash,
-				FundingOutputIndex:     rd.FundingOutputIndex,
-				FundingTxConfirmations: rd.FundingTxConfirmations,
-				FundingTxHex:           rd.FundingTxHex,
-				WalletPublicKeyHash:    rd.WalletPublicKeyHash,
-				Depositor:              rd.Depositor,
-				BlindingFactor:         rd.BlindingFactor,
-				RefundPublicKeyHash:    rd.RefundPublicKeyHash,
-				RefundLocktime:         rd.RefundLocktime,
-				Amount:                 rd.Amount,
-				RevealBlock:            rd.RevealBlock,
-				Age:                    rd.Age,
-				SweptAt:                rd.SweptAt,
-				Vault:                  rd.Vault,
-				parsedFundingTxHash:    fundingTxHash,
-				parsedFundingTx:        fundingTx,
+				FundingTxHash:           rd.FundingTxHash,
+				FundingOutputIndex:      rd.FundingOutputIndex,
+				FundingTxConfirmations:  rd.FundingTxConfirmations,
+				FundingTxHex:            rd.FundingTxHex,
+				WalletPublicKeyHash:     rd.WalletPublicKeyHash,
+				Depositor:               rd.Depositor,
+				BlindingFactor:          rd.BlindingFactor,
+				RefundPublicKeyHash:     rd.RefundPublicKeyHash,
+				RefundLocktime:          rd.RefundLocktime,
+				Amount:                  rd.Amount,
+				RevealBlock:             rd.RevealBlock,
+				Age:                     rd.Age,
+				SweptAt:                 rd.SweptAt,
+				Vault:                   rd.Vault,
+				PendingAcceptanceAction: pendingAction,
+				parsedFundingTxHash:     fundingTxHash,
+				parsedFundingTx:         fundingTx,
 			},
 		)
 	}
@@ -345,6 +409,7 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 	var walletHash [20]byte
 	if len(rds.WalletPublicKeyHash) > 0 {
 		copy(walletHash[:], hexToSlice(rds.WalletPublicKeyHash))
+		rds.parsedWalletPKH = walletHash
 	}
 
 	var vault *chain.Address
@@ -355,6 +420,33 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 
 	age := time.Duration(rds.Age) * time.Second
 	revealedAt := time.Now().Add(-age)
+
+	if rds.PendingAcceptanceAction != nil {
+		var targetHash [20]byte
+		if len(rds.PendingAcceptanceAction.TargetWalletPublicKeyHash) > 0 {
+			copy(
+				targetHash[:],
+				hexToSlice(rds.PendingAcceptanceAction.TargetWalletPublicKeyHash),
+			)
+		}
+		// Default the generation's timeout to a far-future value so the
+		// signer-time timeout safety margin gate (REQUEST_TIMEOUT_SAFETY_MARGIN,
+		// 2 hours in WalletProposalValidatorConstants.sol) does not skip
+		// scenarios that intentionally exercise the gate separately.
+		timeoutAt := rds.PendingAcceptanceAction.TimeoutAt
+		if timeoutAt == 0 {
+			timeoutAt = uint32(time.Now().Add(24 * time.Hour).Unix())
+		}
+		rds.parsedPendingAction = &tbtc.ReservationAction{
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			State:                     tbtc.ReservationActionStatePending,
+			TargetWalletPublicKeyHash: targetHash,
+			TxMaxFee:                  rds.PendingAcceptanceAction.TxMaxFee,
+			MinAmount:                 rds.PendingAcceptanceAction.MinAmount,
+			TermSeconds:               rds.PendingAcceptanceAction.TermSeconds,
+			TimeoutAt:                 timeoutAt,
+		}
+	}
 
 	return &ReservedDeposit{
 		FundingTxHash:       rds.parsedFundingTxHash,

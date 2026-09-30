@@ -575,6 +575,29 @@ type Chain interface {
 	ReservationChain
 }
 
+// ReservationReanchorRequestReceiptStatus describes the outcome of a
+// receipt lookup for a submitted RequestReservationReanchor transaction.
+// The RequestReservationReanchor submission launches mining and gas
+// bumping in the background and returns before the transaction is mined,
+// so callers track the returned transaction hash across coordination
+// rounds and resolve the request's fate from its receipt.
+type ReservationReanchorRequestReceiptStatus int
+
+const (
+	// ReservationReanchorRequestReceiptMined is the request transaction
+	// mined successfully: the new action generation exists on chain.
+	ReservationReanchorRequestReceiptMined ReservationReanchorRequestReceiptStatus = iota
+	// ReservationReanchorRequestReceiptReverted is the request transaction
+	// mined but reverted on chain: no action generation was written.
+	ReservationReanchorRequestReceiptReverted
+	// ReservationReanchorRequestReceiptPending is the request transaction
+	// is still in the mempool with no receipt yet.
+	ReservationReanchorRequestReceiptPending
+	// ReservationReanchorRequestReceiptNotFound is the request transaction
+	// was never observed on this node; it may have been dropped.
+	ReservationReanchorRequestReceiptNotFound
+)
+
 // ReservationChain defines the subset of the TBTC chain interface that pertains
 // specifically to UTXO reservation Bridge operations. The reservation state
 // machine is implemented behind Bridge.fallback's delegatecall to the
@@ -583,21 +606,25 @@ type Chain interface {
 // routes through the Bridge's storage rather than the router's empty
 // standalone storage.
 type ReservationChain interface {
-	// RequestReservationAcceptance requests a reservation acceptance action
-	// generation for the given reservation. The reservation must be in a
-	// state that allows acceptance.
-	// Eligibility is checked by the reservation proposal builder and enforced by the Bridge.
-	RequestReservationAcceptance(
-		reservationKey *big.Int,
-		walletPublicKeyHash [20]byte,
-	) error
-
 	// RequestReservationReanchor requests a reservation re-anchor action
 	// generation for the given reservation, targeting the given wallet.
+	// The returned bytes are the 32-byte hash of the submitted
+	// transaction; callers that submit the request track it across
+	// rounds via GetReservationReanchorRequestReceipt. A returned error
+	// means the submission itself failed before or at send time, so
+	// there is no transaction to track.
 	RequestReservationReanchor(
 		reservationKey *big.Int,
 		targetWalletPublicKeyHash [20]byte,
-	) error
+	) ([32]byte, error)
+
+	// GetReservationReanchorRequestReceipt reports the mining status of
+	// the RequestReservationReanchor transaction identified by txHash:
+	// mined successfully, mined but reverted, still pending in the
+	// mempool, or not observed.
+	GetReservationReanchorRequestReceipt(
+		txHash [32]byte,
+	) (ReservationReanchorRequestReceiptStatus, error)
 
 	// SubmitReservationAcceptanceProof submits an SPV proof for the given
 	// reservation acceptance action generation. The call is restricted to
@@ -690,6 +717,24 @@ type ReservationChain interface {
 	// ActiveReservationsCount returns the current count of active
 	// reservations across all wallets and the cap on that count.
 	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
+
+	// ReservationVaultFeeDebtSat returns the ReservationVault's
+	// outstanding in-kind fee debt in satoshi, read from the vault's
+	// inKindFeeDebtSat view. If the reservation vault address is
+	// zero (vault not configured), it returns zero with a nil
+	// error: the skip sentinel the metric side consumes, not an
+	// error.
+	ReservationVaultFeeDebtSat() (uint64, error)
+
+	// ReservationVaultFeeReserveTbtcBaseUnits returns the
+	// ReservationVault's TBTC fee-reserve balance in TBTC base
+	// units: TBTC is a 1e18 base-unit token, so the returned value
+	// is whole TBTC x 1e18. The value can exceed uint64 range, so
+	// it is returned as *big.Int. If the reservation vault address
+	// is zero (vault not configured), it returns zero with a nil
+	// error: the skip sentinel the metric side consumes, not an
+	// error.
+	ReservationVaultFeeReserveTbtcBaseUnits() (*big.Int, error)
 
 	// IsReservedDeposit returns true if the given deposit was revealed
 	// with the reservation vault address and is therefore a reservation
@@ -823,6 +868,7 @@ type ReservationReanchoredEvent struct {
 	NewWalletPublicKeyHash [20]byte
 	NewAnchorTxHash        [32]byte
 	NewAnchorAmount        uint64
+	MinerFee               uint64
 	BlockNumber            uint64
 }
 
@@ -833,23 +879,6 @@ type ReservationReanchoredEventFilter struct {
 	EndBlock               *uint64
 	ReservationKey         []*big.Int
 	NewWalletPublicKeyHash [][20]byte
-}
-
-// ReservationActionTimedOutEvent represents a reservation action timed out
-// event.
-type ReservationActionTimedOutEvent struct {
-	ReservationKey *big.Int
-	RequestNonce   uint64
-	ActionType     ReservationActionType
-	BlockNumber    uint64
-}
-
-// ReservationActionTimedOutEventFilter is a component allowing to filter
-// ReservationActionTimedOutEvent.
-type ReservationActionTimedOutEventFilter struct {
-	StartBlock     uint64
-	EndBlock       *uint64
-	ReservationKey []*big.Int
 }
 
 // ReservationActionSupersededEvent represents a reservation action superseded

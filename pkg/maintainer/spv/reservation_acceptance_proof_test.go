@@ -85,6 +85,8 @@ func TestSubmitReservationAcceptanceProof(t *testing.T) {
 		ActionType:                tbtc.ReservationActionTypeAcceptance,
 		State:                     tbtc.ReservationActionStatePending,
 		TargetWalletPublicKeyHash: walletPKH,
+		TermSeconds:               86400,
+		MinAmount:                 100000,
 	})
 
 	spvChain.submitReservationAcceptanceProofHook = func(
@@ -124,6 +126,29 @@ func TestSubmitReservationAcceptanceProof(t *testing.T) {
 	// Check metrics.
 	if count := metricsRecorder.counts["reservation_acceptance_proof_submissions_total"]; count != 1 {
 		t.Errorf("unexpected metrics count: got %f, want 1", count)
+	}
+
+	// Positive path: the Bridge settles generations in TimedOut state
+	// as well, so a TimedOut generation must still submit (the
+	// shared submitter rejects only non-settleable states).
+	spvChain.setReservationAction(reservationKey, requestNonce, &tbtc.ReservationAction{
+		ActionType:                tbtc.ReservationActionTypeAcceptance,
+		State:                     tbtc.ReservationActionStateTimedOut,
+		TargetWalletPublicKeyHash: walletPKH,
+		TermSeconds:               86400,
+		MinAmount:                 100000,
+	})
+	if err := submitReservationAcceptanceProof(
+		anchorTx.Hash(),
+		requiredConfirmations,
+		reservationKey,
+		requestNonce,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+		nil,
+	); err != nil {
+		t.Fatalf("expected a TimedOut acceptance generation to submit: %v", err)
 	}
 
 	// Negative path: nil reservationKey.
