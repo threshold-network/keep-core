@@ -57,6 +57,13 @@ const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
 // without waiting on the real one-minute interval.
 var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollInterval
 
+// reservationWatcherPanicRecovered runs at the end of a watcher
+// goroutine's recovered-panic path, right after
+// recordReservationWatcherDeath. It does nothing in production; declared
+// as a var solely so tests in this package can wait until that path has
+// finished.
+var reservationWatcherPanicRecovered = func() {}
+
 // reservationDefaultLookBackBlocks bounds every reservation watcher's
 // startup/first-pass catch-up scan window: 30 days at 12s/block. It is
 // the single source of truth for this bound, replacing what were
@@ -439,6 +446,7 @@ func WireReservationWatchers(
 					r,
 				)
 				recordReservationWatcherDeath(metricsRecorder)
+				reservationWatcherPanicRecovered()
 			}
 			if !resultSent {
 				resultCh <- result
@@ -489,6 +497,7 @@ func WireReservationWatchers(
 					r,
 				)
 				recordReservationWatcherDeath(metricsRecorder)
+				reservationWatcherPanicRecovered()
 			}
 			if !resultSent {
 				resultCh <- result

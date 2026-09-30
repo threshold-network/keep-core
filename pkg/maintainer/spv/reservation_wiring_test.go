@@ -1171,13 +1171,18 @@ func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) 
 // process crash) is the proof the guard holds end-to-end, not just at the
 // unit level above.
 //
-// The watcher goroutines' completion is signalled, not slept for: each
-// intercepted chain read sends on deathSignal before it panics, so the
-// test waits - with a bounded timeout - for both goroutines to actually
-// reach their forced panic instead of assuming 100ms is enough.
+// The test waits - with a bounded timeout - until both goroutines have
+// finished their recover path (reservationWatcherPanicRecovered runs
+// right after recordReservationWatcherDeath), so it cannot pass before
+// the guarded call has actually run.
 func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	recovered := make(chan struct{}, 2)
+	previousHook := reservationWatcherPanicRecovered
+	reservationWatcherPanicRecovered = func() { recovered <- struct{}{} }
+	t.Cleanup(func() { reservationWatcherPanicRecovered = previousHook })
 
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -1199,25 +1204,18 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// One signal per watcher goroutine at its forced panic; waiting for
-	// both (bounded) is the assertion setup - a goroutine that never
-	// reaches its chain read means the death path was not actually
-	// exercised, and the test fails loudly rather than passing by
-	// timing.
+	// One signal per watcher goroutine once its recover path, including
+	// recordReservationWatcherDeath against the typed-nil recorder, has
+	// completed. A crash there would take the whole test process down,
+	// so receiving both signals is the assertion.
 	deadline := time.After(5 * time.Second)
 	for range 2 {
 		select {
-		case <-deathSignal:
+		case <-recovered:
 		case <-deadline:
-			t.Fatal("a watcher goroutine never reached its forced panic")
+			t.Fatal("a watcher goroutine never completed its recovered-panic path")
 		}
 	}
-
-	// Both watcher goroutines have reached their forced panic and
-	// dispatched their recover handlers, which run
-	// recordReservationWatcherDeath against the typed-nil recorder;
-	// a crash would take the whole test process down, so surviving to
-	// here (with both signals observed) is the assertion.
 }
 
 // TestScanReservationStrandingStartupRegistrations verifies that the
