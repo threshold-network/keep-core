@@ -1406,8 +1406,10 @@ func (mbc *MockBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 // would pass a lenient one: the wallet state, the pending acceptance action
 // record and its timeout margin, the deposit's reveal/age/sweep/reserved
 // state and vault routing, the anchor fee bounds against the generation's
-// snapshotted max fee, the snapshotted minimum, the refund safety margin,
-// and the deposit's controlling wallet.
+// snapshotted max fee, the snapshotted minimum, the deposit extra info
+// (funding transaction hash and deposit locking script, as
+// validateDepositExtraInfo checks them), the refund safety margin, and
+// the deposit's controlling wallet.
 func (lc *LocalChain) ValidateReservationAnchorProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -1469,7 +1471,9 @@ func (lc *LocalChain) ValidateReservationAnchorProposal(
 		) {
 		return fmt.Errorf("deposit min age not achieved yet")
 	}
-	if !depositRequest.SweptAt.IsZero() {
+	// The chain adapter reports an unswept deposit as the UNIX epoch
+	// (sweptAt == 0 on-chain); a zero time.Time is accepted as well.
+	if !depositRequest.SweptAt.IsZero() && depositRequest.SweptAt.Unix() != 0 {
 		return fmt.Errorf("deposit already swept")
 	}
 
@@ -1511,6 +1515,48 @@ func (lc *LocalChain) ValidateReservationAnchorProposal(
 	if deposit == nil {
 		return fmt.Errorf("deposit extra info is required")
 	}
+
+	// Mirror validateDepositExtraInfo: the extra info's funding
+	// transaction must hash to the proposal's funding transaction hash,
+	// and its output at the proposal's index must lock funds with the
+	// deposit script rebuilt from the on-chain depositor and extra data
+	// plus the extra info's reveal fields, as P2SH or P2WSH.
+	fundingTx := depositExtraInfo.FundingTx
+	if fundingTx == nil ||
+		fundingTx.Hash() != proposal.DepositFundingTxHash {
+		return fmt.Errorf("extra info funding tx hash does not match")
+	}
+	if int(proposal.DepositFundingOutputIndex) >= len(fundingTx.Outputs) {
+		return fmt.Errorf("extra info funding output script does not match")
+	}
+	depositScript, err := (&tbtc.Deposit{
+		Depositor:           depositRequest.Depositor,
+		ExtraData:           depositRequest.ExtraData,
+		BlindingFactor:      deposit.BlindingFactor,
+		WalletPublicKeyHash: deposit.WalletPublicKeyHash,
+		RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+		RefundLocktime:      deposit.RefundLocktime,
+	}).Script()
+	if err != nil {
+		return fmt.Errorf("cannot build deposit script: [%v]", err)
+	}
+	p2wsh, err := bitcoin.PayToWitnessScriptHash(
+		bitcoin.WitnessScriptHash(depositScript),
+	)
+	if err != nil {
+		return err
+	}
+	p2sh, err := bitcoin.PayToScriptHash(bitcoin.ScriptHash(depositScript))
+	if err != nil {
+		return err
+	}
+	fundingOutputScript :=
+		fundingTx.Outputs[proposal.DepositFundingOutputIndex].PublicKeyScript
+	if !bytes.Equal(fundingOutputScript, p2wsh) &&
+		!bytes.Equal(fundingOutputScript, p2sh) {
+		return fmt.Errorf("extra info funding output script does not match")
+	}
+
 	// The refund locktime is stored little-endian on-chain; reverse it
 	// back to a UNIX timestamp and preserve the 24-hour refund safety
 	// margin the on-chain validator enforces.

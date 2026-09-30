@@ -61,31 +61,6 @@ func TestReservationAcceptanceTask_RecordsSaturationGauges(t *testing.T) {
 	// distinguish a real wired value from a coincidental zero default.
 	lc.SetWalletReservations(walletPublicKeyHash, []*big.Int{big.NewInt(1), big.NewInt(2)})
 
-	// Run scans PastDepositRevealedEvents with a filter bounded by
-	// ReservationAcceptanceLookBackBlocks; register an empty match so the
-	// call succeeds and Run proceeds to (correctly) report no candidate,
-	// rather than erroring on an unregistered filter.
-	currentBlock := uint64(300000)
-	filterStartBlock := currentBlock - ReservationAcceptanceLookBackBlocks
-	if err := lc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			// Targets a different vault so it is filtered out immediately
-			// without needing a matching deposit request/funding tx.
-			BlockNumber:         filterStartBlock,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			Vault: &[]chain.Address{chain.Address(
-				"0xOtherVaultAddress1234567890abcdef123456789012",
-			)}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	task := NewReservationAcceptanceTask(lc, btcChain)
 	recorder := newFakeMetricsRecorder()
 	task.setMetricsRecorder(recorder)
@@ -253,7 +228,7 @@ func TestReservationAcceptanceTask_VaultFeeReadErrorKeepsGauges(t *testing.T) {
 
 // TestReservationAcceptanceTask_ZeroVaultAddressZeroesFeeGauges asserts
 // an unconfigured (zero-address) reservation vault short-circuits
-// findReservationAcceptanceCandidate before any fee-gauge read chain
+// findReservationAcceptanceCandidates before any fee-gauge read chain
 // call (the wrapper's nonzero fee values below are tripwires:
 // publishing them would mean the fee methods ran on the unconfigured
 // path), while the two fee gauges are still published as zero: a
@@ -378,9 +353,9 @@ func TestReservationAcceptanceTask_UnconfiguredVaultZeroesFeeGauges(t *testing.T
 }
 
 // runFeeGaugeFixture configures a LocalChain with a live wallet, a
-// configured (non-zero) reservation vault, a block counter, and one
-// DepositRevealed event targeting a different vault so the scan
-// completes with no candidate. Shared by the fee-gauge tests.
+// configured (non-zero) reservation vault and a block counter. The
+// embedded LocalChain reports no acceptance requests, so Run completes
+// with no candidate. Shared by the fee-gauge tests.
 func runFeeGaugeFixture(t *testing.T, lc *LocalChain) {
 	t.Helper()
 
@@ -401,30 +376,11 @@ func runFeeGaugeFixture(t *testing.T, lc *LocalChain) {
 	blockCounter := NewMockBlockCounter()
 	blockCounter.SetCurrentBlock(300000)
 	lc.SetBlockCounter(blockCounter)
-
-	currentBlock := uint64(300000)
-	filterStartBlock := currentBlock - ReservationAcceptanceLookBackBlocks
-	if err := lc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         filterStartBlock,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			Vault: &[]chain.Address{chain.Address(
-				"0xOtherVaultAddress1234567890abcdef123456789012",
-			)}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // runZeroVaultFixture configures a LocalChain with a live wallet and a
 // zero-address reservation vault, so
-// findReservationAcceptanceCandidate returns at the "reservation
+// findReservationAcceptanceCandidates returns at the "reservation
 // vault not configured" gate before any chain read (including the
 // fee reads) or any gauge publication.
 func runZeroVaultFixture(t *testing.T, lc *LocalChain) {
@@ -446,7 +402,7 @@ func runZeroVaultFixture(t *testing.T, lc *LocalChain) {
 // through Run(), so these tests can hold each candidate's Bitcoin RPCs
 // under precise, deterministic control (artificial concurrency tracking,
 // artificial per-candidate latency, and a context that is never
-// resolved) without depending on findReservationAcceptanceCandidate's
+// resolved) without depending on findReservationAcceptanceCandidates'
 // unrelated eligibility gates.
 
 // concurrencyTrackingBTCChain wraps LocalBitcoinChain and records, across
@@ -637,9 +593,9 @@ func (c *latencyBTCChain) GetTransaction(
 
 // TestFetchReservationAcceptanceFundingTxs_OldestFirstOrderingPreserved is
 // a regression test asserting that next(i) always returns candidate i's
-// own lookup result, even when a later (in oldest-first order)
+// own lookup result, even when a later (in candidate order)
 // candidate's fetch races ahead and completes first -- the property
-// findReservationAcceptanceCandidate's oldest-first selection loop
+// Run's in-order candidate loop
 // depends on to return the correct candidate regardless of which
 // underlying network call happens to finish first.
 func TestFetchReservationAcceptanceFundingTxs_OldestFirstOrderingPreserved(t *testing.T) {
@@ -725,7 +681,7 @@ func (c *countingBTCChain) callCount() int {
 
 // TestFetchReservationAcceptanceFundingTxs_StopsAfterEarlyMatch is a
 // regression test for the eager-fetch cost the PR-4324 review flagged: a
-// caller that only needs the oldest-first candidate's result and then
+// caller that only needs the first candidate's result and then
 // calls stop() must not cause every remaining candidate's Bitcoin RPCs to
 // be dispatched, even with a full maxReservationAcceptanceCandidatesPerRun
 // backlog pending. Before the fix, this scenario issued a GetTransaction
@@ -788,160 +744,6 @@ func TestFetchReservationAcceptanceFundingTxs_StopsAfterEarlyMatch(t *testing.T)
 				"after an early stop, observed %d",
 			reservationAcceptanceFundingTxLookupWorkers,
 			btcChain.callCount(),
-		)
-	}
-}
-
-// activeReservationsCapChain wraps LocalChain, overriding
-// ActiveReservationsCount to report a usable (count, cap) pair. The
-// embedded LocalChain's own ActiveReservationsCount always reports (0, 0),
-// and checkReservationAcceptanceEligibility fails closed whenever
-// maxActiveReservations is 0 (treating it as "not configured" rather than
-// unlimited), so no candidate can ever pass eligibility against the bare
-// fixture -- this override is required for any test that needs
-// findReservationAcceptanceCandidate to actually find a candidate.
-type activeReservationsCapChain struct {
-	*LocalChain
-}
-
-func (c *activeReservationsCapChain) ActiveReservationsCount() (uint32, uint32, error) {
-	return 0, 1000, nil
-}
-
-// TestFindReservationAcceptanceCandidate_SkippedCandidatesDoNotConsumeCap
-// is a regression test for the cap-vs-skip ordering bug the PR-4324 review
-// flagged: candidatesExamined used to be incremented before the
-// skipDepositKeys check, so a deposit already rejected earlier in the same
-// Run() call -- and therefore present in skipDepositKeys on Run's retry --
-// still consumed a slot of the maxReservationAcceptanceCandidatesPerRun
-// budget even though it was never actually re-examined this pass. This
-// registers exactly maxReservationAcceptanceCandidatesPerRun already-
-// skipped candidates ahead of one genuinely eligible candidate, in
-// oldest-first order: under the pre-fix ordering the cap would be
-// exhausted by the skipped candidates alone, and the eligible one -- which
-// sorts after all of them -- would never be reached. Under the fix,
-// skipped candidates cost nothing against the cap and the eligible one is
-// found.
-func TestFindReservationAcceptanceCandidate_SkippedCandidatesDoNotConsumeCap(t *testing.T) {
-	lc := &activeReservationsCapChain{LocalChain: NewLocalChain()}
-	btcChain := NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-
-	walletPublicKeyHash := [20]byte{9, 8, 7, 6, 5, 4, 3, 2, 1}
-	vault := chain.Address("0xReservationVaultAddress1234567890abcdef12345678")
-
-	lc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault:          vault,
-		ReservationMinAmount:      1000,
-		ReservationTxMaxFee:       5000,
-		MaxReservationsPerWallet:  5,
-		ReservationMaxTotalAmount: 100000000,
-	})
-	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
-	lc.SetDepositMinAge(3600)
-
-	blockCounter := NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(300000)
-	lc.SetBlockCounter(blockCounter)
-
-	currentBlock := uint64(300000)
-	filterStartBlock := currentBlock - ReservationAcceptanceLookBackBlocks
-	filter := &tbtc.DepositRevealedEventFilter{
-		StartBlock:          filterStartBlock,
-		EndBlock:            &currentBlock,
-		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-	}
-
-	// maxReservationAcceptanceCandidatesPerRun candidates, all pre-marked
-	// as already skipped and given the earliest block numbers, so
-	// oldest-first order walks every one of them before the eligible
-	// candidate registered below.
-	skipDepositKeys := make(map[string]bool)
-	for i := range maxReservationAcceptanceCandidatesPerRun {
-		fundingTxHash := bitcoin.Hash{byte(i)}
-		if err := lc.AddPastDepositRevealedEvent(filter, &tbtc.DepositRevealedEvent{
-			BlockNumber:         filterStartBlock + uint64(i),
-			WalletPublicKeyHash: walletPublicKeyHash,
-			Vault:               &vault,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		depositKey := lc.BuildDepositKey(fundingTxHash, 0)
-		skipDepositKeys[depositKey.Text(16)] = true
-	}
-
-	// One genuinely eligible candidate, given the latest block number so
-	// it is walked last, after every skipped candidate above.
-	eligibleFundingTxHash := bitcoin.Hash{0xEE}
-	eligibleAmount := uint64(2000000)
-	if err := lc.AddPastDepositRevealedEvent(filter, &tbtc.DepositRevealedEvent{
-		BlockNumber:         filterStartBlock + uint64(maxReservationAcceptanceCandidatesPerRun),
-		WalletPublicKeyHash: walletPublicKeyHash,
-		Vault:               &vault,
-		FundingTxHash:       eligibleFundingTxHash,
-		FundingOutputIndex:  0,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	lc.SetDepositRequest(eligibleFundingTxHash, 0, &tbtc.DepositChainRequest{
-		Amount:     eligibleAmount,
-		RevealedAt: time.Now().Add(-2 * time.Hour),
-		SweptAt:    time.Unix(0, 0),
-		Vault:      &vault,
-	})
-	btcChain.SetTransaction(eligibleFundingTxHash, &bitcoin.Transaction{})
-	btcChain.SetTransactionConfirmations(
-		eligibleFundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-	eligibleDepositKey := lc.BuildDepositKey(eligibleFundingTxHash, 0)
-	lc.SetReservation(eligibleDepositKey, &tbtc.Reservation{
-		State:        tbtc.ReservationStateUnknown,
-		RequestNonce: 0,
-	})
-	// Seed a Pending Acceptance action at nonce 0 targeting the wallet
-	// so the candidate clears findReservationAcceptanceCandidate's
-	// action-record gate -- the precondition the production validator
-	// enforces -- and the cap-vs-skip ordering being tested is the only
-	// thing that can keep this candidate from being returned.
-	lc.SetReservationAction(eligibleDepositKey, 0, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  5000,
-		MinAmount:                 1000,
-		TermSeconds:               86400,
-		// Far-future TimeoutAt so the validator's timeout safety-margin
-		// gate (REQUEST_TIMEOUT_SAFETY_MARGIN, 2 hours) does not skip
-		// this candidate; the cap-vs-skip ordering is the only thing
-		// under test here.
-		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
-	})
-
-	task := NewReservationAcceptanceTask(lc, btcChain)
-
-	candidate, err := task.findReservationAcceptanceCandidate(
-		logger,
-		walletPublicKeyHash,
-		skipDepositKeys,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if candidate == nil {
-		t.Fatal(
-			"expected the eligible candidate past the skipped window to " +
-				"be found; got nil, which means the skipped candidates " +
-				"consumed the per-run cap before it was ever examined",
-		)
-	}
-	if candidate.DepositKey.Cmp(eligibleDepositKey) != 0 {
-		t.Errorf(
-			"expected the found candidate's deposit key to be [%v], got [%v]",
-			eligibleDepositKey,
-			candidate.DepositKey,
 		)
 	}
 }
