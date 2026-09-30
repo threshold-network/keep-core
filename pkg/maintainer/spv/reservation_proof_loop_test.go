@@ -1260,7 +1260,7 @@ func TestProveReservationAcceptanceActions_LeavesPendingOnChainError(t *testing.
 		WalletPublicKeyHash: [20]byte{1},
 		BlockNumber:         500,
 	})
-	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
+	spvChain.getReservationActionErr = fmt.Errorf("transient RPC failure")
 
 	scanState := newReservationProofScanState()
 	config := Config{
@@ -1313,7 +1313,7 @@ func TestProveReservationReanchorActions_LeavesPendingOnChainError(t *testing.T)
 		TargetWalletPublicKeyHash: [20]byte{2},
 		BlockNumber:               500,
 	})
-	// Intentionally do NOT set the reservation action on spvChain, so GetReservationAction fails.
+	spvChain.getReservationActionErr = fmt.Errorf("transient RPC failure")
 
 	scanState := newReservationProofScanState()
 	config := Config{
@@ -2011,14 +2011,19 @@ func TestProveReservationReanchorActions_TimedOutUnbounded(t *testing.T) {
 // superseded, vetoed, and unknown) are evicted from the pending-event map
 // with no proof submission, in both the acceptance and re-anchor scans.
 func TestProveReservationActions_EvictNonSettleableStates(t *testing.T) {
+	// absent leaves the generation unseeded, so the fake returns the zero
+	// record the Bridge's reservationActions mapping returns for a key it
+	// has never written.
 	states := []struct {
-		name  string
-		state tbtc.ReservationActionState
+		name   string
+		state  tbtc.ReservationActionState
+		absent bool
 	}{
-		{"settled", tbtc.ReservationActionStateSettled},
-		{"superseded", tbtc.ReservationActionStateSuperseded},
-		{"vetoed", tbtc.ReservationActionStateVetoed},
-		{"unknown", tbtc.ReservationActionStateUnknown},
+		{"settled", tbtc.ReservationActionStateSettled, false},
+		{"superseded", tbtc.ReservationActionStateSuperseded, false},
+		{"vetoed", tbtc.ReservationActionStateVetoed, false},
+		{"unknown", tbtc.ReservationActionStateUnknown, false},
+		{"absent", tbtc.ReservationActionStateUnknown, true},
 	}
 
 	for _, s := range states {
@@ -2036,6 +2041,12 @@ func TestProveReservationActions_EvictNonSettleableStates(t *testing.T) {
 					MinAmount:                 1000,
 				},
 			)
+			if s.absent {
+				delete(
+					fixture.spvChain.reservationActions,
+					buildReservationActionKey(fixture.reservationKey, fixture.requestNonce),
+				)
+			}
 
 			if err := proveReservationAcceptanceActions(
 				fixture.state,
@@ -2071,6 +2082,12 @@ func TestProveReservationActions_EvictNonSettleableStates(t *testing.T) {
 					MinAmount:                 1000,
 				},
 			)
+			if s.absent {
+				delete(
+					fixture.spvChain.reservationActions,
+					buildReservationActionKey(fixture.reservationKey, fixture.requestNonce),
+				)
+			}
 
 			if err := proveReservationReanchorActions(
 				fixture.state,

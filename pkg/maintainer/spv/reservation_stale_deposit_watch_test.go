@@ -591,7 +591,7 @@ func TestReservationStaleDepositWatcher_GetReservationChainError(t *testing.T) {
 	wallet := walletPKH()
 	spvChain.setReservedDeposit(key, wallet, true)
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
-	// No spvChain.setReservation: GetReservation returns an error.
+	spvChain.getReservationErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
 	seedStaleDeadline(watcher, key, 100)
@@ -621,7 +621,7 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 	spvChain.setReservedDeposit(key, wallet, true)
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
 	spvChain.setReservation(key, &tbtc.Reservation{RequestNonce: 1})
-	// GetReservationAction is NOT seeded, so it returns an error.
+	spvChain.getReservationActionErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
 	seedStaleDeadline(watcher, key, 100)

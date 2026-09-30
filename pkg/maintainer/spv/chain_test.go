@@ -107,10 +107,12 @@ type localChain struct {
 	// production zero-value default when no pre-termination event is found.
 	walletTerminationCauses     map[[20]byte]tbtc.WalletTerminationCause
 	walletTerminationCauseCalls int
+	getReservationCalls         int
 
 	// Error-injection fields for the reservation watcher chain-error
 	// passthrough tests: nil (the default) means the corresponding method
 	// falls through to its normal, table-driven behavior.
+	getReservationErr                      error
 	getReservationActionErr                error
 	walletReservationsErr                  error
 	isReservedDepositErr                   error
@@ -1062,19 +1064,35 @@ func (lc *localChain) setWalletTerminationCause(
 }
 
 // GetReservation returns the reservation previously installed via
-// setReservation. Returns an error when no test record is installed.
+// setReservation. An absent key yields a zero record
+// (ReservationStateUnknown), like the Bridge's reservations mapping.
 func (lc *localChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
 
+	lc.getReservationCalls++
+
+	if lc.getReservationErr != nil {
+		return nil, lc.getReservationErr
+	}
+
 	key := bigIntKey(reservationKey)
 	reservation, ok := lc.reservations[key]
 	if !ok {
-		return nil, fmt.Errorf("no reservation for given key")
+		return &tbtc.Reservation{}, nil
 	}
 	return reservation, nil
+}
+
+// getReservationCallCount returns how many times GetReservation has been
+// invoked.
+func (lc *localChain) getReservationCallCount() int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.getReservationCalls
 }
 
 // setReservation installs a reservation for GetReservation to return.
@@ -1089,7 +1107,9 @@ func (lc *localChain) setReservation(
 }
 
 // GetReservationAction returns the reservation action previously installed
-// via setReservationAction. Returns an error if the action is not set.
+// via setReservationAction. An absent generation yields a zero record
+// (ReservationActionStateUnknown), like the Bridge's reservationActions
+// mapping.
 func (lc *localChain) GetReservationAction(
 	reservationKey *big.Int,
 	requestNonce uint64,
@@ -1104,7 +1124,7 @@ func (lc *localChain) GetReservationAction(
 	key := buildReservationActionKey(reservationKey, requestNonce)
 	action, ok := lc.reservationActions[key]
 	if !ok {
-		return nil, fmt.Errorf("no action for given reservation/nonce")
+		return &tbtc.ReservationAction{}, nil
 	}
 	return action, nil
 }
@@ -1263,7 +1283,7 @@ func (lc *localChain) setReservedDeposit(
 
 // PastReservationAcceptanceRequestedEvents returns the events previously
 // installed via addReservationAcceptanceRequestedEvent, applying the
-// filter's StartBlock and ReservationKey constraints.
+// filter's StartBlock, EndBlock and ReservationKey constraints.
 func (lc *localChain) PastReservationAcceptanceRequestedEvents(
 	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
 ) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
@@ -1273,6 +1293,9 @@ func (lc *localChain) PastReservationAcceptanceRequestedEvents(
 	var result []*tbtc.ReservationAcceptanceRequestedEvent
 	for _, event := range lc.reservationAcceptanceRequestedEvents {
 		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && filter.EndBlock != nil && event.BlockNumber > *filter.EndBlock {
 			continue
 		}
 		if filter != nil && len(filter.ReservationKey) > 0 {
@@ -1307,7 +1330,7 @@ func (lc *localChain) addReservationAcceptanceRequestedEvent(
 
 // PastReservationReanchorRequestedEvents returns the events previously
 // installed via addReservationReanchorRequestedEvent, applying the
-// filter's StartBlock and ReservationKey constraints.
+// filter's StartBlock, EndBlock and ReservationKey constraints.
 func (lc *localChain) PastReservationReanchorRequestedEvents(
 	filter *tbtc.ReservationReanchorRequestedEventFilter,
 ) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
@@ -1317,6 +1340,9 @@ func (lc *localChain) PastReservationReanchorRequestedEvents(
 	var result []*tbtc.ReservationReanchorRequestedEvent
 	for _, event := range lc.reservationReanchorRequestedEvents {
 		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && filter.EndBlock != nil && event.BlockNumber > *filter.EndBlock {
 			continue
 		}
 		if filter != nil && len(filter.ReservationKey) > 0 {
@@ -1362,6 +1388,9 @@ func (lc *localChain) PastNewWalletRegisteredEvents(
 	var result []*tbtc.NewWalletRegisteredEvent
 	for _, event := range lc.newWalletRegisteredEvents {
 		if filter != nil && event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter != nil && filter.EndBlock != nil && event.BlockNumber > *filter.EndBlock {
 			continue
 		}
 		if filter != nil && len(filter.EcdsaWalletID) > 0 {
