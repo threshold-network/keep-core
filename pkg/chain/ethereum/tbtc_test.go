@@ -201,6 +201,10 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 		ActionDataHash:         actionDataHash,
 		SourceAnchorUtxoHash:   [32]byte{0x99, 0x88, 0x77, 0x66},
 		IsPartial:              true,
+		// Distinct non-zero snapshots so a dropped or swapped mapping
+		// fails the comparison below instead of matching zero to zero.
+		TermSeconds: 1209600,
+		MinAmount:   25000,
 	}
 
 	// The action-type-to-hash-field routing (redemption -> redeemer output
@@ -257,6 +261,8 @@ func TestConvertReservationActionFromAbiType(t *testing.T) {
 				RedeemerOutputScriptHash:  test.expectedRedeemerOutputScriptHash,
 				ExpectedMainUtxoHash:      test.expectedExpectedMainUtxoHash,
 				IsPartial:                 true,
+				TermSeconds:               1209600,
+				MinAmount:                 25000,
 			}
 
 			if !reflect.DeepEqual(expected, action) {
