@@ -144,6 +144,7 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 			RetryCredit:           true,
 			DissolutionEligibleAt: 777,
 			CumulativeReanchorFee: 888, // must not appear anywhere in the output
+			ReanchorCooldownUntil: 999,
 		}
 
 		expected := &tbtc.Reservation{
@@ -165,6 +166,7 @@ func TestConvertReservationFromAbiType(t *testing.T) {
 			RequestNonce:          666,
 			RetryCredit:           true,
 			DissolutionEligibleAt: 777,
+			ReanchorCooldownUntil: 999,
 		}
 
 		actual, err := convertReservationFromAbiType(abiReservation)

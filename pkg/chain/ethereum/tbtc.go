@@ -664,6 +664,7 @@ func convertReservationFromAbiType(
 		RequestNonce:          abiReservation.RequestNonce,
 		RetryCredit:           abiReservation.RetryCredit,
 		DissolutionEligibleAt: abiReservation.DissolutionEligibleAt,
+		ReanchorCooldownUntil: abiReservation.ReanchorCooldownUntil,
 	}, nil
 }
 

@@ -80,6 +80,10 @@ type Reservation struct {
 	// DissolutionEligibleAt is the UNIX timestamp at which the current term
 	// becomes eligible for dissolution.
 	DissolutionEligibleAt uint32
+	// ReanchorCooldownUntil is the UNIX timestamp before which a
+	// permissionless re-anchor request reverts. A re-anchor action timeout
+	// sets it to the timeout time plus the timed-out action's duration.
+	ReanchorCooldownUntil uint32
 }
 
 // ReservationActionType represents the type of a reservation action
