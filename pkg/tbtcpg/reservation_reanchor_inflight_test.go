@@ -57,6 +57,7 @@ func newInFlightReanchorFixture(t *testing.T) (
 		ReservationTxMaxFee:      100000,
 		MaxReservationsPerWallet: 5,
 		ReservationMinAmount:     1000,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -125,8 +126,7 @@ func seedResumableReanchorGeneration(
 		State:                     tbtc.ReservationActionStatePending,
 		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
 		TxMaxFee:                  100000,
-		MinAmount:                 1000,
-		TermSeconds:               86400,
+		Amount:                    200000,
 		TimeoutAt:                 uint32(timeoutAt.Unix()),
 	})
 }
@@ -274,30 +274,42 @@ func TestReservationReanchorTask_UnminedRequest_MinedBeforeNextRound_Resumes(t *
 	}
 }
 
-// TestReservationReanchorTask_UnminedRequest_ReservationLeftWallet pins
-// that a reservation whose custody moved away from the source wallet
-// between rounds is not requested again: round 2 reads the wallet's
-// reservation list from chain state, finds it empty, and issues nothing.
-func TestReservationReanchorTask_UnminedRequest_ReservationLeftWallet(t *testing.T) {
-	tbtcChain, _, blockCounter, task, sourceWalletPublicKeyHash, _, _ :=
+// TestReservationReanchorTask_ReservationLeftWallet_NotRequestedAgain
+// pins that a reservation whose custody moved away from the source wallet
+// between rounds is not requested again: round 1 requests and proposes the
+// re-anchor, its proof settles before round 2, and round 2 reads the
+// source's now-empty reservation list from chain state and issues nothing.
+func TestReservationReanchorTask_ReservationLeftWallet_NotRequestedAgain(t *testing.T) {
+	tbtcChain, _, blockCounter, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, reservationKey :=
 		newInFlightReanchorFixture(t)
 
-	tbtcChain.SetNextReservationReanchorRequestPending()
-	if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
 		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("round 1: unexpected error: %v", err)
+	}
+	if !ok || proposal == nil {
+		t.Fatalf("round 1: expected a proposal, got ok=%v proposal=%v", ok, proposal)
 	}
 	if got := len(tbtcChain.GetReservationReanchorRequestSubmissions()); got != 1 {
 		t.Fatalf("round 1: expected exactly 1 submission, got %d", got)
 	}
 
-	// The reservation moves custody elsewhere between rounds: it no
-	// longer appears in the wallet's reservation list.
-	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, nil)
+	// The re-anchor proof settles between rounds: custody moves to the
+	// target and the source's reservation list no longer names the key.
+	if err := tbtcChain.SettleReservationReanchor(
+		reservationKey,
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{TransactionHash: bitcoin.Hash{0x99}},
+			Value:    199450,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
 	blockCounter.SetCurrentBlock(1900)
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+	proposal, ok, err = task.Run(&tbtc.CoordinationProposalRequest{
 		WalletPublicKeyHash: sourceWalletPublicKeyHash,
 	})
 	if err != nil {
@@ -311,12 +323,15 @@ func TestReservationReanchorTask_UnminedRequest_ReservationLeftWallet(t *testing
 			proposal,
 		)
 	}
-	if got := len(tbtcChain.GetReservationReanchorRequestSubmissions()); got != 1 {
+	if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 1 {
 		t.Fatalf(
-			"round 2: expected no new re-anchor request submissions, "+
-				"got %d",
+			"round 2: expected no new re-anchor request, got %d attempts "+
+				"in total",
 			got,
 		)
+	}
+	if count, err := tbtcChain.WalletReservationsCount(targetWalletPublicKeyHash); err != nil || count != 1 {
+		t.Fatalf("expected the target to custody the reservation, got count %d (err %v)", count, err)
 	}
 }
 

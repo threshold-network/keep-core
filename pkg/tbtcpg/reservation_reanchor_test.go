@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -178,8 +179,7 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 					if r.HasPendingAction {
 						action.TargetWalletPublicKeyHash = scenario.TargetWalletPublicKeyHash
 						action.TxMaxFee = scenario.ReservationTxMaxFee
-						action.MinAmount = 1000
-						action.TermSeconds = 86400
+						action.Amount = uint64(r.AnchorValue)
 					}
 					tbtcChain.SetReservationAction(
 						r.ReservationKey,
@@ -205,6 +205,7 @@ func TestReservationReanchorTask_Run(t *testing.T) {
 			tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
 				ReservationTxMaxFee:      scenario.ReservationTxMaxFee,
 				MaxReservationsPerWallet: maxPerWallet,
+				ReservationActionTimeout: 86400,
 			})
 
 			btcChain.SetEstimateSatPerVByteFee(1, scenario.EstimateSatPerVByteFee)
@@ -386,8 +387,9 @@ func TestReservationReanchorTask_TargetWalletExclusion_SharedTask(t *testing.T) 
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee:      100000,
+		ReservationTxMaxFee:      10000,
 		MaxReservationsPerWallet: 5,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -557,8 +559,9 @@ func TestReservationReanchorTask_Run_SkipNonActiveReservations(t *testing.T) {
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee:      100000,
+		ReservationTxMaxFee:      10000,
 		MaxReservationsPerWallet: 5,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -979,8 +982,9 @@ func TestReservationReanchorTask_CapRevertLeadsToNextCandidate(t *testing.T) {
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee:      100000,
+		ReservationTxMaxFee:      10000,
 		MaxReservationsPerWallet: 5,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -1079,6 +1083,13 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 
 	t.Run("fake chain enforces the target amount cap", func(t *testing.T) {
 		lc := tbtcpg.NewLocalChain()
+		lc.SetReservationParameters(tbtc.ReservationParameters{
+			ReservationTxMaxFee:      10000,
+			MaxReservationsPerWallet: 5,
+			ReservationActionTimeout: 86400,
+		})
+		lc.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+		lc.SetWallet(filledTargetWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
 		// Configure a per-wallet reserved-amount cap the filled target
 		// (250000 reserved + 100000 anchor = 350000) breaches.
 		lc.SetReservationCaps(300000, 1000000)
@@ -1122,7 +1133,7 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 			resKey,
 			filledTargetWalletPublicKeyHash,
 		); err == nil ||
-			!strings.Contains(err.Error(), "wallet reserved amount cap exceeded") {
+			!strings.Contains(err.Error(), "Wallet reserved amount cap exceeded") {
 			t.Fatalf(
 				"expected the fake to reject the re-anchor request with "+
 					"the amount-cap revert when the target's reserved "+
@@ -1178,8 +1189,9 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 			0,
 		)
 		tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationTxMaxFee:      100000,
+			ReservationTxMaxFee:      10000,
 			MaxReservationsPerWallet: 5,
+			ReservationActionTimeout: 86400,
 		})
 		btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -1291,6 +1303,7 @@ func TestReservationReanchorTask_ResumesPendingReanchorWithoutNewRequest(t *test
 		ReservationTxMaxFee:      100000,
 		MaxReservationsPerWallet: 5,
 		ReservationMinAmount:     1000,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -1331,8 +1344,7 @@ func TestReservationReanchorTask_ResumesPendingReanchorWithoutNewRequest(t *test
 		State:                     tbtc.ReservationActionStatePending,
 		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
 		TxMaxFee:                  100000,
-		MinAmount:                 1000,
-		TermSeconds:               86400,
+		Amount:                    200000,
 		// Far-future TimeoutAt so the safety-margin gate does not
 		// skip the resumed generation.
 		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
@@ -1423,8 +1435,9 @@ func TestProposeReservationReanchor_ValidatesOnlyAfterRequestMined(t *testing.T)
 		0,
 	)
 	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee:      100000,
+		ReservationTxMaxFee:      10000,
 		MaxReservationsPerWallet: 5,
+		ReservationActionTimeout: 86400,
 	})
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
@@ -1523,4 +1536,298 @@ func TestProposeReservationReanchor_ValidatesOnlyAfterRequestMined(t *testing.T)
 			err,
 		)
 	}
+}
+
+// TestLocalChain_RequestReservationReanchor_MirrorsSolidity pins the
+// LocalChain re-anchor request fake to Reservation.sol's
+// requestReservationReanchor, notifyReservationActionTimeout and re-anchor
+// settlement accounting. The task tests above rely on the fake rejecting
+// exactly what the contract rejects and reserving exactly the capacity the
+// contract reserves; a looser fake would let a task regression pass.
+func TestLocalChain_RequestReservationReanchor_MirrorsSolidity(t *testing.T) {
+	sourceWallet := hexToByte20("1111111111111111111111111111111111111111")
+	targetWallet := hexToByte20("2222222222222222222222222222222222222222")
+	otherWallet := hexToByte20("3333333333333333333333333333333333333333")
+	reservationKey := big.NewInt(4242)
+	anchorTxHash := bitcoin.Hash{0x42}
+
+	newFixture := func() *tbtcpg.LocalChain {
+		lc := tbtcpg.NewLocalChain()
+		lc.SetReservationParameters(tbtc.ReservationParameters{
+			ReservationTxMaxFee:      10000,
+			ReservationMinAmount:     1000,
+			MaxReservationsPerWallet: 2,
+			ReservationActionTimeout: 86400,
+		})
+		lc.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+		lc.SetWallet(targetWallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+		lc.SetReservation(reservationKey, &tbtc.Reservation{
+			WalletPublicKeyHash: sourceWallet,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     3,
+				},
+				Value: 100000,
+			},
+			State: tbtc.ReservationStateActive,
+		})
+		lc.SetWalletReservations(sourceWallet, []*big.Int{reservationKey})
+		return lc
+	}
+
+	walletInfo := func(t *testing.T, lc *tbtcpg.LocalChain, wallet [20]byte) (uint32, uint64) {
+		t.Helper()
+		count, err := lc.WalletReservationsCount(wallet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		amount, err := lc.WalletReservationsAmount(wallet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return count, amount
+	}
+
+	t.Run("request reserves target capacity and writes the action", func(t *testing.T) {
+		lc := newFixture()
+		before := uint32(time.Now().Unix())
+
+		if err := lc.RequestReservationReanchor(reservationKey, targetWallet); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if count, amount := walletInfo(t, lc, targetWallet); count != 1 || amount != 100000 {
+			t.Fatalf("expected target capacity (1, 100000), got (%d, %d)", count, amount)
+		}
+		if count, amount := walletInfo(t, lc, sourceWallet); count != 1 || amount != 100000 {
+			t.Fatalf("expected source capacity unchanged (1, 100000), got (%d, %d)", count, amount)
+		}
+
+		reservation, err := lc.GetReservation(reservationKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reservation.State != tbtc.ReservationStateActionPending || reservation.RequestNonce != 1 {
+			t.Fatalf(
+				"expected ActionPending at nonce 1, got %v at nonce %d",
+				reservation.State,
+				reservation.RequestNonce,
+			)
+		}
+
+		action, err := lc.GetReservationAction(reservationKey, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packed := make([]byte, 36)
+		copy(packed, anchorTxHash[:])
+		packed[35] = 3
+		var expectedSourceAnchorUtxoHash [32]byte
+		copy(expectedSourceAnchorUtxoHash[:], crypto.Keccak256(packed))
+		expected := tbtc.ReservationAction{
+			ActionType:                tbtc.ReservationActionTypeReanchor,
+			State:                     tbtc.ReservationActionStatePending,
+			RequestedAt:               action.RequestedAt,
+			TimeoutAt:                 action.RequestedAt + 86400,
+			TxMaxFee:                  10000,
+			TargetWalletPublicKeyHash: targetWallet,
+			Amount:                    100000,
+			SourceAnchorUtxoHash:      expectedSourceAnchorUtxoHash,
+		}
+		if *action != expected {
+			t.Fatalf("unexpected action\nexpected: %+v\nactual:   %+v", expected, *action)
+		}
+		if action.RequestedAt < before || action.RequestedAt > uint32(time.Now().Unix()) {
+			t.Fatalf("RequestedAt [%d] is not the request time", action.RequestedAt)
+		}
+	})
+
+	t.Run("closing source is accepted", func(t *testing.T) {
+		lc := newFixture()
+		lc.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateClosing})
+		if err := lc.RequestReservationReanchor(reservationKey, targetWallet); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	reverts := map[string]struct {
+		mutate         func(lc *tbtcpg.LocalChain)
+		target         [20]byte
+		expectedReason string
+	}{
+		"reservation not active": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				r, _ := lc.GetReservation(reservationKey)
+				updated := *r
+				updated.State = tbtc.ReservationStateActionPending
+				lc.SetReservation(reservationKey, &updated)
+			},
+			target:         targetWallet,
+			expectedReason: "Reservation is not active",
+		},
+		"cooldown in effect": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				r, _ := lc.GetReservation(reservationKey)
+				updated := *r
+				updated.ReanchorCooldownUntil = uint32(time.Now().Add(time.Hour).Unix())
+				lc.SetReservation(reservationKey, &updated)
+			},
+			target:         targetWallet,
+			expectedReason: "Reanchor cooldown in effect",
+		},
+		"live source": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+			},
+			target:         targetWallet,
+			expectedReason: "Only governance can rotate a Live wallet's anchor",
+		},
+		"terminated source": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateTerminated})
+			},
+			target:         targetWallet,
+			expectedReason: "Source wallet must be in MovingFunds or Closing state",
+		},
+		"target equals source": {
+			mutate:         func(lc *tbtcpg.LocalChain) {},
+			target:         sourceWallet,
+			expectedReason: "Target wallet must differ from the source wallet",
+		},
+		"target not live": {
+			mutate:         func(lc *tbtcpg.LocalChain) {},
+			target:         otherWallet,
+			expectedReason: "Target wallet must be in Live state",
+		},
+		"no signing window": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetReservationParameters(tbtc.ReservationParameters{
+					ReservationTxMaxFee:      10000,
+					ReservationMinAmount:     1000,
+					MaxReservationsPerWallet: 2,
+					ReservationActionTimeout: 7201,
+				})
+			},
+			target:         targetWallet,
+			expectedReason: "Reanchor authorization has no signing window",
+		},
+		"anchor at the floor": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				r, _ := lc.GetReservation(reservationKey)
+				updated := *r
+				anchor := *r.AnchorUtxo
+				anchor.Value = 11000
+				updated.AnchorUtxo = &anchor
+				lc.SetReservation(reservationKey, &updated)
+			},
+			target:         targetWallet,
+			expectedReason: "Reanchor would fall below the minimum reservation amount",
+		},
+		"zero count cap blocks every request": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetReservationParameters(tbtc.ReservationParameters{
+					ReservationTxMaxFee:      10000,
+					ReservationMinAmount:     1000,
+					MaxReservationsPerWallet: 0,
+					ReservationActionTimeout: 86400,
+				})
+			},
+			target:         targetWallet,
+			expectedReason: "Wallet reservations cap exceeded",
+		},
+		"target count at the cap": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetWalletReservations(targetWallet, []*big.Int{big.NewInt(1), big.NewInt(2)})
+			},
+			target:         targetWallet,
+			expectedReason: "Wallet reservations cap exceeded",
+		},
+		"target amount over the cap": {
+			mutate: func(lc *tbtcpg.LocalChain) {
+				lc.SetReservationCaps(99999, 0)
+			},
+			target:         targetWallet,
+			expectedReason: "Wallet reserved amount cap exceeded",
+		},
+	}
+	for name, test := range reverts {
+		t.Run("reverts: "+name, func(t *testing.T) {
+			lc := newFixture()
+			test.mutate(lc)
+			before, _ := lc.GetReservation(reservationKey)
+
+			err := lc.RequestReservationReanchor(reservationKey, test.target)
+			if err == nil || !strings.Contains(err.Error(), test.expectedReason) {
+				t.Fatalf("expected revert [%s], got [%v]", test.expectedReason, err)
+			}
+			if got := len(lc.GetReservationReanchorRequestSubmissions()); got != 0 {
+				t.Fatalf("expected no submission for a reverted request, got %d", got)
+			}
+			if got := len(lc.GetReservationReanchorRequestAttempts()); got != 1 {
+				t.Fatalf("expected the reverted request to be recorded as an attempt, got %d", got)
+			}
+			after, _ := lc.GetReservation(reservationKey)
+			if after.RequestNonce != before.RequestNonce || after.State != before.State {
+				t.Fatalf("a reverted request changed the reservation: %+v", after)
+			}
+		})
+	}
+
+	t.Run("timeout releases target capacity and starts the cooldown", func(t *testing.T) {
+		lc := newFixture()
+		if err := lc.RequestReservationReanchor(reservationKey, targetWallet); err != nil {
+			t.Fatal(err)
+		}
+		if err := lc.TimeOutReservationReanchor(reservationKey); err != nil {
+			t.Fatal(err)
+		}
+
+		if count, amount := walletInfo(t, lc, targetWallet); count != 0 || amount != 0 {
+			t.Fatalf("expected target capacity released, got (%d, %d)", count, amount)
+		}
+		reservation, _ := lc.GetReservation(reservationKey)
+		if reservation.State != tbtc.ReservationStateActive {
+			t.Fatalf("expected the reservation back in Active, got %v", reservation.State)
+		}
+		if reservation.ReanchorCooldownUntil < uint32(time.Now().Add(86399*time.Second).Unix()) {
+			t.Fatalf(
+				"expected a cooldown of the action's 86400s duration, got until [%d]",
+				reservation.ReanchorCooldownUntil,
+			)
+		}
+		action, _ := lc.GetReservationAction(reservationKey, 1)
+		if action.State != tbtc.ReservationActionStateTimedOut {
+			t.Fatalf("expected the action TimedOut, got %v", action.State)
+		}
+		err := lc.RequestReservationReanchor(reservationKey, targetWallet)
+		if err == nil || !strings.Contains(err.Error(), "Reanchor cooldown in effect") {
+			t.Fatalf("expected the cooldown to block a new request, got [%v]", err)
+		}
+	})
+
+	t.Run("settlement moves custody and keeps the miner fee out of the target amount", func(t *testing.T) {
+		lc := newFixture()
+		if err := lc.RequestReservationReanchor(reservationKey, targetWallet); err != nil {
+			t.Fatal(err)
+		}
+		if err := lc.SettleReservationReanchor(reservationKey, &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{TransactionHash: bitcoin.Hash{0x43}},
+			Value:    99000,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		if count, amount := walletInfo(t, lc, sourceWallet); count != 0 || amount != 0 {
+			t.Fatalf("expected source capacity released, got (%d, %d)", count, amount)
+		}
+		if count, amount := walletInfo(t, lc, targetWallet); count != 1 || amount != 99000 {
+			t.Fatalf("expected target capacity (1, 99000), got (%d, %d)", count, amount)
+		}
+		reservation, _ := lc.GetReservation(reservationKey)
+		if reservation.WalletPublicKeyHash != targetWallet ||
+			reservation.State != tbtc.ReservationStateActive {
+			t.Fatalf("unexpected reservation after settlement: %+v", reservation)
+		}
+	})
 }
