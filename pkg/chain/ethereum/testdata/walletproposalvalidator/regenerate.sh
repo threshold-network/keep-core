@@ -49,8 +49,10 @@ if [[ ! -f "$VALIDATOR_ARTIFACT" ]]; then
 fi
 
 echo "compiling StubBridge.sol with $($SOLC --version | tail -1)..."
-"$SOLC" --optimize --optimize-runs 200 --via-ir --combined-json abi,bin \
-    "$HERE/StubBridge.sol" >"$HERE/.stub-combined.json"
+# Compile by relative path: solc embeds the source path in the bytecode
+# metadata, so an absolute path would change StubBridge.json per machine.
+(cd "$HERE" && "$SOLC" --optimize --optimize-runs 200 --via-ir \
+    --combined-json abi,bin StubBridge.sol) >"$HERE/.stub-combined.json"
 
 python3 - "$HERE/.stub-combined.json" "$HERE/StubBridge.json" <<'PY'
 import json
