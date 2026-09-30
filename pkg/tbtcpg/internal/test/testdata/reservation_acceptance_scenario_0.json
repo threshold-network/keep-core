@@ -3,7 +3,7 @@
   "ChainParameters": {
     "AverageBlockTime": 12,
     "CurrentBlock": 300000,
-    "DepositMinAge": 3600
+    "DepositMinAge": 7200
   },
   "WalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6",
   "ReservationVault": "0xReservationVaultAddress1234567890abcdef12345678",
@@ -39,17 +39,17 @@
       "Depositor": "934b98637ca318a4d6e7ca6ffd1690b8e77df637",
       "BlindingFactor": "f9f0c90d00039523",
       "RefundPublicKeyHash": "e257eccafbc07c381642ce6e7e55120fb077fbed",
-      "RefundLocktime": "e0250162",
+      "RefundLocktime": "80d8db70",
       "Amount": 2000000,
       "RevealBlock": 290000,
-      "Age": 7200,
+      "Age": 10800,
       "SweptAt": 0,
       "Vault": "0xReservationVaultAddress1234567890abcdef12345678",
       "PendingAcceptanceAction": {
         "RequestNonce": 1,
         "TxMaxFee": 5000,
         "MinAmount": 100000,
-        "TermSeconds": 86400,
+        "TermSeconds": 7776000,
         "TargetWalletPublicKeyHash": "8db50eb52063ea9d98b3eac91489a90f738986f6"
       }
     }

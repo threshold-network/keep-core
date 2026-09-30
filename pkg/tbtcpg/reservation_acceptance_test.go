@@ -3,7 +3,7 @@ package tbtcpg_test
 import (
 	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"testing"
@@ -33,56 +33,146 @@ const testReservationVaultAddress = chain.Address(
 	"0xReservationVaultAddress1234567890abcdef12345678",
 )
 
+// testDepositor is the depositor of every deposit built by this file's
+// fixtures.
+const testDepositor = chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637")
+
+// testReservationTermSeconds is the snapshotted custody term of the
+// fixtures' pending acceptance generations: MIN_RESERVATION_TERM (90
+// days), the shortest term Reservation.sol accepts.
+const testReservationTermSeconds = uint32(90 * 24 * 60 * 60)
+
+// testDepositMinAgeSeconds is WalletProposalValidator.sol's DEPOSIT_MIN_AGE
+// (2 hours).
+const testDepositMinAgeSeconds = uint32(7200)
+
 // reservationAcceptanceLocalChain is a test-only mock of tbtcpg.Chain that
 // embeds the production LocalChain and adds reservation-specific behavior.
-// It exists as a separate type so this test file does not need to edit the
-// shared chain_test.go fixture used by sibling builders.
+// Its PastDepositRevealedEvents and PastReservationAcceptanceRequestedEvents
+// answer range queries the way an Ethereum node does, from events
+// registered on this type.
 type reservationAcceptanceLocalChain struct {
 	*tbtcpg.LocalChain
 
-	maxPerWalletAmount           uint64
-	maxSingleAmount              uint64
-	walletReservationsAmount     uint64
-	walletReservationsCount      uint32
-	activeCount                  uint32
-	maxActive                    uint32
-	pendingReserved              uint64
-	validateErr                  error
-	getWalletErr                 error
-	getReservationErr            error
-	acceptanceEvents             []*tbtc.ReservationAcceptanceRequestedEvent
-	acceptanceEventsErr          error
+	maxPerWalletAmount       uint64
+	maxSingleAmount          uint64
+	walletReservationsAmount uint64
+	walletReservationsCount  uint32
+	activeCount              uint32
+	maxActive                uint32
+	pendingReserved          uint64
+	validateErr              error
+	getWalletErr             error
+	getReservationErr        error
+
+	acceptanceEvents       []*tbtc.ReservationAcceptanceRequestedEvent
+	acceptanceEventsErr    error
+	acceptanceEventFilters []tbtc.ReservationAcceptanceRequestedEventFilter
+
+	revealEvents                 []*tbtc.DepositRevealedEvent
 	pastDepositRevealedEventsErr error
+
+	getReservationCalls int
+	validateCalls       int
+	feeDebtVaults       []chain.Address
+	feeReserveVaults    []chain.Address
 }
 
 func newReservationAcceptanceLocalChain() *reservationAcceptanceLocalChain {
-	lc := tbtcpg.NewLocalChain()
 	return &reservationAcceptanceLocalChain{
-		LocalChain: lc,
+		LocalChain: tbtcpg.NewLocalChain(),
 	}
 }
 
-// PastDepositRevealedEvents overrides the embedded LocalChain
-// implementation to narrow its "no events for given filter" sentinel
-// error (the mock's signal for "nothing registered for this filter yet")
-// into an empty slice, matching a real chain's behavior of returning an
-// empty event list rather than an error when no deposits match. Any
-// other error - including one injected via pastDepositRevealedEventsErr -
-// is propagated unchanged.
+// PastDepositRevealedEvents returns every registered reveal whose block is
+// in [StartBlock, EndBlock] and whose wallet matches the filter. It
+// rejects unbounded queries and queries wider than
+// tbtc.DepositRevealLookupChunkBlocks, the range many providers cap log
+// queries at, so a lookup that stops chunking fails loudly.
 func (ralc *reservationAcceptanceLocalChain) PastDepositRevealedEvents(
 	filter *tbtc.DepositRevealedEventFilter,
 ) ([]*tbtc.DepositRevealedEvent, error) {
 	if ralc.pastDepositRevealedEventsErr != nil {
 		return nil, ralc.pastDepositRevealedEventsErr
 	}
-	events, err := ralc.LocalChain.PastDepositRevealedEvents(filter)
-	if err != nil {
-		if err.Error() == "no events for given filter" {
-			return []*tbtc.DepositRevealedEvent{}, nil
-		}
-		return nil, err
+	if filter == nil || filter.EndBlock == nil {
+		return nil, fmt.Errorf("unbounded deposit revealed events query")
 	}
-	return events, nil
+	if *filter.EndBlock < filter.StartBlock ||
+		*filter.EndBlock-filter.StartBlock+1 > tbtc.DepositRevealLookupChunkBlocks {
+		return nil, fmt.Errorf(
+			"invalid deposit revealed events block range [%d, %d]",
+			filter.StartBlock,
+			*filter.EndBlock,
+		)
+	}
+
+	var result []*tbtc.DepositRevealedEvent
+	for _, event := range ralc.revealEvents {
+		if event.BlockNumber < filter.StartBlock ||
+			event.BlockNumber > *filter.EndBlock {
+			continue
+		}
+		if !walletMatches(filter.WalletPublicKeyHash, event.WalletPublicKeyHash) {
+			continue
+		}
+		result = append(result, event)
+	}
+	return result, nil
+}
+
+// PastReservationAcceptanceRequestedEvents returns every registered request
+// matching the filter's block range, wallets and reservation keys, and
+// records the filter.
+func (ralc *reservationAcceptanceLocalChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	if ralc.acceptanceEventsErr != nil {
+		return nil, ralc.acceptanceEventsErr
+	}
+	if filter == nil {
+		return nil, fmt.Errorf("unfiltered acceptance requested events query")
+	}
+	ralc.acceptanceEventFilters = append(ralc.acceptanceEventFilters, *filter)
+
+	var results []*tbtc.ReservationAcceptanceRequestedEvent
+	for _, event := range ralc.acceptanceEvents {
+		if event.BlockNumber < filter.StartBlock {
+			continue
+		}
+		if filter.EndBlock != nil && event.BlockNumber > *filter.EndBlock {
+			continue
+		}
+		if !walletMatches(filter.WalletPublicKeyHash, event.WalletPublicKeyHash) {
+			continue
+		}
+		if len(filter.ReservationKey) > 0 {
+			match := false
+			for _, k := range filter.ReservationKey {
+				if k != nil && k.Cmp(event.ReservationKey) == 0 {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		results = append(results, event)
+	}
+	return results, nil
+}
+
+func walletMatches(filter [][20]byte, wallet [20]byte) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, w := range filter {
+		if w == wallet {
+			return true
+		}
+	}
+	return false
 }
 
 func (ralc *reservationAcceptanceLocalChain) ReservationCaps() (
@@ -129,27 +219,21 @@ func (ralc *reservationAcceptanceLocalChain) GetWallet(
 	return ralc.LocalChain.GetWallet(walletPublicKeyHash)
 }
 
-// GetReservation delegates to the embedded LocalChain, except that a
-// non-nil getReservationErr is consumed exactly once: it fires on the
-// very next call and then clears itself, simulating a transient RPC
-// failure rather than a permanent one. This lets
-// TestReservationAcceptanceTask_GetReservationError exercise production's
-// fail-safe candidate-selection skip path (see production's documented
-// deviation above the call site): the failing candidate is skipped for
-// the window rather than treated as "not yet created".
+// GetReservation delegates to the embedded LocalChain and counts calls,
+// except that a non-nil getReservationErr is consumed exactly once: it
+// fires on the very next call and then clears itself, simulating a
+// transient RPC failure rather than a permanent one.
 //
 // The embedded LocalChain.GetReservation errors for a reservation key that
 // was never registered via SetReservation, but the real chain adapter
-// (pkg/chain/ethereum/tbtc_reservation.go's GetReservation) reads a Solidity mapping,
-// which never errors for an absent key -- it returns the zero-value
-// struct (State == ReservationStateUnknown, RequestNonce == 0). This
-// override normalizes the embedded mock's "not found" error into that
-// same zero-value record so every other test in this file (none of which
-// pre-register a reservation for a brand-new candidate deposit) continues
-// to exercise the "not yet created" path production actually takes.
+// reads a Solidity mapping, which never errors for an absent key -- it
+// returns the zero-value struct (State == ReservationStateUnknown,
+// RequestNonce == 0). This override normalizes the embedded mock's "not
+// found" error into that same zero-value record.
 func (ralc *reservationAcceptanceLocalChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
+	ralc.getReservationCalls++
 	if ralc.getReservationErr != nil {
 		err := ralc.getReservationErr
 		ralc.getReservationErr = nil
@@ -165,12 +249,12 @@ func (ralc *reservationAcceptanceLocalChain) GetReservation(
 	return reservation, nil
 }
 
-// ValidateReservationAnchorProposal overrides the embedded LocalChain
-// implementation. When validateErr is set it returns that error
-// unconditionally (see TestReservationAcceptanceTask_ValidateProposalError).
-// Otherwise it genuinely exercises the candidate-deposit mapping step by
-// checking the proposal's funding outpoint against the candidate deposit's
-// own funding outpoint, rather than unconditionally succeeding.
+// ValidateReservationAnchorProposal counts calls and returns validateErr
+// when set. Otherwise it checks the proposal's funding outpoint against
+// the candidate deposit's own outpoint (the candidate-deposit mapping
+// step) and then applies the embedded LocalChain's strict validator,
+// which mirrors every precondition of
+// WalletProposalValidator.validateReservationAnchorProposal.
 func (ralc *reservationAcceptanceLocalChain) ValidateReservationAnchorProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *tbtc.ReservationAnchorProposal,
@@ -179,6 +263,7 @@ func (ralc *reservationAcceptanceLocalChain) ValidateReservationAnchorProposal(
 		FundingTx *bitcoin.Transaction
 	},
 ) error {
+	ralc.validateCalls++
 	if ralc.validateErr != nil {
 		return ralc.validateErr
 	}
@@ -190,53 +275,256 @@ func (ralc *reservationAcceptanceLocalChain) ValidateReservationAnchorProposal(
 		)
 	}
 	outpoint := depositExtraInfo.Deposit.Utxo.Outpoint
-	if outpoint.TransactionHash != proposal.DepositFundingTxHash {
+	if outpoint.TransactionHash != proposal.DepositFundingTxHash ||
+		outpoint.OutputIndex != proposal.DepositFundingOutputIndex {
 		return fmt.Errorf(
-			"validate reservation anchor proposal: funding tx hash mismatch: "+
-				"proposal=[%x] candidate=[%x]",
-			proposal.DepositFundingTxHash,
-			outpoint.TransactionHash,
+			"validate reservation anchor proposal: funding outpoint mismatch",
 		)
 	}
-	if outpoint.OutputIndex != proposal.DepositFundingOutputIndex {
-		return fmt.Errorf(
-			"validate reservation anchor proposal: funding output index mismatch: "+
-				"proposal=[%d] candidate=[%d]",
-			proposal.DepositFundingOutputIndex,
-			outpoint.OutputIndex,
-		)
-	}
-	return nil
-}
-func (ralc *reservationAcceptanceLocalChain) PastReservationAcceptanceRequestedEvents(
-	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
-) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
-	if ralc.acceptanceEventsErr != nil {
-		return nil, ralc.acceptanceEventsErr
-	}
-	var results []*tbtc.ReservationAcceptanceRequestedEvent
-	for _, event := range ralc.acceptanceEvents {
-		if filter != nil && len(filter.ReservationKey) > 0 {
-			match := false
-			for _, k := range filter.ReservationKey {
-				if k != nil && event.ReservationKey != nil && k.Cmp(event.ReservationKey) == 0 {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
-		}
-		results = append(results, event)
-	}
-	return results, nil
+	return ralc.LocalChain.ValidateReservationAnchorProposal(
+		walletPublicKeyHash,
+		proposal,
+		depositExtraInfo,
+	)
 }
 
-func (ralc *reservationAcceptanceLocalChain) AddPastReservationAcceptanceRequestedEvent(
-	event *tbtc.ReservationAcceptanceRequestedEvent,
-) {
-	ralc.acceptanceEvents = append(ralc.acceptanceEvents, event)
+// ReservationVaultFeeDebtSat records the vault it was asked about and
+// delegates to the embedded LocalChain.
+func (ralc *reservationAcceptanceLocalChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
+	ralc.feeDebtVaults = append(ralc.feeDebtVaults, reservationVault)
+	return ralc.LocalChain.ReservationVaultFeeDebtSat(reservationVault)
+}
+
+// ReservationVaultFeeReserveTbtcBaseUnits records the vault it was asked
+// about and delegates to the embedded LocalChain.
+func (ralc *reservationAcceptanceLocalChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
+	ralc.feeReserveVaults = append(ralc.feeReserveVaults, reservationVault)
+	return ralc.LocalChain.ReservationVaultFeeReserveTbtcBaseUnits(reservationVault)
+}
+
+// futureRefundLocktime returns a refund locktime 180 days ahead,
+// little-endian as the deposit script and the on-chain validator hold it,
+// so the validator's 24-hour refund safety margin holds.
+func futureRefundLocktime() [4]byte {
+	var locktime [4]byte
+	binary.LittleEndian.PutUint32(
+		locktime[:],
+		uint32(time.Now().Add(180*24*time.Hour).Unix()),
+	)
+	return locktime
+}
+
+// buildReservedDeposit builds a deposit revealed to walletPublicKeyHash
+// through the test reservation vault, together with a funding transaction
+// whose output 0 locks amount with the deposit's P2WSH script. seed makes
+// the deposit, and so its funding transaction hash, unique.
+func buildReservedDeposit(
+	t *testing.T,
+	walletPublicKeyHash [20]byte,
+	amount uint64,
+	seed byte,
+	vault chain.Address,
+) (*tbtc.Deposit, *bitcoin.Transaction) {
+	t.Helper()
+
+	deposit := &tbtc.Deposit{
+		Depositor:           testDepositor,
+		BlindingFactor:      [8]byte{seed, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		WalletPublicKeyHash: walletPublicKeyHash,
+		RefundPublicKeyHash: [20]byte{0x02, seed},
+		RefundLocktime:      futureRefundLocktime(),
+		Vault:               &vault,
+	}
+
+	depositScript, err := deposit.Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+	depositLockingScript, err := bitcoin.PayToWitnessScriptHash(
+		bitcoin.WitnessScriptHash(depositScript),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: bitcoin.Hash{0x09, seed},
+				OutputIndex:     0,
+			},
+			Sequence: 0xffffffff,
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           int64(amount),
+			PublicKeyScript: depositLockingScript,
+		}},
+	}
+
+	deposit.Utxo = &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: int64(amount),
+	}
+
+	return deposit, fundingTx
+}
+
+// pendingDepositOptions describes a reserved deposit whose depositor
+// requested acceptance, as addPendingDeposit seeds it.
+type pendingDepositOptions struct {
+	amount        uint64
+	seed          byte
+	revealBlock   uint64
+	requestBlock  uint64
+	revealedAt    time.Time
+	confirmations uint
+	requestNonce  uint64
+	txMaxFee      uint64
+	minAmount     uint64
+	termSeconds   uint32
+	timeoutAt     uint32
+	actionState   tbtc.ReservationActionState
+	// withoutAction seeds the request event but no reservation or
+	// action record, as when the generation's record is gone.
+	withoutAction bool
+	// revealVault, when set, overrides the vault in the reveal event.
+	revealVault *chain.Address
+}
+
+// defaultPendingDepositOptions returns options for a mature, confirmed
+// 2,000,000 sat deposit revealed 1000 blocks and requested 10 blocks
+// before currentBlock, whose nonce-1 Pending Acceptance generation
+// snapshots a 5000 sat max fee, a 1000 sat minimum, a 90-day term and a
+// timeout 24 hours ahead.
+func defaultPendingDepositOptions(currentBlock uint64) pendingDepositOptions {
+	return pendingDepositOptions{
+		amount:        2000000,
+		seed:          0x01,
+		revealBlock:   currentBlock - 1000,
+		requestBlock:  currentBlock - 10,
+		revealedAt:    time.Now().Add(-3 * time.Hour),
+		confirmations: tbtc.DepositSweepRequiredFundingTxConfirmations,
+		requestNonce:  1,
+		txMaxFee:      5000,
+		minAmount:     1000,
+		termSeconds:   testReservationTermSeconds,
+		timeoutAt:     uint32(time.Now().Add(24 * time.Hour).Unix()),
+		actionState:   tbtc.ReservationActionStatePending,
+	}
+}
+
+// pendingDeposit is a deposit seeded by addPendingDeposit.
+type pendingDeposit struct {
+	fundingTxHash bitcoin.Hash
+	depositKey    *big.Int
+	deposit       *tbtc.Deposit
+}
+
+// addPendingDeposit seeds everything the chain and the Bitcoin chain hold
+// for a reserved deposit whose depositor requested acceptance by
+// walletPublicKeyHash: the funding transaction and its confirmations, the
+// deposit request, the reserved flag, the DepositRevealed event, the
+// reservation and its acceptance action record, and the
+// ReservationAcceptanceRequested event.
+func addPendingDeposit(
+	t *testing.T,
+	ralc *reservationAcceptanceLocalChain,
+	btcChain *tbtcpg.LocalBitcoinChain,
+	walletPublicKeyHash [20]byte,
+	opts pendingDepositOptions,
+) *pendingDeposit {
+	t.Helper()
+
+	vault := testReservationVaultAddress
+	if params, err := ralc.ReservationParameters(); err == nil &&
+		params.ReservationVault != "" {
+		vault = params.ReservationVault
+	}
+
+	deposit, fundingTx := buildReservedDeposit(
+		t,
+		walletPublicKeyHash,
+		opts.amount,
+		opts.seed,
+		vault,
+	)
+	fundingTxHash := fundingTx.Hash()
+	depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
+
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+	btcChain.SetTransaction(fundingTxHash, fundingTx)
+	btcChain.SetTransactionConfirmations(fundingTxHash, opts.confirmations)
+
+	ralc.SetDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Depositor:  testDepositor,
+		Amount:     opts.amount,
+		RevealedAt: opts.revealedAt,
+		SweptAt:    time.Unix(0, 0),
+		Vault:      &vault,
+	})
+	ralc.SetReservedDeposit(depositKey, true)
+
+	revealVault := &vault
+	if opts.revealVault != nil {
+		revealVault = opts.revealVault
+	}
+	ralc.revealEvents = append(ralc.revealEvents, &tbtc.DepositRevealedEvent{
+		BlockNumber:         opts.revealBlock,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+		Depositor:           testDepositor,
+		Amount:              opts.amount,
+		BlindingFactor:      deposit.BlindingFactor,
+		RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+		RefundLocktime:      deposit.RefundLocktime,
+		Vault:               revealVault,
+	})
+
+	if !opts.withoutAction {
+		ralc.SetReservation(depositKey, &tbtc.Reservation{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			State:               tbtc.ReservationStateUnknown,
+			RequestNonce:        opts.requestNonce,
+		})
+		ralc.SetReservationAction(depositKey, opts.requestNonce, &tbtc.ReservationAction{
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			State:                     opts.actionState,
+			TargetWalletPublicKeyHash: walletPublicKeyHash,
+			TxMaxFee:                  opts.txMaxFee,
+			MinAmount:                 opts.minAmount,
+			TermSeconds:               opts.termSeconds,
+			TimeoutAt:                 opts.timeoutAt,
+			Amount:                    opts.amount,
+		})
+	}
+
+	ralc.acceptanceEvents = append(
+		ralc.acceptanceEvents,
+		&tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      depositKey,
+			RequestNonce:        opts.requestNonce,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			DepositAmount:       opts.amount,
+			TxMaxFee:            opts.txMaxFee,
+			TimeoutAt:           opts.timeoutAt,
+			BlockNumber:         opts.requestBlock,
+		},
+	)
+
+	return &pendingDeposit{
+		fundingTxHash: fundingTxHash,
+		depositKey:    depositKey,
+		deposit:       deposit,
+	}
 }
 
 // scenarioReservationAcceptanceChain wires a scenario's on-chain state
@@ -261,6 +549,8 @@ func scenarioReservationAcceptanceChain(
 		ReservationMaxTotalAmount: scenario.ReservationParameters.ReservationMaxTotalAmount,
 		ReservationTotalAmount:    scenario.ReservationParameters.ReservationTotalAmount,
 		MaxReservationsPerWallet:  scenario.ReservationParameters.MaxReservationsPerWallet,
+		ReservationTermSeconds:    testReservationTermSeconds,
+		ReservationActionTimeout:  24 * 60 * 60,
 	})
 
 	ralc.maxPerWalletAmount = scenario.Caps.MaxReservationsAmountPerWallet
@@ -272,16 +562,21 @@ func scenarioReservationAcceptanceChain(
 	ralc.pendingReserved = scenario.PendingReservedDeposits
 
 	ralc.SetDepositMinAge(scenario.ChainParameters.DepositMinAge)
+	ralc.SetAverageBlockTime(scenario.ChainParameters.AverageBlockTime)
 
 	blockCounter := tbtcpg.NewMockBlockCounter()
 	blockCounter.SetCurrentBlock(scenario.ChainParameters.CurrentBlock)
 	ralc.SetBlockCounter(blockCounter)
 
-	// Map a WalletState string back to the tbtc constant.
+	// Map a WalletState string back to the tbtc constant. An unknown
+	// string fails the test rather than silently running as another
+	// state.
 	var walletState tbtc.WalletState
 	switch scenario.WalletState {
 	case "Live":
 		walletState = tbtc.StateLive
+	case "MovingFunds":
+		walletState = tbtc.StateMovingFunds
 	case "Closing":
 		walletState = tbtc.StateClosing
 	case "Closed":
@@ -289,7 +584,7 @@ func scenarioReservationAcceptanceChain(
 	case "Terminated":
 		walletState = tbtc.StateTerminated
 	default:
-		walletState = tbtc.StateLive
+		t.Fatalf("unknown scenario wallet state [%s]", scenario.WalletState)
 	}
 
 	ralc.SetWallet(
@@ -301,27 +596,25 @@ func scenarioReservationAcceptanceChain(
 }
 
 // registerReservedDeposits wires the scenario's reserved deposits into the
-// mock chain as deposit requests and past DepositRevealedEvents. Bitcoin
-// transaction registrations live on the btcChain mock.
+// mock chains: the funding transaction, the deposit request, the reserved
+// flag, the DepositRevealed event and, for rows with a
+// PendingAcceptanceAction, the reservation, the action record and the
+// ReservationAcceptanceRequested event (requested 10 blocks after the
+// reveal). It returns the map from each row's label hash to its real
+// funding transaction hash.
 func registerReservedDeposits(
 	t *testing.T,
 	scenario *test.ReservationAcceptanceTestScenario,
 	ralc *reservationAcceptanceLocalChain,
 	btcChain *tbtcpg.LocalBitcoinChain,
-) {
+) map[bitcoin.Hash]bitcoin.Hash {
 	t.Helper()
 
-	// Configure the fee oracle rate. proposeReservationAcceptance now
-	// estimates the anchor fee dynamically (see estimateReservationAcceptanceFee);
-	// 1 sat/vByte hits the applyWalletTxFeeFloor minimum, matching the
-	// convention used by the sibling reservation re-anchor test fixtures.
+	// proposeReservationAcceptance estimates the anchor fee dynamically;
+	// 1 sat/vByte hits the applyWalletTxFeeFloor minimum.
 	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
-	filterStartBlock := uint64(0)
-	if scenario.ChainParameters.CurrentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = scenario.ChainParameters.CurrentBlock -
-			tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
+	hashesByLabel := make(map[bitcoin.Hash]bitcoin.Hash)
 
 	for _, rd := range scenario.ReservedDeposits {
 		materialized, err := rd.Materialize()
@@ -331,222 +624,90 @@ func registerReservedDeposits(
 				err,
 			)
 		}
+		hashesByLabel[materialized.LabelFundingTxHash] = materialized.FundingTxHash
+
+		depositKey := ralc.BuildDepositKey(
+			materialized.FundingTxHash,
+			materialized.FundingOutputIndex,
+		)
 
 		ralc.SetDepositRequest(
 			materialized.FundingTxHash,
 			materialized.FundingOutputIndex,
 			&tbtc.DepositChainRequest{
-				Depositor:  chain.Address(rd.Depositor),
-				Amount:     rd.Amount,
+				Depositor:  materialized.Depositor,
+				Amount:     materialized.Amount,
 				RevealedAt: materialized.RevealedAt,
 				SweptAt:    materialized.SweptAt,
 				Vault:      materialized.Vault,
 			},
 		)
+		ralc.SetReservedDeposit(depositKey, true)
 
-		// When the scenario seeds a Pending Acceptance action, also
-		// install the reservation record and the action record so
-		// findReservationAcceptanceCandidate's read of
-		// GetReservationAction(depositKey, reservation.RequestNonce)
-		// observes a Pending Acceptance action record targeting this
-		// wallet -- the precondition the production validator enforces.
-		// A reservation's State in production stays Unknown until
-		// settlement, so the seeded record follows that convention.
-		if rd.PendingAcceptanceAction != nil {
-			if pendingAction := rd.PendingAcceptanceActionValue(); pendingAction != nil {
-				depositKey := ralc.BuildDepositKey(
-					materialized.FundingTxHash,
-					materialized.FundingOutputIndex,
-				)
-				ralc.SetReservation(depositKey, &tbtc.Reservation{
-					WalletPublicKeyHash: materialized.WalletPublicKeyHash,
-					State:               tbtc.ReservationStateUnknown,
-					RequestNonce:        rd.PendingAcceptanceAction.RequestNonce,
-				})
-				ralc.SetReservationAction(
-					depositKey,
-					rd.PendingAcceptanceAction.RequestNonce,
-					pendingAction,
-				)
-			}
-		}
-
-		if materialized.FundingTx != nil {
-			btcChain.SetTransaction(
-				materialized.FundingTxHash,
-				materialized.FundingTx,
-			)
-		} else {
-			dummyTx := &bitcoin.Transaction{
-				Outputs: []*bitcoin.TransactionOutput{{
-					Value:           0,
-					PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-				}},
-			}
-			btcChain.SetTransaction(
-				materialized.FundingTxHash,
-				dummyTx,
-			)
-		}
+		btcChain.SetTransaction(
+			materialized.FundingTxHash,
+			materialized.FundingTx,
+		)
 		btcChain.SetTransactionConfirmations(
 			materialized.FundingTxHash,
 			rd.FundingTxConfirmations,
 		)
 
-		currentBlock := scenario.ChainParameters.CurrentBlock
-		err = ralc.AddPastDepositRevealedEvent(
-			&tbtc.DepositRevealedEventFilter{
-				StartBlock:          filterStartBlock,
-				EndBlock:            &currentBlock,
-				WalletPublicKeyHash: [][20]byte{materialized.WalletPublicKeyHash},
-			},
-			&tbtc.DepositRevealedEvent{
-				BlockNumber:         materialized.RevealBlock,
-				WalletPublicKeyHash: materialized.WalletPublicKeyHash,
-				FundingTxHash:       materialized.FundingTxHash,
-				FundingOutputIndex:  materialized.FundingOutputIndex,
-				Vault:               materialized.Vault,
+		ralc.revealEvents = append(ralc.revealEvents, &tbtc.DepositRevealedEvent{
+			BlockNumber:         materialized.RevealBlock,
+			WalletPublicKeyHash: materialized.WalletPublicKeyHash,
+			FundingTxHash:       materialized.FundingTxHash,
+			FundingOutputIndex:  materialized.FundingOutputIndex,
+			Depositor:           materialized.Depositor,
+			Amount:              materialized.Amount,
+			BlindingFactor:      materialized.BlindingFactor,
+			RefundPublicKeyHash: materialized.RefundPublicKeyHash,
+			RefundLocktime:      materialized.RefundLocktime,
+			Vault:               materialized.Vault,
+		})
+
+		pendingAction := rd.PendingAcceptanceActionValue()
+		if pendingAction == nil {
+			continue
+		}
+		// A reservation's State in production stays Unknown until
+		// settlement, so the seeded record follows that convention.
+		ralc.SetReservation(depositKey, &tbtc.Reservation{
+			WalletPublicKeyHash: materialized.WalletPublicKeyHash,
+			State:               tbtc.ReservationStateUnknown,
+			RequestNonce:        rd.PendingAcceptanceAction.RequestNonce,
+		})
+		ralc.SetReservationAction(
+			depositKey,
+			rd.PendingAcceptanceAction.RequestNonce,
+			pendingAction,
+		)
+		ralc.acceptanceEvents = append(
+			ralc.acceptanceEvents,
+			&tbtc.ReservationAcceptanceRequestedEvent{
+				ReservationKey:      depositKey,
+				RequestNonce:        rd.PendingAcceptanceAction.RequestNonce,
+				WalletPublicKeyHash: pendingAction.TargetWalletPublicKeyHash,
+				DepositAmount:       materialized.Amount,
+				TxMaxFee:            pendingAction.TxMaxFee,
+				TimeoutAt:           pendingAction.TimeoutAt,
+				BlockNumber:         materialized.RevealBlock + 10,
 			},
 		)
-		if err != nil {
-			t.Fatalf(
-				"failed to register past deposit revealed event: [%v]",
-				err,
-			)
-		}
-	}
-}
-
-// setupEligibleDeposit registers an eligible deposit funding transaction,
-// deposit request, and matching DepositRevealedEvent on the mock chains.
-// It returns the funding transaction hash.
-func setupEligibleDeposit(
-	t *testing.T,
-	ralc *reservationAcceptanceLocalChain,
-	btcChain *tbtcpg.LocalBitcoinChain,
-	walletPublicKeyHash [20]byte,
-	currentBlock uint64,
-	depositAmount uint64,
-) bitcoin.Hash {
-	t.Helper()
-
-	fundingTxHash := hashFromString(
-		"2222222222222222222222222222222222222222222222222222222222222222",
-	)
-
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           int64(depositAmount),
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	vaultAddress := testReservationVaultAddress
-	if params, err := ralc.ReservationParameters(); err == nil &&
-		params.ReservationVault != "" {
-		vaultAddress = params.ReservationVault
 	}
 
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     depositAmount,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &vaultAddress,
-		},
-	)
-
-	filterStartBlock := uint64(0)
-	if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
-
-	revealBlock := filterStartBlock
-	if revealBlock == 0 {
-		revealBlock = 1
-	}
-
-	err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         revealBlock,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &vaultAddress,
-		},
-	)
-	if err != nil {
-		t.Fatalf("failed to add past deposit revealed event: [%v]", err)
-	}
-
-	return fundingTxHash
-}
-
-// seedPendingAcceptanceAction wires a Pending Acceptance action record
-// for the deposit at fundingTxHash/index into the local chain, matching
-// the snapshot a depositor's requestReservationAcceptance call would have
-// written on-chain at the time of the request. Tests then exercise
-// findReservationAcceptanceCandidate's read of the action record at
-// reservation.RequestNonce -- the precondition the production validator
-// enforces -- instead of taking the operator-request path that was
-// removed.
-func seedPendingAcceptanceAction(
-	t *testing.T,
-	ralc *reservationAcceptanceLocalChain,
-	fundingTxHash bitcoin.Hash,
-	fundingOutputIndex uint32,
-	walletPublicKeyHash [20]byte,
-	requestNonce uint64,
-	txMaxFee uint64,
-	minAmount uint64,
-	termSeconds uint32,
-) {
-	t.Helper()
-
-	depositKey := ralc.BuildDepositKey(fundingTxHash, fundingOutputIndex)
-	ralc.SetReservation(depositKey, &tbtc.Reservation{
-		WalletPublicKeyHash: walletPublicKeyHash,
-		State:               tbtc.ReservationStateUnknown,
-		RequestNonce:        requestNonce,
-	})
-	ralc.SetReservationAction(depositKey, requestNonce, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  txMaxFee,
-		MinAmount:                 minAmount,
-		TermSeconds:               termSeconds,
-		// Far-future TimeoutAt so the validator's safety-margin gate
-		// (REQUEST_TIMEOUT_SAFETY_MARGIN, 2 hours) does not reject the
-		// action. Tests that intentionally exercise the gate set
-		// TimeoutAt via SetReservationAction directly.
-		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
-	})
+	return hashesByLabel
 }
 
 // newBoundaryTestChain builds a reservationAcceptanceLocalChain with the
 // reservation-parameters/caps/wallet/block-counter setup shared by most of
 // this file's Run()-based tests: a live wallet at walletPublicKeyHash, a
 // ReservationParameters of {vault: testReservationVaultAddress, minAmount:
-// 1000, txMaxFee: 5000, maxPerWallet: 5}, per-wallet/single caps of
-// 5000000, an active-reservations cap of 100, and a deposit minimum age of
-// one hour. overrides, when non-nil, runs after these defaults so a call
-// site can customize only what it varies (e.g. re-set ReservationParameters
-// with different values, raise a cap, or inject an error field).
+// 1000, txMaxFee: 5000, maxPerWallet: 5, term: 90 days, action timeout: 24
+// hours}, per-wallet/single caps of 5000000, an active-reservations cap of
+// 100, a deposit minimum age of DEPOSIT_MIN_AGE (2 hours) and a 12-second
+// block time. overrides, when non-nil, runs after these defaults so a
+// call site can customize only what it varies.
 func newBoundaryTestChain(
 	t *testing.T,
 	walletPublicKeyHash [20]byte,
@@ -556,18 +717,13 @@ func newBoundaryTestChain(
 	t.Helper()
 
 	ralc := newReservationAcceptanceLocalChain()
-	ralc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault:          testReservationVaultAddress,
-		ReservationMinAmount:      1000,
-		ReservationTxMaxFee:       5000,
-		MaxReservationsPerWallet:  5,
-		ReservationMaxTotalAmount: 100000000,
-	})
+	ralc.SetReservationParameters(defaultTestReservationParameters())
 	ralc.maxPerWalletAmount = 5000000
 	ralc.maxSingleAmount = 5000000
 	ralc.maxActive = 100
 
-	ralc.SetDepositMinAge(3600)
+	ralc.SetDepositMinAge(testDepositMinAgeSeconds)
+	ralc.SetAverageBlockTime(12 * time.Second)
 	ralc.SetWallet(
 		walletPublicKeyHash,
 		&tbtc.WalletChainData{State: tbtc.StateLive},
@@ -582,6 +738,111 @@ func newBoundaryTestChain(
 	}
 
 	return ralc
+}
+
+// defaultTestReservationParameters returns the reservation parameters
+// newBoundaryTestChain installs.
+func defaultTestReservationParameters() tbtc.ReservationParameters {
+	return tbtc.ReservationParameters{
+		ReservationVault:          testReservationVaultAddress,
+		ReservationMinAmount:      1000,
+		ReservationTxMaxFee:       5000,
+		MaxReservationsPerWallet:  5,
+		ReservationMaxTotalAmount: 100000000,
+		ReservationTermSeconds:    testReservationTermSeconds,
+		ReservationActionTimeout:  24 * 60 * 60,
+	}
+}
+
+// runTask runs a fresh acceptance task once for walletPublicKeyHash.
+func runTask(
+	t *testing.T,
+	ralc *reservationAcceptanceLocalChain,
+	btcChain *tbtcpg.LocalBitcoinChain,
+	walletPublicKeyHash [20]byte,
+) (*tbtc.ReservationAnchorProposal, bool, error) {
+	t.Helper()
+
+	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+	return runExistingTask(t, task, walletPublicKeyHash)
+}
+
+// runExistingTask runs the given acceptance task once for
+// walletPublicKeyHash.
+func runExistingTask(
+	t *testing.T,
+	task *tbtcpg.ReservationAcceptanceTask,
+	walletPublicKeyHash [20]byte,
+) (*tbtc.ReservationAnchorProposal, bool, error) {
+	t.Helper()
+
+	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	})
+	if proposal == nil {
+		return nil, shouldExecute, err
+	}
+	anchorProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
+	if !ok {
+		t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
+	}
+	return anchorProposal, shouldExecute, err
+}
+
+// expectProposalFor fails the test unless the run produced a proposal for
+// the given deposit at the given nonce.
+func expectProposalFor(
+	t *testing.T,
+	proposal *tbtc.ReservationAnchorProposal,
+	shouldExecute bool,
+	err error,
+	deposit *pendingDeposit,
+	requestNonce uint64,
+) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if !shouldExecute || proposal == nil {
+		t.Fatalf("expected a proposal, got shouldExecute=%v", shouldExecute)
+	}
+	if proposal.DepositFundingTxHash != deposit.fundingTxHash {
+		t.Fatalf(
+			"unexpected deposit funding tx hash\nexpected: %s\nactual:   %s",
+			deposit.fundingTxHash.Hex(bitcoin.ReversedByteOrder),
+			proposal.DepositFundingTxHash.Hex(bitcoin.ReversedByteOrder),
+		)
+	}
+	if proposal.RequestNonce != requestNonce {
+		t.Fatalf(
+			"expected the proposal to carry the pending generation's nonce "+
+				"[%d], got [%d]",
+			requestNonce,
+			proposal.RequestNonce,
+		)
+	}
+}
+
+// expectNoProposal fails the test unless the run was a clean no-op.
+func expectNoProposal(
+	t *testing.T,
+	proposal *tbtc.ReservationAnchorProposal,
+	shouldExecute bool,
+	err error,
+) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if shouldExecute || proposal != nil {
+		t.Fatalf(
+			"expected no proposal, got shouldExecute=%v proposal=%+v",
+			shouldExecute,
+			proposal,
+		)
+	}
 }
 
 // uint64Ptr and uint32Ptr let a TestReservationAcceptanceTask_BoundaryChecks
@@ -620,19 +881,9 @@ func expectedAnchorsEqual(
 	return expected.AnchorTxFee.Cmp(actual.AnchorTxFee) == 0
 }
 
-func TestReservationAcceptanceLookBackBlocks(t *testing.T) {
-	expectedValue := uint64(216000)
-
-	if tbtcpg.ReservationAcceptanceLookBackBlocks != expectedValue {
-		t.Errorf(
-			"unexpected ReservationAcceptanceLookBackBlocks\n"+
-				"expected: %d\n"+
-				"actual:   %d",
-			expectedValue,
-			tbtcpg.ReservationAcceptanceLookBackBlocks,
-		)
-	}
-}
+var testWalletPublicKeyHash = hexToByte20(
+	"8db50eb52063ea9d98b3eac91489a90f738986f6",
+)
 
 func TestReservationAcceptanceTask_ActionType(t *testing.T) {
 	task := tbtcpg.NewReservationAcceptanceTask(
@@ -664,15 +915,14 @@ func TestReservationAcceptanceTask_Run(t *testing.T) {
 		t.Run(scenario.Title, func(t *testing.T) {
 			ralc := scenarioReservationAcceptanceChain(t, scenario)
 			btcChain := tbtcpg.NewLocalBitcoinChain()
-			registerReservedDeposits(t, scenario, ralc, btcChain)
+			hashesByLabel := registerReservedDeposits(t, scenario, ralc, btcChain)
 
-			task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-			request := &tbtc.CoordinationProposalRequest{
-				WalletPublicKeyHash: scenario.WalletPublicKeyHash,
-			}
-
-			proposal, shouldExecute, err := task.Run(request)
+			proposal, shouldExecute, err := runTask(
+				t,
+				ralc,
+				btcChain,
+				scenario.WalletPublicKeyHash,
+			)
 			if err != nil {
 				if scenario.ExpectedErr == nil {
 					t.Fatalf("unexpected error: [%v]", err)
@@ -692,20 +942,8 @@ func TestReservationAcceptanceTask_Run(t *testing.T) {
 				t.Fatalf("expected error [%v], got nil", scenario.ExpectedErr)
 			}
 
-			expectedProposal := scenario.ExpectedAnchorProposal
-
-			if expectedProposal == nil {
-				if shouldExecute {
-					t.Errorf(
-						"unexpected proposal returned when none expected",
-					)
-				}
-				if proposal != nil {
-					t.Errorf(
-						"expected nil proposal, got [%+v]",
-						proposal,
-					)
-				}
+			if scenario.ExpectedAnchorProposal == nil {
+				expectNoProposal(t, proposal, shouldExecute, nil)
 				return
 			}
 
@@ -716,16 +954,18 @@ func TestReservationAcceptanceTask_Run(t *testing.T) {
 				t.Fatal("expected proposal, got nil")
 			}
 
-			actualProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
+			expectedProposal := *scenario.ExpectedAnchorProposal
+			realHash, ok := hashesByLabel[expectedProposal.DepositFundingTxHash]
 			if !ok {
-				t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
+				t.Fatalf("expected proposal refers to an unknown deposit label")
 			}
+			expectedProposal.DepositFundingTxHash = realHash
 
-			if !expectedAnchorsEqual(expectedProposal, actualProposal) {
+			if !expectedAnchorsEqual(&expectedProposal, proposal) {
 				t.Errorf(
 					"invalid anchor proposal\nexpected: %+v\nactual:   %+v",
 					expectedProposal,
-					actualProposal,
+					proposal,
 				)
 			}
 		})
@@ -739,7 +979,6 @@ func TestReservationAcceptanceTask_Run(t *testing.T) {
 // value equal to deposit amount minus the estimated anchor fee.
 func TestReservationAcceptanceTask_AnchorTransactionAssembly(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
 
 	privateKey, err := ecdsa.GenerateKey(btcec.S256(), rand.Reader)
 	if err != nil {
@@ -750,145 +989,17 @@ func TestReservationAcceptanceTask_AnchorTransactionAssembly(t *testing.T) {
 	depositAmount := uint64(2000000)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
-		ralc.maxPerWalletAmount = 50000000
-		ralc.maxSingleAmount = 50000000
-	})
-
-	deposit := &tbtc.Deposit{
-		Depositor:           chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-		BlindingFactor:      [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
-		WalletPublicKeyHash: walletPublicKeyHash,
-		RefundPublicKeyHash: [20]byte{0x02},
-		RefundLocktime:      [4]byte{0x03, 0x04, 0x05, 0x06},
-		Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-	}
-
-	depositScript, err := deposit.Script()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	depositScriptHash := sha256.Sum256(depositScript)
-	depositLockingScript, err := bitcoin.PayToWitnessScriptHash(depositScriptHash)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fundingTx := &bitcoin.Transaction{
-		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: bitcoin.Hash{0x09},
-					OutputIndex:     0,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           int64(depositAmount),
-				PublicKeyScript: depositLockingScript,
-			},
-		},
-	}
-	fundingTxHash := fundingTx.Hash()
-	btcChain.SetTransaction(fundingTxHash, fundingTx)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	deposit.Utxo = &bitcoin.UnspentTransactionOutput{
-		Outpoint: &bitcoin.TransactionOutpoint{
-			TransactionHash: fundingTxHash,
-			OutputIndex:     0,
-		},
-		Value: int64(depositAmount),
-	}
-
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  deposit.Depositor,
-			Amount:     depositAmount,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      deposit.Vault,
-		},
-	)
-
-	// Seed a Pending Acceptance action at nonce 1 with the boundary
-	// chain's snapshot parameters so the candidate passes
-	// findReservationAcceptanceCandidate's action-record gate. The
-	// wallet here is the deposit's own WalletPublicKeyHash (the wallet
-	// that revealed the deposit), which is also the chain's active
-	// wallet set above.
-	seedPendingAcceptanceAction(
+	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
+	deposit := addPendingDeposit(
 		t,
 		ralc,
-		fundingTxHash,
-		0,
+		btcChain,
 		walletPublicKeyHash,
-		1,
-		5000,
-		1000,
-		86400,
+		defaultPendingDepositOptions(currentBlock),
 	)
 
-	filterStartBlock := currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         200000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               deposit.Vault,
-			BlindingFactor:      deposit.BlindingFactor,
-			RefundPublicKeyHash: deposit.RefundPublicKeyHash,
-			RefundLocktime:      deposit.RefundLocktime,
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error running task: [%v]", err)
-	}
-	if !shouldExecute {
-		t.Fatalf("expected shouldExecute=true, got false")
-	}
-	if proposal == nil {
-		t.Fatalf("expected non-nil proposal")
-	}
-
-	anchorProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
-	if !ok {
-		t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
-	}
-
-	// Assert on the candidate-derived proposal's own fields, exercising the
-	// candidate-deposit mapping step (also checked by the fixture's
-	// ValidateReservationAnchorProposal override), rather than only
-	// reassembling from this test's own hand-built deposit object below.
-	if anchorProposal.DepositFundingTxHash != fundingTxHash {
-		t.Errorf(
-			"unexpected DepositFundingTxHash\nexpected: %x\nactual:   %x",
-			fundingTxHash,
-			anchorProposal.DepositFundingTxHash,
-		)
-	}
+	anchorProposal, shouldExecute, err := runTask(t, ralc, btcChain, walletPublicKeyHash)
+	expectProposalFor(t, anchorProposal, shouldExecute, err, deposit, 1)
 	if anchorProposal.DepositFundingOutputIndex != 0 {
 		t.Errorf(
 			"unexpected DepositFundingOutputIndex\nexpected: 0\nactual:   %d",
@@ -899,7 +1010,7 @@ func TestReservationAcceptanceTask_AnchorTransactionAssembly(t *testing.T) {
 	// Re-assemble and sign to verify transaction builder output properties.
 	builder, err := tbtc.AssembleReservationAnchorTransaction(
 		btcChain,
-		deposit,
+		deposit.deposit,
 		walletPublicKeyHash,
 		&tbtc.ReservationAction{TxMaxFee: 5000},
 		anchorProposal.AnchorTxFee.Int64(),
@@ -960,38 +1071,13 @@ func TestReservationAcceptanceTask_AnchorTransactionAssembly(t *testing.T) {
 }
 
 // TestReservationAcceptanceTask_NoCandidates verifies that the task is a
-// no-op when the chain has no reserved deposits.
+// no-op when no depositor requested acceptance by the wallet.
 func TestReservationAcceptanceTask_NoCandidates(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, 300000, nil)
 
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
-	currentBlock := uint64(300000)
-
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
-		ralc.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationVault: testReservationVaultAddress,
-		})
-		ralc.maxPerWalletAmount = 1000000
-	})
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected nil proposal, got [%+v]", proposal)
-	}
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
 }
 
 // TestReservationAcceptanceTask_VaultNotConfigured_ZeroAddress verifies
@@ -999,406 +1085,175 @@ func TestReservationAcceptanceTask_NoCandidates(t *testing.T) {
 // chain.Address converter emits for an unset vault, never an empty
 // string) is correctly treated as "not configured".
 func TestReservationAcceptanceTask_VaultNotConfigured_ZeroAddress(t *testing.T) {
-	ralc := newReservationAcceptanceLocalChain()
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
-
-	ralc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault: chain.Address(
-			"0x0000000000000000000000000000000000000000",
-		),
-	})
-	ralc.maxPerWalletAmount = 1000000
-	ralc.maxSingleAmount = 5000000
-	ralc.maxActive = 100
-
-	ralc.SetDepositMinAge(3600)
-	ralc.SetWallet(
-		walletPublicKeyHash,
-		&tbtc.WalletChainData{State: tbtc.StateLive},
-	)
-
-	currentBlock := uint64(300000)
-	blockCounter := tbtcpg.NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(currentBlock)
-	ralc.SetBlockCounter(blockCounter)
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected nil proposal, got [%+v]", proposal)
-	}
-}
-
-// TestReservationAcceptanceTask_IgnoresRequestTimeCaps is a regression
-// test for the cross-repo review change: the acceptance task consumes the
-// depositor's Pending Acceptance generation rather than issuing its own
-// request, so it must not re-apply the request-time capacity caps
-// (wallet count, active count) that Solidity's requestReservationAcceptance
-// already reserved when that generation was created. Re-applying them
-// here would double-count the very generation being consumed against
-// them and block every otherwise eligible pending acceptance.
-//
-// This test pins that: with the wallet's own reservation count already at
-// the per-wallet cap and the active-reservations count already at the
-// active cap (the request-time capacity reserved by this very pending
-// generation), the acceptance task still proposes the anchor. A regression
-// that re-added the request-time cap gate at consumption time would make
-// this test fail.
-func TestReservationAcceptanceTask_IgnoresRequestTimeCaps(t *testing.T) {
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	// The pending acceptance generation this candidate consumes was
-	// already reserved against the capacity caps at request time, so
-	// the wallet's own count and the global active count are at their
-	// caps even before this anchor is signed: the wallet holds the cap
-	// number of reservations (including this one) and the active
-	// reservations count equals the max. A fresh request would be
-	// rejected on-chain; consuming the reserved generation must not
-	// be.
-	fundingTxHash := setupEligibleDeposit(
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	// A request exists, but the vault is unset: the task must not look.
+	addPendingDeposit(
 		t,
 		ralc,
 		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
-	seedPendingAcceptanceAction(
+	params := defaultTestReservationParameters()
+	params.ReservationVault = chain.Address(
+		"0x0000000000000000000000000000000000000000",
+	)
+	ralc.SetReservationParameters(params)
+
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
+	if len(ralc.acceptanceEventFilters) != 0 {
+		t.Errorf("expected no acceptance request scan for an unset vault")
+	}
+}
+
+// TestReservationAcceptanceTask_IgnoresRequestTimeCaps pins that the
+// acceptance task, which consumes the depositor's Pending Acceptance
+// generation rather than issuing its own request, does not re-apply the
+// request-time capacity caps (wallet count, active count) that Solidity's
+// requestReservationAcceptance already reserved when that generation was
+// created. Re-applying them would double-count the very generation being
+// consumed and block every otherwise eligible pending acceptance.
+func TestReservationAcceptanceTask_IgnoresRequestTimeCaps(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	deposit := addPendingDeposit(
 		t,
 		ralc,
-		fundingTxHash,
-		0,
-		walletPublicKeyHash,
-		1,
-		5000,
-		1000,
-		86400,
+		btcChain,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
 	// The wallet's own reservation count is at the cap (this pending
 	// generation counts toward it) and the active count is at the
 	// active cap: exactly the state Solidity's request-time
 	// reserveAcceptanceCapacity leaves behind.
-	ralc.SetWalletReservations(walletPublicKeyHash, []*big.Int{
+	ralc.SetWalletReservations(testWalletPublicKeyHash, []*big.Int{
 		new(big.Int).SetInt64(7),
 	})
 	ralc.maxActive = 100
 	ralc.activeCount = 100
 	ralc.walletReservationsCount = 5
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if !shouldExecute || proposal == nil {
-		t.Fatalf(
-			"expected the pending acceptance to be consumed even though " +
-				"the request-time capacity caps (wallet count, active " +
-				"count) are already at their limits; the caps were " +
-				"reserved when the generation was requested",
-		)
-	}
-	if proposal.(*tbtc.ReservationAnchorProposal).RequestNonce != 1 {
-		t.Fatalf(
-			"expected the proposal to carry the pending generation's "+
-				"real nonce (1), got [%d]",
-			proposal.(*tbtc.ReservationAnchorProposal).RequestNonce,
-		)
-	}
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 }
 
-// TestReservationAcceptanceTask_BoundedLookback verifies that the bounded
-// look-back window is applied when the current block exceeds it.
-func TestReservationAcceptanceTask_BoundedLookback(t *testing.T) {
-	initialBlock := uint64(400000)
-
+// TestReservationAcceptanceTask_RequestLookBackWindow pins how far back
+// acceptance requests are scanned. Solidity sets a generation's timeoutAt
+// to request time + the action timeout, so a generation that can still be
+// signed was requested within that timeout: the scan covers the on-chain
+// action timeout in blocks plus a one-day margin, filtered by wallet, and
+// a request inside that window is proposed.
+func TestReservationAcceptanceTask_RequestLookBackWindow(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
-
-	// A block counter this test can advance between runs is created up
-	// front (rather than letting newBoundaryTestChain own an opaque one),
-	// so the second run below can simulate a later coordination window
-	// the way production actually progresses, exercising the task's
-	// per-wallet incremental scan cursor (see depositRevealedEventsSince)
-	// instead of re-querying the exact same already-scanned range twice.
-	blockCounter := tbtcpg.NewMockBlockCounter()
-	blockCounter.SetCurrentBlock(initialBlock)
-
-	ralc := newBoundaryTestChain(
-		t,
-		walletPublicKeyHash,
-		initialBlock,
-		func(ralc *reservationAcceptanceLocalChain) {
-			ralc.SetBlockCounter(blockCounter)
-		},
-	)
-
-	// Register an event below the look-back start block (block 1), under
-	// the unbounded filter a buggy filterStartBlock=0 computation would
-	// query with.
-	oldFundingTxHash := hashFromString(
-		"1111111111111111111111111111111111111111111111111111111111111111",
-	)
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          0,
-			EndBlock:            &initialBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         1,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       oldFundingTxHash,
-			FundingOutputIndex:  0,
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	// First run: only the old deposit exists, revealed at block 1 - before
-	// the look-back start block. No candidate is found on this run; the
-	// second run below is what actually proves the look-back start block
-	// is honored, by advancing the block counter and registering an
-	// eligible deposit within the resulting incremental scan delta.
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error on old deposit run: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false for deposit below lookback window, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected nil proposal for deposit below lookback window, got [%+v]", proposal)
-	}
-
-	// Advance the block counter (as a later coordination window would)
-	// and register an eligible deposit within the resulting incremental
-	// delta range [initialBlock+1, nextBlock].
-	nextBlock := initialBlock + 10
-	blockCounter.SetCurrentBlock(nextBlock)
-
-	fundingTxHash := hashFromString(
-		"2222222222222222222222222222222222222222222222222222222222222222",
-	)
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           2000000,
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	)
-	// Seed a Pending Acceptance action matching the boundary chain's
-	// parameters so this freshly-revealed deposit is eligible to be
-	// accepted by the second run.
-	seedPendingAcceptanceAction(
-		t,
-		ralc,
-		fundingTxHash,
-		0,
-		walletPublicKeyHash,
-		1,
-		5000,
-		1000,
-		86400,
-	)
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          initialBlock + 1,
-			EndBlock:            &nextBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         nextBlock,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	// Second run: the newly revealed deposit must be found and accepted.
-	proposal, shouldExecute, err = task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if !shouldExecute {
-		t.Fatalf("expected shouldExecute=true, got false")
-	}
-	if proposal == nil {
-		t.Fatalf("expected proposal, got nil")
-	}
-	actualProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
-	if !ok {
-		t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
-	}
-	if actualProposal.DepositFundingTxHash != fundingTxHash {
-		t.Errorf(
-			"unexpected deposit funding tx hash\n"+
-				"expected: %s\n"+
-				"actual:   %s",
-			fundingTxHash.Hex(bitcoin.ReversedByteOrder),
-			actualProposal.DepositFundingTxHash.Hex(
-				bitcoin.ReversedByteOrder,
-			),
-		)
-	}
-}
-
-// TestReservationAcceptanceTask_DepositNotReserved confirms that a deposit
-// that fails IsReservedDeposit is filtered out.
-func TestReservationAcceptanceTask_DepositNotReserved(t *testing.T) {
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
-		ralc.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationVault: testReservationVaultAddress,
-		})
-	})
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	// 24-hour action timeout at 12 s per block is 7200 blocks; the
+	// margin adds another 7200.
+	expectedStartBlock := currentBlock - 14400
 
-	fundingTxHash := hashFromString(
-		"3333333333333333333333333333333333333333333333333333333333333333",
-	)
-	btcChain.SetTransaction(fundingTxHash, &bitcoin.Transaction{})
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-		},
-	)
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          0,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         290000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault: &[]chain.Address{chain.Address(
-				"0xReservationVaultAddress1234567890abcdef12345678",
-			)}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.requestBlock = expectedStartBlock
+	opts.revealBlock = expectedStartBlock - 100
+	deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
+	if len(ralc.acceptanceEventFilters) != 1 {
+		t.Fatalf(
+			"expected exactly one acceptance request scan, got %d",
+			len(ralc.acceptanceEventFilters),
+		)
 	}
+	filter := ralc.acceptanceEventFilters[0]
+	if filter.StartBlock != expectedStartBlock ||
+		filter.EndBlock == nil || *filter.EndBlock != currentBlock {
+		t.Fatalf(
+			"unexpected scan range: start=%d end=%v, expected [%d, %d]",
+			filter.StartBlock,
+			filter.EndBlock,
+			expectedStartBlock,
+			currentBlock,
+		)
+	}
+	if len(filter.WalletPublicKeyHash) != 1 ||
+		filter.WalletPublicKeyHash[0] != testWalletPublicKeyHash {
+		t.Fatalf("expected the scan to be filtered by the wallet")
+	}
+}
 
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected no proposal for non-reserved deposit, got %v", proposal)
+// TestReservationAcceptanceTask_RevealLongBeforeRequest is a regression
+// test for acceptance requests made long after the reveal. A depositor may
+// request acceptance up to one term after revealing, so a deposit revealed
+// 300000 blocks (about 41 days) before its request must be found and
+// proposed. The reveal sits exactly on the oldest block of a 10000-block
+// lookup chunk to catch off-by-one errors at chunk edges.
+func TestReservationAcceptanceTask_RevealLongBeforeRequest(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(1000000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.requestBlock = currentBlock - 10
+	// Chunks run backward from the request block: the 30th covers
+	// [requestBlock - 300000 + 1, requestBlock - 290000].
+	opts.revealBlock = opts.requestBlock - 300000 + 1
+	opts.revealedAt = time.Now().Add(-300000 * 12 * time.Second)
+	deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
+
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
+}
+
+// TestReservationAcceptanceTask_DepositNotRoutedToReservationVault
+// confirms that a candidate whose reveal routed the deposit to another
+// vault is skipped.
+func TestReservationAcceptanceTask_DepositNotRoutedToReservationVault(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	otherVault := chain.Address("0xOtherVaultAddress1234567890abcdef123456789012")
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.revealVault = &otherVault
+	addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
+
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
+	if ralc.validateCalls != 0 {
+		t.Errorf("expected no validation, got %d calls", ralc.validateCalls)
 	}
 }
 
 // TestReservationAcceptanceTask_GetWalletError exercises the GetWallet
-// error propagation inside findReservationAcceptanceCandidate: a
-// reserved deposit candidate is discovered and matches the reservation
-// vault, but the candidate wallet's chain data fails to load. Production
-// now propagates this RPC failure instead of masking it as "no eligible
-// candidate", so the coordinator can retry rather than silently treating
-// a transient chain-read failure as a benign no-op.
+// error propagation: the candidate wallet's chain data fails to load and
+// the RPC failure is propagated instead of being masked as "no eligible
+// candidate", so the coordinator can retry.
 func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	// getWalletErr forces GetWallet to fail for the candidate wallet.
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
 		ralc.getWalletErr = fmt.Errorf("boom")
 	})
-
-	setupEligibleDeposit(
+	addPendingDeposit(
 		t,
 		ralc,
 		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -1411,354 +1266,110 @@ func TestReservationAcceptanceTask_GetWalletError(t *testing.T) {
 			err,
 		)
 	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected no proposal, got %v", proposal)
+	if shouldExecute || proposal != nil {
+		t.Errorf("expected no proposal")
 	}
 }
 
 // TestReservationAcceptanceTask_GetReservationError verifies the fail-safe
-// policy documented above the production call site: since the production
-// chain adapter never errors for "not found" (it returns a zero record
-// with State == Unknown), a GetReservation error can only be an RPC/decode
-// failure, and the task must skip the affected deposit for this window
-// rather than fail open and treat it as "not yet created".
+// policy: since the production chain adapter never errors for "not found"
+// (it returns a zero record with State == Unknown), a GetReservation error
+// can only be an RPC/decode failure, and the task must skip the affected
+// deposit for this window rather than fail open.
 func TestReservationAcceptanceTask_GetReservationError(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	setupEligibleDeposit(
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	addPendingDeposit(
 		t,
 		ralc,
 		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
-
-	// Force GetReservation to return an error.
 	ralc.getReservationErr = fmt.Errorf("simulated get reservation error")
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Fatalf("expected nil proposal, got [%+v]", proposal)
-	}
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
 }
 
-// TestReservationAcceptanceTask_Stateless_Maturity verifies the stateless
-// observable contract across two consecutive Run calls on the same task instance:
-// an immature candidate is skipped on the first run, but when time advances and
-// the candidate matures, the second run on the same task instance proposes it
-// without any cache-state interference.
+// TestReservationAcceptanceTask_Stateless_Maturity verifies that an
+// immature candidate is skipped on one run, and proposed by a later run of
+// the same task instance once it matures, without cache interference.
 func TestReservationAcceptanceTask_Stateless_Maturity(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
-
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
 
-	fundingTxHash := hashFromString(
-		"5555555555555555555555555555555555555555555555555555555555555555",
-	)
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           0,
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	// Candidate revealed only 10 minutes ago (depositMinAge is 1 hour).
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-10 * time.Minute),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	)
-
-	// Seed the Pending Acceptance action so once the deposit matures,
-	// the candidate passes findReservationAcceptanceCandidate's
-	// action-record gate.
-	seedPendingAcceptanceAction(
-		t,
-		ralc,
-		fundingTxHash,
-		0,
-		walletPublicKeyHash,
-		1,
-		5000,
-		1000,
-		86400,
-	)
-
-	filterStartBlock := uint64(0)
-	if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
-
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         290000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
+	// Revealed only 10 minutes ago (DEPOSIT_MIN_AGE is 2 hours).
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.revealedAt = time.Now().Add(-10 * time.Minute)
+	deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
 	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
 
-	// First run: deposit is immature, should not be proposed.
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("first run error: [%v]", err)
-	}
-	if shouldExecute || proposal != nil {
-		t.Fatalf("expected no proposal on first run for immature deposit")
-	}
+	proposal, shouldExecute, err := runExistingTask(t, task, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
 
-	// Advance deposit age (simulating passage of time to 2 hours ago).
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	)
+	// Time passes: the deposit was revealed 3 hours ago.
+	ralc.SetDepositRequest(deposit.fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Depositor:  testDepositor,
+		Amount:     opts.amount,
+		RevealedAt: time.Now().Add(-3 * time.Hour),
+		SweptAt:    time.Unix(0, 0),
+		Vault:      &[]chain.Address{testReservationVaultAddress}[0],
+	})
 
-	// Second run on the same task instance: deposit is now mature and proposed.
-	proposal, shouldExecute, err = task.Run(request)
-	if err != nil {
-		t.Fatalf("second run error: [%v]", err)
-	}
-	if !shouldExecute || proposal == nil {
-		t.Fatalf("expected proposal on second run after deposit matured")
-	}
-
-	actualProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
-	if !ok {
-		t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
-	}
-	if actualProposal.DepositFundingTxHash != fundingTxHash {
-		t.Errorf(
-			"unexpected deposit funding tx hash\nexpected: %s\nactual:   %s",
-			fundingTxHash.Hex(bitcoin.ReversedByteOrder),
-			actualProposal.DepositFundingTxHash.Hex(bitcoin.ReversedByteOrder),
-		)
-	}
+	proposal, shouldExecute, err = runExistingTask(t, task, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 }
 
 // TestReservationAcceptanceTask_ReservationParametersFetchedLive verifies
-// that each Run() call reflects the chain's current live state rather than
-// anything cached from a prior run on the same task instance. It also
-// pins two behaviors of the snapshot-driven minimum-amount gate and the
-// depositor-action-driven proposal consumption that supersede the
-// pre-fix operator-side request path:
-//   - the live ReservationParameters is consulted on every Run -- a
-//     governance mutation takes effect on the very next call;
-//   - the minimum-amount gate uses the generation's snapshotted minimum
-//     rather than the live ReservationMinAmount, so a live raise that
-//     crosses the deposit does not retroactively invalidate a pending
-//     generation whose own snapshot still clears it.
+// that each Run() call reflects the chain's current live state, and that
+// the minimum-amount gate uses the generation's snapshotted minimum rather
+// than the live ReservationMinAmount: a live raise that crosses the
+// deposit does not retroactively invalidate a pending generation whose own
+// snapshot still clears it.
 func TestReservationAcceptanceTask_ReservationParametersFetchedLive(t *testing.T) {
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
+	btcChain := tbtcpg.NewLocalBitcoinChain()
 	currentBlock := uint64(300000)
 
-	t.Run("live parameters are re-fetched each Run", func(t *testing.T) {
-		btcChain := tbtcpg.NewLocalBitcoinChain()
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	deposit := addPendingDeposit(
+		t,
+		ralc,
+		btcChain,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
+	)
 
-		ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
+	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
 
-		setupEligibleDeposit(
-			t,
-			ralc,
-			btcChain,
-			walletPublicKeyHash,
-			currentBlock,
-			2000000,
-		)
+	proposal, shouldExecute, err := runExistingTask(t, task, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 
-		task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-		request := &tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: walletPublicKeyHash,
-		}
+	// Raise the live ReservationMinAmount above the deposit's value. The
+	// snapshotted MinAmount on the seeded action (1000) is unchanged, so
+	// the deposit must still pass the gate on the second run.
+	params := defaultTestReservationParameters()
+	params.ReservationMinAmount = 3000000
+	ralc.SetReservationParameters(params)
 
-		// Seed a Pending Acceptance action at nonce 1 with snapshot
-		// MinAmount=1000 (matching the live min at the moment of the
-		// depositor's request), so the candidate is eligible on both
-		// runs.
-		seedPendingAcceptanceAction(
-			t,
-			ralc,
-			setupEligibleDeposit(
-				t,
-				ralc,
-				btcChain,
-				walletPublicKeyHash,
-				currentBlock,
-				2000000,
-			),
-			0,
-			walletPublicKeyHash,
-			1,
-			5000,
-			1000,
-			86400,
-		)
-
-		// First run: snapshot min (1000) plus fee (710) is well below
-		// the deposit (2000000) -- must accept.
-		_, shouldExecute, err := task.Run(request)
-		if err != nil {
-			t.Fatalf("unexpected error on first run: [%v]", err)
-		}
-		if !shouldExecute {
-			t.Fatalf("expected shouldExecute=true on first run, got false")
-		}
-
-		// Raise the live ReservationMinAmount above the deposit's value.
-		// The snapshotted MinAmount on the seeded action (1000) is
-		// unchanged, so the deposit must still pass the gate on the
-		// second run.
-		ralc.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationVault:          testReservationVaultAddress,
-			ReservationMinAmount:      3000000,
-			ReservationTxMaxFee:       5000,
-			MaxReservationsPerWallet:  5,
-			ReservationMaxTotalAmount: 100000000,
-		})
-
-		proposal, shouldExecute, err := task.Run(request)
-		if err != nil {
-			t.Fatalf("unexpected error on second run: [%v]", err)
-		}
-		if !shouldExecute {
-			t.Fatalf(
-				"expected shouldExecute=true on second run after raising " +
-					"the live ReservationMinAmount above the deposit's " +
-					"value -- the snapshot min (1000) still clears the " +
-					"gate, so a false here means the live value was used",
-			)
-		}
-		if proposal == nil {
-			t.Fatalf("expected a non-nil proposal on second run")
-		}
-	})
-
-	t.Run("operator never requests acceptance; the depositor's pending action is consumed", func(t *testing.T) {
-		btcChain := tbtcpg.NewLocalBitcoinChain()
-
-		ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-		fundingTxHash := setupEligibleDeposit(
-			t,
-			ralc,
-			btcChain,
-			walletPublicKeyHash,
-			currentBlock,
-			2000000,
-		)
-
-		// Seed a Pending Acceptance action the depositor would have
-		// requested via requestReservationAcceptance. Production now
-		// consumes that record rather than issuing a fresh one.
-		seedPendingAcceptanceAction(
-			t,
-			ralc,
-			fundingTxHash,
-			0,
-			walletPublicKeyHash,
-			1,
-			5000,
-			1000,
-			86400,
-		)
-
-		task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-		request := &tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: walletPublicKeyHash,
-		}
-
-		proposal, shouldExecute, err := task.Run(request)
-		if err != nil {
-			t.Fatalf("unexpected error on first run: [%v]", err)
-		}
-		if !shouldExecute || proposal == nil {
-			t.Fatalf("expected shouldExecute=true on first run")
-		}
-		anchorProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
-		if !ok {
-			t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
-		}
-		if anchorProposal.RequestNonce != 1 {
-			t.Fatalf(
-				"expected proposal to carry the generation's actual "+
-					"nonce (1), got [%d] -- a value of N+1 means the "+
-					"task invented the next nonce instead of consuming "+
-					"the depositor's action",
-				anchorProposal.RequestNonce,
-			)
-		}
-	})
+	proposal, shouldExecute, err = runExistingTask(t, task, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
 }
 
 // TestReservationAcceptanceTask_BoundaryChecks exercises explicit
-// at-limit/one-over-limit boundary crossings for the snapshotted
-// ReservationMinAmount the acceptance candidate enforces against its
-// own action record (the gross gate is depositAmount >= ReservationMinAmount,
-// and the net-of-fee gate is depositAmount >= MinAmount + fee). The
-// request-time capacity caps (active count, per-wallet count and
-// amount, single amount, global total) are no longer re-checked here:
-// Solidity's requestReservationAcceptance already reserved them when
-// the Pending Acceptance generation was created.
+// at-limit/one-over-limit boundary crossings for the snapshotted minimum
+// the acceptance candidate enforces against its own action record
+// (depositAmount >= MinAmount + anchor fee). A generation below that bound
+// cannot be created on-chain (requestReservationAcceptance requires
+// amount >= MinAmount + txMaxFee and the anchor fee never exceeds
+// txMaxFee), so the rejecting rows pin a defensive check. The
+// request-time capacity caps are not re-checked here: Solidity's
+// requestReservationAcceptance already reserved them.
 func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 	tests := map[string]struct {
 		depositAmount            uint64
@@ -1786,18 +1397,10 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			reservationMaxTotal:      100000000,
 			expectAccept:             true,
 		},
-		// checkReservationAcceptanceEligibility's gross-amount gate only
-		// requires depositAmount >= reservationMinAmount, but
-		// proposeReservationAcceptance additionally requires the
-		// *net-of-fee* anchor value (deposit - anchorFee) to also clear
-		// reservationMinAmount. Even though the test fixture sets a 1 sat/vByte
-		// oracle rate, applyWalletTxFeeFloor (see fee.go) clamps the rate to
-		// minWalletTxSatPerVByteFee (5 sat/vByte), resulting in a 710 sat fee
-		// (5 * 142 vsize = testAnchorFeeSat). Deposit amounts are offset by
+		// The fixture's 1 sat/vByte oracle rate is clamped by
+		// applyWalletTxFeeFloor (see fee.go) to 5 sat/vByte, a 710 sat
+		// fee (testAnchorFeeSat). Deposit amounts are offset by
 		// testAnchorFeeSat to test the exact net-of-fee boundary.
-		// The snapshot min on the seeded action mirrors the live
-		// ReservationMinAmount so the gate is governed by the row's
-		// value, not by the previous row's.
 		"ReservationMinAmount: exactly at minimum accepts": {
 			depositAmount:            100000 + testAnchorFeeSat,
 			maxReservationsPerWallet: 5,
@@ -1831,83 +1434,38 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			ralc := newReservationAcceptanceLocalChain()
 			btcChain := tbtcpg.NewLocalBitcoinChain()
-			btcChain.SetEstimateSatPerVByteFee(1, 1)
-
-			walletPublicKeyHash := hexToByte20(
-				"8db50eb52063ea9d98b3eac91489a90f738986f6",
-			)
-
-			ralc.SetReservationParameters(tbtc.ReservationParameters{
-				ReservationVault:          testReservationVaultAddress,
-				ReservationMinAmount:      test.reservationMinAmount,
-				ReservationTxMaxFee:       5000,
-				MaxReservationsPerWallet:  test.maxReservationsPerWallet,
-				ReservationMaxTotalAmount: test.reservationMaxTotal,
-				ReservationTotalAmount:    test.reservationTotal,
-			})
-			ralc.maxPerWalletAmount = 50000000
-			if test.maxPerWalletAmount != nil {
-				ralc.maxPerWalletAmount = *test.maxPerWalletAmount
-			}
-			ralc.maxSingleAmount = 50000000
-			if test.maxSingleAmount != nil {
-				ralc.maxSingleAmount = *test.maxSingleAmount
-			}
-			ralc.maxActive = 100
-			if test.maxActive != nil {
-				ralc.maxActive = *test.maxActive
-			}
-			ralc.activeCount = test.activeCount
-			ralc.walletReservationsAmount = test.walletReservationsAmount
-			ralc.walletReservationsCount = test.walletReservationsCount
-
-			ralc.SetDepositMinAge(3600)
-			ralc.SetWallet(
-				walletPublicKeyHash,
-				&tbtc.WalletChainData{State: tbtc.StateLive},
-			)
-
 			currentBlock := uint64(300000)
-			blockCounter := tbtcpg.NewMockBlockCounter()
-			blockCounter.SetCurrentBlock(currentBlock)
-			ralc.SetBlockCounter(blockCounter)
 
-			fundingTxHash := setupEligibleDeposit(
-				t,
-				ralc,
-				btcChain,
-				walletPublicKeyHash,
-				currentBlock,
-				test.depositAmount,
-			)
+			ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
+				params := defaultTestReservationParameters()
+				params.ReservationMinAmount = test.reservationMinAmount
+				params.MaxReservationsPerWallet = test.maxReservationsPerWallet
+				params.ReservationMaxTotalAmount = test.reservationMaxTotal
+				params.ReservationTotalAmount = test.reservationTotal
+				ralc.SetReservationParameters(params)
+				ralc.maxPerWalletAmount = 50000000
+				if test.maxPerWalletAmount != nil {
+					ralc.maxPerWalletAmount = *test.maxPerWalletAmount
+				}
+				ralc.maxSingleAmount = 50000000
+				if test.maxSingleAmount != nil {
+					ralc.maxSingleAmount = *test.maxSingleAmount
+				}
+				if test.maxActive != nil {
+					ralc.maxActive = *test.maxActive
+				}
+				ralc.activeCount = test.activeCount
+				ralc.walletReservationsAmount = test.walletReservationsAmount
+				ralc.walletReservationsCount = test.walletReservationsCount
+			})
 
-			// Seed a Pending Acceptance action with the row's snapshot
-			// min so this test exercises the per-row cap configuration,
-			// not the previous row's leftover state. Reject rows trip a
-			// cap gate before the action lookup, so the snapshot value
-			// only matters for the accept rows; seeding it consistently
-			// keeps the driver uniform.
-			seedPendingAcceptanceAction(
-				t,
-				ralc,
-				fundingTxHash,
-				0,
-				walletPublicKeyHash,
-				1,
-				5000,
-				test.reservationMinAmount,
-				86400,
-			)
+			opts := defaultPendingDepositOptions(currentBlock)
+			opts.amount = test.depositAmount
+			opts.minAmount = test.reservationMinAmount
+			addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
-			task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-			request := &tbtc.CoordinationProposalRequest{
-				WalletPublicKeyHash: walletPublicKeyHash,
-			}
-
-			_, shouldExecute, err := task.Run(request)
+			_, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
 			if err != nil {
 				t.Fatalf("unexpected error: [%v]", err)
 			}
@@ -1923,146 +1481,55 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 }
 
 // TestReservationAcceptanceTask_Stateless_NoReRequest pins the two
-// surviving "no double-acceptance" cases after the operator-side
-// RequestReservationAcceptance path was removed. The acceptance task
-// consumes, rather than creates, the depositor's request record, so a
-// double-proposal can no longer be caused by repeated operator requests:
-// it can only happen if the task builds a proposal for a generation it
-// is not allowed to anchor. The two cases below cover that:
-//   - a Pending Acceptance action that targets another wallet must not
-//     be consumed by this operator;
-//   - a Settled (or otherwise non-Pending) action at the current nonce
-//     must not be re-anchored.
+// "no double-acceptance" cases: the acceptance task consumes, rather than
+// creates, the depositor's request record, so a double proposal can only
+// happen if it builds a proposal for a generation it may not anchor:
+//   - a Pending Acceptance action that targets another wallet;
+//   - a Settled (or otherwise non-Pending) action at the current nonce.
 func TestReservationAcceptanceTask_Stateless_NoReRequest(t *testing.T) {
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	otherWalletPublicKeyHash := hexToByte20(
 		"7c1c4dbaaf8d75b08f9ea8e3f9a2c3a98e1f0d77",
 	)
-
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	fundingTxHash := hashFromString(
-		"6666666666666666666666666666666666666666666666666666666666666666",
-	)
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           0,
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
+	tests := map[string]func(action *tbtc.ReservationAction){
+		"pending acceptance targeting another wallet is not consumed": func(action *tbtc.ReservationAction) {
+			action.TargetWalletPublicKeyHash = otherWalletPublicKeyHash
 		},
-	)
-
-	filterStartBlock := uint64(0)
-	if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
-
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		"settled generation is not re-anchored": func(action *tbtc.ReservationAction) {
+			action.State = tbtc.ReservationActionStateSettled
 		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         290000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
 	}
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
-
-	depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
-
-	t.Run("pending acceptance targeting another wallet is not consumed", func(t *testing.T) {
-		ralc.SetReservation(depositKey, &tbtc.Reservation{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			State:               tbtc.ReservationStateUnknown,
-			RequestNonce:        1,
-		})
-		ralc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
-			ActionType:                tbtc.ReservationActionTypeAcceptance,
-			State:                     tbtc.ReservationActionStatePending,
-			TargetWalletPublicKeyHash: otherWalletPublicKeyHash,
-			TxMaxFee:                  5000,
-			MinAmount:                 1000,
-			TermSeconds:               86400,
-		})
-
-		proposal, shouldExecute, err := task.Run(request)
-		if err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
-		}
-		if shouldExecute || proposal != nil {
-			t.Fatalf(
-				"expected no proposal for a pending acceptance generation " +
-					"authorizing a different wallet",
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+			deposit := addPendingDeposit(
+				t,
+				ralc,
+				btcChain,
+				testWalletPublicKeyHash,
+				defaultPendingDepositOptions(currentBlock),
 			)
-		}
-	})
+			action, err := ralc.GetReservationAction(deposit.depositKey, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutated := *action
+			mutate(&mutated)
+			ralc.SetReservationAction(deposit.depositKey, 1, &mutated)
 
-	t.Run("settled generation is not re-anchored", func(t *testing.T) {
-		ralc.SetReservation(depositKey, &tbtc.Reservation{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			State:               tbtc.ReservationStateUnknown,
-			RequestNonce:        1,
+			proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+			expectNoProposal(t, proposal, shouldExecute, err)
 		})
-		ralc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
-			ActionType:                tbtc.ReservationActionTypeAcceptance,
-			State:                     tbtc.ReservationActionStateSettled,
-			TargetWalletPublicKeyHash: walletPublicKeyHash,
-			TxMaxFee:                  5000,
-			MinAmount:                 1000,
-			TermSeconds:               86400,
-		})
-
-		proposal, shouldExecute, err := task.Run(request)
-		if err != nil {
-			t.Fatalf("unexpected error: [%v]", err)
-		}
-		if shouldExecute || proposal != nil {
-			t.Fatalf(
-				"expected no proposal for a Settled generation -- the " +
-					"task must not re-anchor a generation whose action " +
-					"is no longer Pending",
-			)
-		}
-	})
+	}
 }
 
-// TestReservationAcceptanceTask_Stateless_NonEligibleReservationState verifies that
-// a reservation whose on-chain state is Active, ActionPending, Closed, or Stranded
-// is skipped from acceptance proposals.
+// TestReservationAcceptanceTask_Stateless_NonEligibleReservationState
+// verifies that a reservation whose on-chain state is Active,
+// ActionPending, Closed, or Stranded, with no pending acceptance action
+// at its current nonce, is skipped from acceptance proposals.
 func TestReservationAcceptanceTask_Stateless_NonEligibleReservationState(t *testing.T) {
 	nonEligibleStates := []tbtc.ReservationState{
 		tbtc.ReservationStateActive,
@@ -2074,81 +1541,19 @@ func TestReservationAcceptanceTask_Stateless_NonEligibleReservationState(t *test
 	for _, state := range nonEligibleStates {
 		t.Run(fmt.Sprintf("state_%v", state), func(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
-
-			walletPublicKeyHash := hexToByte20(
-				"8db50eb52063ea9d98b3eac91489a90f738986f6",
-			)
 			currentBlock := uint64(300000)
 
-			ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-			fundingTxHash := hashFromString(
-				"8888888888888888888888888888888888888888888888888888888888888888",
-			)
-			dummyTx := &bitcoin.Transaction{
-				Outputs: []*bitcoin.TransactionOutput{{
-					Value:           0,
-					PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-				}},
-			}
-			btcChain.SetTransaction(fundingTxHash, dummyTx)
-			btcChain.SetEstimateSatPerVByteFee(1, 1)
-			btcChain.SetTransactionConfirmations(
-				fundingTxHash,
-				tbtc.DepositSweepRequiredFundingTxConfirmations,
-			)
-
-			ralc.SetDepositRequest(
-				fundingTxHash,
-				0,
-				&tbtc.DepositChainRequest{
-					Amount:     2000000,
-					RevealedAt: time.Now().Add(-2 * time.Hour),
-					SweptAt:    time.Unix(0, 0),
-					Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-				},
-			)
-
-			filterStartBlock := uint64(0)
-			if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-				filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-			}
-
-			if err := ralc.AddPastDepositRevealedEvent(
-				&tbtc.DepositRevealedEventFilter{
-					StartBlock:          filterStartBlock,
-					EndBlock:            &currentBlock,
-					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-				},
-				&tbtc.DepositRevealedEvent{
-					BlockNumber:         290000,
-					WalletPublicKeyHash: walletPublicKeyHash,
-					FundingTxHash:       fundingTxHash,
-					FundingOutputIndex:  0,
-					Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-				},
-			); err != nil {
-				t.Fatal(err)
-			}
-
-			depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
-			ralc.SetReservation(depositKey, &tbtc.Reservation{
+			ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+			opts := defaultPendingDepositOptions(currentBlock)
+			opts.withoutAction = true
+			deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
+			ralc.SetReservation(deposit.depositKey, &tbtc.Reservation{
 				State:        state,
-				RequestNonce: 1,
+				RequestNonce: 2,
 			})
 
-			task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-			request := &tbtc.CoordinationProposalRequest{
-				WalletPublicKeyHash: walletPublicKeyHash,
-			}
-
-			proposal, shouldExecute, err := task.Run(request)
-			if err != nil {
-				t.Fatalf("unexpected task error: [%v]", err)
-			}
-			if shouldExecute || proposal != nil {
-				t.Fatalf("expected candidate with state %v to be skipped", state)
-			}
+			proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+			expectNoProposal(t, proposal, shouldExecute, err)
 		})
 	}
 }
@@ -2157,228 +1562,75 @@ func TestReservationAcceptanceTask_Stateless_NonEligibleReservationState(t *test
 // each generation of a reservation carries its own snapshotted minimum
 // amount: a deposit whose first generation's snapshot is above the
 // deposit is skipped for that generation, but a fresh generation written
-// after governance lowered the live minimum (so the new snapshot clears
-// the deposit) becomes eligible and is consumed at its own real nonce.
+// after governance lowered the live minimum becomes eligible and is
+// consumed at its own real nonce.
 func TestReservationAcceptanceTask_Stateless_DynamicMinAmount(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, func(ralc *reservationAcceptanceLocalChain) {
-		ralc.SetReservationParameters(tbtc.ReservationParameters{
-			ReservationVault:          testReservationVaultAddress,
-			ReservationMinAmount:      5000000,
-			ReservationTxMaxFee:       5000,
-			MaxReservationsPerWallet:  5,
-			ReservationMaxTotalAmount: 100000000,
-		})
-		ralc.maxPerWalletAmount = 50000000
-		ralc.maxSingleAmount = 50000000
-	})
-
-	fundingTxHash := hashFromString(
-		"9999999999999999999999999999999999999999999999999999999999999999",
-	)
-	dummyTx := &bitcoin.Transaction{
-		Outputs: []*bitcoin.TransactionOutput{{
-			Value:           0,
-			PublicKeyScript: append([]byte{0x00, 0x20}, make([]byte, 32)...),
-		}},
-	}
-	btcChain.SetTransaction(fundingTxHash, dummyTx)
-	btcChain.SetEstimateSatPerVByteFee(1, 1)
-	btcChain.SetTransactionConfirmations(
-		fundingTxHash,
-		tbtc.DepositSweepRequiredFundingTxConfirmations,
-	)
-
-	// Deposit amount is 2,000,000 (below the first generation's
-	// snapshotted minimum of 5,000,000).
-	ralc.SetDepositRequest(
-		fundingTxHash,
-		0,
-		&tbtc.DepositChainRequest{
-			Depositor:  chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-2 * time.Hour),
-			SweptAt:    time.Unix(0, 0),
-			Vault:      &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	)
-
-	filterStartBlock := uint64(0)
-	if currentBlock > tbtcpg.ReservationAcceptanceLookBackBlocks {
-		filterStartBlock = currentBlock - tbtcpg.ReservationAcceptanceLookBackBlocks
-	}
-
-	if err := ralc.AddPastDepositRevealedEvent(
-		&tbtc.DepositRevealedEventFilter{
-			StartBlock:          filterStartBlock,
-			EndBlock:            &currentBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-		&tbtc.DepositRevealedEvent{
-			BlockNumber:         290000,
-			WalletPublicKeyHash: walletPublicKeyHash,
-			FundingTxHash:       fundingTxHash,
-			FundingOutputIndex:  0,
-			Vault:               &[]chain.Address{testReservationVaultAddress}[0],
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
 
 	// First generation: snapshot min (5,000,000) is above the deposit
 	// (2,000,000); the candidate must be skipped.
-	ralc.SetReservation(depositKey, &tbtc.Reservation{
-		WalletPublicKeyHash: walletPublicKeyHash,
-		State:               tbtc.ReservationStateUnknown,
-		RequestNonce:        1,
-	})
-	ralc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  5000,
-		MinAmount:                 5000000,
-		TermSeconds:               86400,
-		// Far-future TimeoutAt so the timeout safety-margin gate is
-		// not the reason generation 1 is skipped: the subject of this
-		// test is the snapshotted minimum, and generation 1's snapshot
-		// (5,000,000) is what must reject the 2,000,000 deposit.
-		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
-	})
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.minAmount = 5000000
+	deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
 	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-	request := &tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	}
 
-	proposal, shouldExecute, err := task.Run(request)
-	if err != nil {
-		t.Fatalf("first run error: [%v]", err)
-	}
-	if shouldExecute || proposal != nil {
-		t.Fatalf(
-			"expected no proposal when the first generation's snapshotted " +
-				"minimum (5,000,000) is above the deposit (2,000,000)",
-		)
-	}
+	proposal, shouldExecute, err := runExistingTask(t, task, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
 
-	// Governance lowers the live minimum. The depositor issues a fresh
-	// request -- production bumps the reservation's RequestNonce and
-	// writes a new action record carrying the new snapshot -- and the
-	// candidate becomes eligible.
-	ralc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault:          testReservationVaultAddress,
-		ReservationMinAmount:      1000000,
-		ReservationTxMaxFee:       5000,
-		MaxReservationsPerWallet:  5,
-		ReservationMaxTotalAmount: 100000000,
-	})
-
-	ralc.SetReservation(depositKey, &tbtc.Reservation{
-		WalletPublicKeyHash: walletPublicKeyHash,
+	// The depositor issues a fresh request: the reservation's nonce is
+	// bumped, a new action record carries the new snapshot, and a new
+	// ReservationAcceptanceRequested event is emitted.
+	timeoutAt := uint32(time.Now().Add(24 * time.Hour).Unix())
+	ralc.SetReservation(deposit.depositKey, &tbtc.Reservation{
+		WalletPublicKeyHash: testWalletPublicKeyHash,
 		State:               tbtc.ReservationStateUnknown,
 		RequestNonce:        2,
 	})
-	ralc.SetReservationAction(depositKey, 2, &tbtc.ReservationAction{
+	ralc.SetReservationAction(deposit.depositKey, 2, &tbtc.ReservationAction{
 		ActionType:                tbtc.ReservationActionTypeAcceptance,
 		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TargetWalletPublicKeyHash: testWalletPublicKeyHash,
 		TxMaxFee:                  5000,
 		MinAmount:                 1000000,
-		TermSeconds:               86400,
-		// Far-future TimeoutAt so the timeout safety-margin gate does
-		// not reject the second generation.
-		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
+		TermSeconds:               testReservationTermSeconds,
+		TimeoutAt:                 timeoutAt,
+	})
+	ralc.acceptanceEvents = append(ralc.acceptanceEvents, &tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      deposit.depositKey,
+		RequestNonce:        2,
+		WalletPublicKeyHash: testWalletPublicKeyHash,
+		DepositAmount:       2000000,
+		TxMaxFee:            5000,
+		TimeoutAt:           timeoutAt,
+		BlockNumber:         currentBlock - 5,
 	})
 
-	proposal, shouldExecute, err = task.Run(request)
-	if err != nil {
-		t.Fatalf("second run error: [%v]", err)
-	}
-	if !shouldExecute || proposal == nil {
-		t.Fatalf(
-			"expected a proposal on the second run after governance " +
-				"lowered the live minimum and the depositor issued a new " +
-				"generation",
-		)
-	}
-	anchorProposal, ok := proposal.(*tbtc.ReservationAnchorProposal)
-	if !ok {
-		t.Fatalf("expected *ReservationAnchorProposal, got %T", proposal)
-	}
-	if anchorProposal.RequestNonce != 2 {
-		t.Fatalf(
-			"expected the proposal to carry the second generation's actual "+
-				"nonce (2), got [%d]",
-			anchorProposal.RequestNonce,
-		)
-	}
+	proposal, shouldExecute, err = runExistingTask(t, task, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, deposit, 2)
 }
 
-// TestReservationAcceptanceTask_Stateless_RequestNonceIncremented verified
-// that an existing reservation record at RequestNonce N produced a
-// proposal at RequestNonce N + 1 -- the operator-side
-// RequestReservationAcceptance path that was removed in the cross-repo
-// review. The acceptance task now consumes, rather than creates, the
-// depositor's action record: a successful proposal always carries the
-// reservation's current RequestNonce, never an invented N + 1. That
-// behavior is pinned by:
-//
-//   - TestReservationAcceptanceTask_Run/happy_path (the JSON scenario 0),
-//     whose ExpectedAnchorProposal.RequestNonce equals the seeded
-//     action's nonce (1);
-//   - TestReservationAcceptanceTask_ReservationParametersFetchedLive,
-//     which asserts the proposal's RequestNonce equals the generation's
-//     real nonce (1) when the operator-side path is in scope;
-//   - TestReservationAcceptanceTask_Stateless_DynamicMinAmount, which
-//     pins RequestNonce = 2 once the depositor issues a second
-//     generation.
-//
-// The strict-fake corollary -- a proposal at nonce + 1 is rejected by
-// LocalChain.ValidateReservationAnchorProposal, the precondition the
-// production validator mirrors -- is exercised by
-// TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate.
-
-// TestReservationAcceptanceTask_PastDepositRevealedEventsError verifies that
-// a genuine (non-sentinel) error from PastDepositRevealedEvents is
-// propagated as a hard error, rather than being swallowed like the mock's
-// "no events for given filter" sentinel.
-func TestReservationAcceptanceTask_PastDepositRevealedEventsError(t *testing.T) {
+// TestReservationAcceptanceTask_AcceptanceRequestedEventsError verifies
+// that a failure to fetch the wallet's acceptance requests aborts the Run
+// with an error, rather than being reported as "no candidate".
+func TestReservationAcceptanceTask_AcceptanceRequestedEventsError(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	// Otherwise-eligible deposit; the injected error must still short
-	// circuit before any candidate is ever evaluated.
-	setupEligibleDeposit(
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	addPendingDeposit(
 		t,
 		ralc,
 		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
+	ralc.acceptanceEventsErr = fmt.Errorf("simulated rpc failure")
 
-	ralc.pastDepositRevealedEventsErr = fmt.Errorf("simulated rpc failure")
-
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	_, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
+	_, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
 	if err == nil {
 		t.Fatalf("expected a non-nil error, got nil")
 	}
@@ -2387,89 +1639,75 @@ func TestReservationAcceptanceTask_PastDepositRevealedEventsError(t *testing.T) 
 	}
 }
 
-// TestReservationAcceptanceTask_ValidateProposalError verifies that a
-// ValidateReservationAnchorProposal failure is treated as a pre-write
-// failure (see reservationAcceptancePreWriteError): the doomed candidate
-// is skipped rather than aborting the whole coordination window, so with
-// no other candidate available Run reports a clean no-op instead of an
-// error.
-func TestReservationAcceptanceTask_ValidateProposalError(t *testing.T) {
+// TestReservationAcceptanceTask_RevealLookupErrorSkipsCandidate verifies
+// that a failed DepositRevealed lookup for one candidate skips that
+// candidate for the window instead of aborting the Run.
+func TestReservationAcceptanceTask_RevealLookupErrorSkipsCandidate(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-	fundingTxHash := setupEligibleDeposit(
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	addPendingDeposit(
 		t,
 		ralc,
 		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
+	ralc.pastDepositRevealedEventsErr = fmt.Errorf("simulated rpc failure")
 
-	// Seed a Pending Acceptance action so the candidate actually
-	// reaches proposeReservationAcceptance and the validate call fires.
-	seedPendingAcceptanceAction(
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
+}
+
+// TestReservationAcceptanceTask_ValidateProposalError verifies that a
+// ValidateReservationAnchorProposal failure skips the candidate rather
+// than aborting the coordination window: with no other candidate, Run
+// reports a clean no-op instead of an error.
+func TestReservationAcceptanceTask_ValidateProposalError(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	addPendingDeposit(
 		t,
 		ralc,
-		fundingTxHash,
-		0,
-		walletPublicKeyHash,
-		1,
-		5000,
-		1000,
-		86400,
+		btcChain,
+		testWalletPublicKeyHash,
+		defaultPendingDepositOptions(currentBlock),
 	)
-
 	ralc.validateErr = fmt.Errorf("simulated validation failure")
 
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected nil proposal, got %v", proposal)
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
+	if ralc.validateCalls != 1 {
+		t.Errorf("expected the validator to be called once, got %d", ralc.validateCalls)
 	}
 }
 
-// TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate is a
-// regression test for the action-record precondition
-// WalletProposalValidator.sol's validateReservationAnchorProposal enforces:
-// the action at the proposal's RequestNonce must already be a Pending
-// Acceptance action targeting this wallet. Production sets the proposal's
-// RequestNonce from the action record it just read, so the validator
-// always agrees -- but a regression that let production invent a nonce
-// (the pre-fix operator-side request path) would silently pass against a
-// lenient fake. This test exercises the underlying fake validator
-// directly: a proposal at the seeded nonce passes, while nonce + 1 is
-// rejected with the precondition message.
-func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing.T) {
-	lc := tbtcpg.NewLocalChain()
+// strictValidatorFixture seeds a bare LocalChain with everything its
+// strict anchor validator checks for a reserved deposit revealed to
+// walletPublicKeyHash, with a Pending Acceptance action at nonce 2, and
+// returns a valid proposal and its deposit extra info.
+func strictValidatorFixture(
+	t *testing.T,
+	lc *tbtcpg.LocalChain,
+	walletPublicKeyHash [20]byte,
+) (
+	*tbtc.ReservationAnchorProposal,
+	struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+	*big.Int,
+) {
+	t.Helper()
 
-	walletPublicKeyHash := [20]byte{0x8d, 0xb5, 0x0e, 0xb5, 0x20, 0x63, 0xea, 0x9d, 0x98, 0xb3, 0xea, 0xc9, 0x14, 0x89, 0xa9, 0x0f, 0x73, 0x89, 0x86, 0xf6}
+	vault := testReservationVaultAddress
+	deposit, fundingTx := buildReservedDeposit(t, walletPublicKeyHash, 2000000, 0x33, vault)
+	fundingTxHash := fundingTx.Hash()
+	depositKey := lc.BuildDepositKey(fundingTxHash, 0)
 
-	fundingTxHash := bitcoin.Hash{0xab}
-	fundingOutputIndex := uint32(0)
-	// The validator keys action records by the deposit key derived from
-	// the proposal's funding outpoint, not by some pre-chosen big.Int;
-	// build the key through the same helper so the seed and the
-	// validator agree.
-	depositKey := lc.BuildDepositKey(fundingTxHash, fundingOutputIndex)
-
-	// Seed a Pending Acceptance action at nonce 2 -- the canonical
-	// generation the production task would consume.
 	lc.SetReservation(depositKey, &tbtc.Reservation{
 		WalletPublicKeyHash: walletPublicKeyHash,
 		State:               tbtc.ReservationStateUnknown,
@@ -2481,73 +1719,65 @@ func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing
 		TargetWalletPublicKeyHash: walletPublicKeyHash,
 		TxMaxFee:                  5000,
 		MinAmount:                 1000,
-		TermSeconds:               86400,
-		// Far-future TimeoutAt so the fake validator's timeout
-		// safety-margin gate does not reject the OK proposal; the
-		// strict-nonce precondition is the only gate under test.
-		TimeoutAt: uint32(time.Now().Add(24 * time.Hour).Unix()),
+		TermSeconds:               testReservationTermSeconds,
+		TimeoutAt:                 uint32(time.Now().Add(24 * time.Hour).Unix()),
 	})
-	// Seed the remaining state the strict fake mirrors from the
-	// on-chain validator: a Live wallet, a reserved deposit revealed
-	// through the reservation vault, and the configured parameters.
-	vault := testReservationVaultAddress
 	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
 	lc.SetReservationParameters(tbtc.ReservationParameters{
 		ReservationVault: vault,
 	})
-	lc.SetDepositRequest(
-		fundingTxHash,
-		fundingOutputIndex,
-		&tbtc.DepositChainRequest{
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-48 * time.Hour),
-			Vault:      &vault,
-		},
-	)
+	lc.SetDepositRequest(fundingTxHash, 0, &tbtc.DepositChainRequest{
+		Depositor:  testDepositor,
+		Amount:     2000000,
+		RevealedAt: time.Now().Add(-48 * time.Hour),
+		SweptAt:    time.Unix(0, 0),
+		Vault:      &vault,
+	})
 	lc.SetReservedDeposit(depositKey, true)
-	lc.SetDepositMinAge(3600)
+	lc.SetDepositMinAge(testDepositMinAgeSeconds)
 
-	depositExtraInfo := struct {
-		*tbtc.Deposit
-		FundingTx *bitcoin.Transaction
-	}{
-		Deposit: &tbtc.Deposit{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			// Far-future refund locktime, little-endian as stored on
-			// chain, so the 24-hour refund safety margin holds.
-			RefundLocktime: [4]byte{0x00, 0x79, 0xf7, 0x77},
-		},
-	}
-
-	proposalOK := &tbtc.ReservationAnchorProposal{
+	proposal := &tbtc.ReservationAnchorProposal{
 		DepositFundingTxHash:      fundingTxHash,
-		DepositFundingOutputIndex: fundingOutputIndex,
+		DepositFundingOutputIndex: 0,
 		RequestNonce:              2,
 		AnchorTxFee:               big.NewInt(710),
 	}
+	extraInfo := struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	}{Deposit: deposit, FundingTx: fundingTx}
+
+	return proposal, extraInfo, depositKey
+}
+
+// TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate is a
+// regression test for the action-record precondition
+// WalletProposalValidator.sol's validateReservationAnchorProposal enforces:
+// the action at the proposal's RequestNonce must already be a Pending
+// Acceptance action targeting this wallet. A proposal at the seeded nonce
+// passes, while nonce + 1 is rejected.
+func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing.T) {
+	lc := tbtcpg.NewLocalChain()
+	proposal, extraInfo, _ := strictValidatorFixture(t, lc, testWalletPublicKeyHash)
+
 	if err := lc.ValidateReservationAnchorProposal(
-		walletPublicKeyHash,
-		proposalOK,
-		depositExtraInfo,
+		testWalletPublicKeyHash,
+		proposal,
+		extraInfo,
 	); err != nil {
 		t.Fatalf(
 			"strict fake rejected a proposal at the seeded action's nonce "+
-				"(2): %v -- the validator must agree with the production "+
-				"task's action-record lookup",
+				"(2): %v",
 			err,
 		)
 	}
 
-	proposalOff := &tbtc.ReservationAnchorProposal{
-		DepositFundingTxHash:      fundingTxHash,
-		DepositFundingOutputIndex: fundingOutputIndex,
-		RequestNonce:              3,
-		AnchorTxFee:               big.NewInt(710),
-	}
+	proposalOff := *proposal
+	proposalOff.RequestNonce = 3
 	if err := lc.ValidateReservationAnchorProposal(
-		walletPublicKeyHash,
-		proposalOff,
-		depositExtraInfo,
+		testWalletPublicKeyHash,
+		&proposalOff,
+		extraInfo,
 	); err == nil {
 		t.Fatalf(
 			"strict fake accepted a proposal at nonce + 1 -- the " +
@@ -2557,167 +1787,139 @@ func TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate(t *testing
 	}
 }
 
+// TestLocalChain_ValidateReservationAnchorProposal_DepositExtraInfo pins
+// the strict fake's mirror of validateDepositExtraInfo: a funding
+// transaction that does not hash to the proposal's funding transaction
+// hash, or whose output does not carry the deposit script rebuilt from
+// the extra info's reveal fields, is rejected.
+func TestLocalChain_ValidateReservationAnchorProposal_DepositExtraInfo(t *testing.T) {
+	t.Run("another funding transaction", func(t *testing.T) {
+		lc := tbtcpg.NewLocalChain()
+		proposal, extraInfo, _ := strictValidatorFixture(t, lc, testWalletPublicKeyHash)
+		_, otherFundingTx := buildReservedDeposit(
+			t,
+			testWalletPublicKeyHash,
+			2000000,
+			0x44,
+			testReservationVaultAddress,
+		)
+		extraInfo.FundingTx = otherFundingTx
+
+		err := lc.ValidateReservationAnchorProposal(
+			testWalletPublicKeyHash,
+			proposal,
+			extraInfo,
+		)
+		if err == nil || err.Error() != "extra info funding tx hash does not match" {
+			t.Fatalf("expected a funding tx hash mismatch, got [%v]", err)
+		}
+	})
+
+	t.Run("reveal fields that do not rebuild the locking script", func(t *testing.T) {
+		lc := tbtcpg.NewLocalChain()
+		proposal, extraInfo, _ := strictValidatorFixture(t, lc, testWalletPublicKeyHash)
+		wrongDeposit := *extraInfo.Deposit
+		wrongDeposit.BlindingFactor = [8]byte{0xff}
+		extraInfo.Deposit = &wrongDeposit
+
+		err := lc.ValidateReservationAnchorProposal(
+			testWalletPublicKeyHash,
+			proposal,
+			extraInfo,
+		)
+		if err == nil || err.Error() != "extra info funding output script does not match" {
+			t.Fatalf("expected a funding output script mismatch, got [%v]", err)
+		}
+	})
+}
+
 // TestReservationAcceptanceTask_DepositWithoutPendingActionIsSkipped is a
-// regression test for the action-record gate
-// findReservationAcceptanceCandidate enforces: a deposit with no current
-// Pending Acceptance action -- whether because the depositor never
-// requested acceptance or because a prior generation has already settled
-// -- is never proposed. A regression that fell back to the operator-side
-// request path could accidentally trigger a request here, which would
-// show up as a non-zero submission count.
+// regression test for the action-record gate: a requested deposit whose
+// current generation has no Pending Acceptance action -- because it timed
+// out, settled, or its record is gone -- is never proposed.
 func TestReservationAcceptanceTask_DepositWithoutPendingActionIsSkipped(t *testing.T) {
 	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	walletPublicKeyHash := hexToByte20(
-		"8db50eb52063ea9d98b3eac91489a90f738986f6",
-	)
 	currentBlock := uint64(300000)
 
-	ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+	opts := defaultPendingDepositOptions(currentBlock)
+	opts.withoutAction = true
+	addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
-	setupEligibleDeposit(
-		t,
-		ralc,
-		btcChain,
-		walletPublicKeyHash,
-		currentBlock,
-		2000000,
-	)
-
-	// Deliberately no seedPendingAcceptanceAction call: the deposit's
-	// current generation is the zero record (no reservation, no action).
-	// The acceptance task must skip it -- it consumes the depositor's
-	// pending action, never requests one on the operator's behalf -- and
-	// return nil.
-	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-	proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: walletPublicKeyHash,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-	if shouldExecute {
-		t.Errorf("expected shouldExecute=false for a deposit without a pending action, got true")
-	}
-	if proposal != nil {
-		t.Errorf("expected nil proposal, got %v", proposal)
-	}
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectNoProposal(t, proposal, shouldExecute, err)
 }
 
 // TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin is a
-// regression test for the timeout safety margin gate added in the cross-repo
-// review: findReservationAcceptanceCandidate skips any candidate whose
+// regression test for the timeout safety margin gate: a candidate whose
 // pending acceptance generation has TimeoutAt at or before
-// now + REQUEST_TIMEOUT_SAFETY_MARGIN (2 hours). A candidate just outside
-// the margin (TimeoutAt = now + 7202) must be found and proposed. The
-// validator fake mirrors the same gate so the direct unit test covers
-// both the task and the fake.
+// now + REQUEST_TIMEOUT_SAFETY_MARGIN (2 hours) is skipped before any
+// proposal is validated. The request event's own timeout drops such a
+// generation without any chain read; the action record, which is
+// authoritative, is checked again. A candidate comfortably outside the
+// margin is proposed.
 func TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin(t *testing.T) {
-	t.Run("inside margin: skipped", func(t *testing.T) {
+	currentBlock := uint64(300000)
+
+	t.Run("inside margin: skipped without chain reads", func(t *testing.T) {
 		btcChain := tbtcpg.NewLocalBitcoinChain()
-		walletPublicKeyHash := hexToByte20(
-			"8db50eb52063ea9d98b3eac91489a90f738986f6",
-		)
-		currentBlock := uint64(300000)
+		ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+		opts := defaultPendingDepositOptions(currentBlock)
+		opts.timeoutAt = uint32(time.Now().Add(7198 * time.Second).Unix())
+		addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
 
-		ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-		fundingTxHash := setupEligibleDeposit(
-			t,
-			ralc,
-			btcChain,
-			walletPublicKeyHash,
-			currentBlock,
-			2000000,
-		)
-
-		// TimeoutAt = now + 7198 seconds: the margin gate
-		// (now + 7200 >= TimeoutAt) fires and the candidate is skipped.
-		depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
-		ralc.SetReservation(depositKey, &tbtc.Reservation{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			State:               tbtc.ReservationStateUnknown,
-			RequestNonce:        0,
-		})
-		ralc.SetReservationAction(depositKey, 0, &tbtc.ReservationAction{
-			ActionType:                tbtc.ReservationActionTypeAcceptance,
-			State:                     tbtc.ReservationActionStatePending,
-			TargetWalletPublicKeyHash: walletPublicKeyHash,
-			TxMaxFee:                  5000,
-			MinAmount:                 1000,
-			TermSeconds:               86400,
-			TimeoutAt:                 uint32(time.Now().Add(7198 * time.Second).Unix()),
-		})
-
-		task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: walletPublicKeyHash,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if shouldExecute || proposal != nil {
-			t.Fatalf(
-				"expected no proposal for candidate inside the timeout "+
-					"safety margin; got shouldExecute=%v",
-				shouldExecute,
+		proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+		expectNoProposal(t, proposal, shouldExecute, err)
+		if ralc.getReservationCalls != 0 {
+			t.Errorf(
+				"expected no reservation read for a request inside the "+
+					"margin, got %d",
+				ralc.getReservationCalls,
 			)
+		}
+		if ralc.validateCalls != 0 {
+			t.Errorf("expected no validation, got %d calls", ralc.validateCalls)
 		}
 	})
 
-	t.Run("just outside margin: proposed", func(t *testing.T) {
+	t.Run("action record inside margin: skipped", func(t *testing.T) {
 		btcChain := tbtcpg.NewLocalBitcoinChain()
-		walletPublicKeyHash := hexToByte20(
-			"8db50eb52063ea9d98b3eac91489a90f738986f6",
-		)
-		currentBlock := uint64(300000)
-
-		ralc := newBoundaryTestChain(t, walletPublicKeyHash, currentBlock, nil)
-
-		fundingTxHash := setupEligibleDeposit(
+		ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+		deposit := addPendingDeposit(
 			t,
 			ralc,
 			btcChain,
-			walletPublicKeyHash,
-			currentBlock,
-			2000000,
+			testWalletPublicKeyHash,
+			defaultPendingDepositOptions(currentBlock),
 		)
-
-		// TimeoutAt = now + 7202 seconds: the margin gate
-		// (now + 7200 >= TimeoutAt) does not fire and the candidate
-		// is found and proposed.
-		depositKey := ralc.BuildDepositKey(fundingTxHash, 0)
-		ralc.SetReservation(depositKey, &tbtc.Reservation{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			State:               tbtc.ReservationStateUnknown,
-			RequestNonce:        0,
-		})
-		ralc.SetReservationAction(depositKey, 0, &tbtc.ReservationAction{
-			ActionType:                tbtc.ReservationActionTypeAcceptance,
-			State:                     tbtc.ReservationActionStatePending,
-			TargetWalletPublicKeyHash: walletPublicKeyHash,
-			TxMaxFee:                  5000,
-			MinAmount:                 1000,
-			TermSeconds:               86400,
-			TimeoutAt:                 uint32(time.Now().Add(7202 * time.Second).Unix()),
-		})
-
-		task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
-
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: walletPublicKeyHash,
-		})
+		action, err := ralc.GetReservationAction(deposit.depositKey, 1)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatal(err)
 		}
-		if !shouldExecute || proposal == nil {
-			t.Fatalf(
-				"expected a proposal for candidate just outside the timeout "+
-					"safety margin; got shouldExecute=%v",
-				shouldExecute,
-			)
+		insideMargin := *action
+		insideMargin.TimeoutAt = uint32(time.Now().Add(7198 * time.Second).Unix())
+		ralc.SetReservationAction(deposit.depositKey, 1, &insideMargin)
+
+		proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+		expectNoProposal(t, proposal, shouldExecute, err)
+		if ralc.validateCalls != 0 {
+			t.Errorf("expected no validation, got %d calls", ralc.validateCalls)
+		}
+	})
+
+	t.Run("outside margin: proposed", func(t *testing.T) {
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+		ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+		opts := defaultPendingDepositOptions(currentBlock)
+		// 100 seconds of slack past the 7200-second margin, so a slow
+		// host cannot push the candidate inside it.
+		opts.timeoutAt = uint32(time.Now().Add(7300 * time.Second).Unix())
+		deposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
+
+		proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+		expectProposalFor(t, proposal, shouldExecute, err, deposit, 1)
+		if ralc.validateCalls != 1 {
+			t.Errorf("expected one validation, got %d calls", ralc.validateCalls)
 		}
 	})
 }
@@ -2725,98 +1927,32 @@ func TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin(t *te
 // TestLocalChain_ValidateReservationAnchorProposal_RejectsInsideTimeoutMargin
 // is a regression test for the timeout safety margin gate in the LocalChain
 // validator fake: a proposal whose action TimeoutAt is at or before
-// now + REQUEST_TIMEOUT_SAFETY_MARGIN is rejected with "timed out".
-// Just outside the margin (TimeoutAt = now + 7202) passes.
+// now + REQUEST_TIMEOUT_SAFETY_MARGIN is rejected.
 func TestLocalChain_ValidateReservationAnchorProposal_RejectsInsideTimeoutMargin(t *testing.T) {
 	lc := tbtcpg.NewLocalChain()
-
-	walletPublicKeyHash := [20]byte{0x8d, 0xb5, 0x0e, 0xb5, 0x20, 0x63, 0xea, 0x9d, 0x98, 0xb3, 0xea, 0xc9, 0x14, 0x89, 0xa9, 0x0f, 0x73, 0x89, 0x86, 0xf6}
-
-	fundingTxHash := bitcoin.Hash{0xab}
-	fundingOutputIndex := uint32(0)
-	depositKey := lc.BuildDepositKey(fundingTxHash, fundingOutputIndex)
-
-	// Seed the action at nonce 1 with a far-future TimeoutAt; the nonce
-	// gate is not under test here (covered by StrictNonceGate).
-	lc.SetReservation(depositKey, &tbtc.Reservation{
-		WalletPublicKeyHash: walletPublicKeyHash,
-		State:               tbtc.ReservationStateUnknown,
-		RequestNonce:        1,
-	})
-	lc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  5000,
-		MinAmount:                 1000,
-		TermSeconds:               86400,
-		TimeoutAt:                 uint32(time.Now().Add(24 * time.Hour).Unix()),
-	})
-	// Seed the state the strict fake mirrors from the on-chain
-	// validator so the far-future call below can pass every gate
-	// except the timeout margin: a Live wallet, a reserved deposit
-	// revealed through the reservation vault, and the configured
-	// parameters.
-	vault := testReservationVaultAddress
-	lc.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateLive})
-	lc.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationVault: vault,
-	})
-	lc.SetDepositRequest(
-		fundingTxHash,
-		fundingOutputIndex,
-		&tbtc.DepositChainRequest{
-			Amount:     2000000,
-			RevealedAt: time.Now().Add(-48 * time.Hour),
-			Vault:      &vault,
-		},
-	)
-	lc.SetReservedDeposit(depositKey, true)
-	lc.SetDepositMinAge(3600)
-
-	depositExtraInfo := struct {
-		*tbtc.Deposit
-		FundingTx *bitcoin.Transaction
-	}{
-		Deposit: &tbtc.Deposit{
-			WalletPublicKeyHash: walletPublicKeyHash,
-			// Far-future refund locktime, little-endian as stored on
-			// chain, so the 24-hour refund safety margin holds.
-			RefundLocktime: [4]byte{0x00, 0x79, 0xf7, 0x77},
-		},
-	}
-
-	proposal := &tbtc.ReservationAnchorProposal{
-		DepositFundingTxHash:      fundingTxHash,
-		DepositFundingOutputIndex: fundingOutputIndex,
-		RequestNonce:              1,
-		AnchorTxFee:               big.NewInt(710),
-	}
+	proposal, extraInfo, depositKey := strictValidatorFixture(t, lc, testWalletPublicKeyHash)
 
 	// Far-future TimeoutAt: validation passes.
 	if err := lc.ValidateReservationAnchorProposal(
-		walletPublicKeyHash,
+		testWalletPublicKeyHash,
 		proposal,
-		depositExtraInfo,
+		extraInfo,
 	); err != nil {
 		t.Fatalf("far-future TimeoutAt should pass: %v", err)
 	}
 
-	// Override TimeoutAt to be just inside the 2-hour margin.
-	lc.SetReservationAction(depositKey, 1, &tbtc.ReservationAction{
-		ActionType:                tbtc.ReservationActionTypeAcceptance,
-		State:                     tbtc.ReservationActionStatePending,
-		TargetWalletPublicKeyHash: walletPublicKeyHash,
-		TxMaxFee:                  5000,
-		MinAmount:                 1000,
-		TermSeconds:               86400,
-		TimeoutAt:                 uint32(time.Now().Add(7198 * time.Second).Unix()),
-	})
+	action, err := lc.GetReservationAction(depositKey, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insideMargin := *action
+	insideMargin.TimeoutAt = uint32(time.Now().Add(7198 * time.Second).Unix())
+	lc.SetReservationAction(depositKey, 2, &insideMargin)
 
 	if err := lc.ValidateReservationAnchorProposal(
-		walletPublicKeyHash,
+		testWalletPublicKeyHash,
 		proposal,
-		depositExtraInfo,
+		extraInfo,
 	); err == nil {
 		t.Fatal(
 			"expected timeout margin rejection for TimeoutAt = now + 7198, got nil",
@@ -2895,5 +2031,137 @@ func TestLocalChain_ValidateReservationReanchorProposal_RejectsInsideTimeoutMarg
 		t.Fatal(
 			"expected timeout margin rejection for TimeoutAt = now + 7198, got nil",
 		)
+	}
+}
+
+// TestReservationAcceptanceTask_BudgetCountsOnlyPendingAcceptances is a
+// regression test for budget starvation: the per-run candidate budget
+// (50) must only be spent on generations the on-chain check confirms are
+// a Pending Acceptance targeting this wallet. Here 51 requested deposits
+// whose generations have already settled sort ahead of one real pending
+// acceptance; if they consumed the budget, the real request would never
+// be reached and would time out.
+func TestReservationAcceptanceTask_BudgetCountsOnlyPendingAcceptances(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+
+	// Candidates are tried in timeout order, so the settled generations
+	// get the earlier timeouts. They were accepted before their timeout,
+	// so their request events are still inside the scan window.
+	for i := 0; i < 51; i++ {
+		opts := defaultPendingDepositOptions(currentBlock)
+		opts.seed = byte(0x40 + i)
+		opts.timeoutAt = uint32(time.Now().Add(20 * time.Hour).Unix())
+		opts.actionState = tbtc.ReservationActionStateSettled
+		addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, opts)
+	}
+	realOpts := defaultPendingDepositOptions(currentBlock)
+	realOpts.seed = 0x01
+	realOpts.timeoutAt = uint32(time.Now().Add(23 * time.Hour).Unix())
+	real := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, realOpts)
+
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, real, 1)
+}
+
+// TestReservationAcceptanceTask_FeeErrorSkipsCandidate is a regression test
+// for per-generation fee caps: a generation whose snapshotted max fee is
+// below the current anchor fee estimate is skipped, and the next
+// generation, with a higher cap, is proposed instead of the whole window
+// aborting.
+func TestReservationAcceptanceTask_FeeErrorSkipsCandidate(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+
+	lowCap := defaultPendingDepositOptions(currentBlock)
+	lowCap.seed = 0x10
+	lowCap.txMaxFee = 500 // below the 710 sat estimate
+	lowCap.timeoutAt = uint32(time.Now().Add(20 * time.Hour).Unix())
+	addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, lowCap)
+
+	highCap := defaultPendingDepositOptions(currentBlock)
+	highCap.seed = 0x11
+	highCap.timeoutAt = uint32(time.Now().Add(23 * time.Hour).Unix())
+	viable := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, highCap)
+
+	proposal, shouldExecute, err := runTask(t, ralc, btcChain, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, viable, 1)
+}
+
+// gaugeRecorder counts SetGauge calls per gauge.
+type gaugeRecorder struct {
+	calls map[string]int
+}
+
+func (g *gaugeRecorder) SetGauge(name string, value float64) {
+	g.calls[name]++
+}
+
+// TestReservationAcceptanceTask_GaugesPublishedOncePerRun pins the cost of
+// the vault fee gauges: they are read once per Run, with the vault address
+// the task already read from the reservation parameters, even when an
+// earlier candidate fails validation and the task moves on to the next.
+func TestReservationAcceptanceTask_GaugesPublishedOncePerRun(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	currentBlock := uint64(300000)
+
+	ralc := newBoundaryTestChain(t, testWalletPublicKeyHash, currentBlock, nil)
+
+	// The first candidate carries a funding transaction whose output does
+	// not hold its deposit script, so the strict validator rejects it.
+	broken := defaultPendingDepositOptions(currentBlock)
+	broken.seed = 0x20
+	broken.timeoutAt = uint32(time.Now().Add(20 * time.Hour).Unix())
+	brokenDeposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, broken)
+	for _, event := range ralc.revealEvents {
+		if event.FundingTxHash == brokenDeposit.fundingTxHash {
+			event.BlindingFactor = [8]byte{0xff}
+		}
+	}
+
+	good := defaultPendingDepositOptions(currentBlock)
+	good.seed = 0x21
+	good.timeoutAt = uint32(time.Now().Add(23 * time.Hour).Unix())
+	goodDeposit := addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, good)
+
+	task := tbtcpg.NewReservationAcceptanceTask(ralc, btcChain)
+	recorder := &gaugeRecorder{calls: make(map[string]int)}
+	task.SetMetricsRecorderForTest(recorder)
+
+	proposal, shouldExecute, err := runExistingTask(t, task, testWalletPublicKeyHash)
+	expectProposalFor(t, proposal, shouldExecute, err, goodDeposit, 1)
+
+	if ralc.validateCalls != 2 {
+		t.Fatalf("expected both candidates to be validated, got %d", ralc.validateCalls)
+	}
+	if len(ralc.feeDebtVaults) != 1 || len(ralc.feeReserveVaults) != 1 {
+		t.Fatalf(
+			"expected one read per vault fee gauge, got debt=%d reserve=%d",
+			len(ralc.feeDebtVaults),
+			len(ralc.feeReserveVaults),
+		)
+	}
+	if ralc.feeDebtVaults[0] != testReservationVaultAddress ||
+		ralc.feeReserveVaults[0] != testReservationVaultAddress {
+		t.Fatalf(
+			"expected the fee reads to use the parameters' vault, got %v / %v",
+			ralc.feeDebtVaults,
+			ralc.feeReserveVaults,
+		)
+	}
+	for _, gauge := range []string{
+		"wallet_reservations_count",
+		"active_reservations_count",
+		"max_active_reservations",
+		"reservation_vault_fee_debt_sat",
+		"reservation_vault_fee_reserve_tbtc_base_units",
+	} {
+		if recorder.calls[gauge] != 1 {
+			t.Errorf("expected gauge %s published once, got %d", gauge, recorder.calls[gauge])
+		}
 	}
 }

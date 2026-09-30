@@ -394,7 +394,7 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 			MetricReservationLiveWalletsCount,
 			MetricReservationWalletReservationsCount,
 			MetricReservationVaultFeeDebtSat,
-			MetricReservationVaultFeeReserveTbtc,
+			MetricReservationVaultFeeReserveTbtcBaseUnits,
 		)
 	}
 
@@ -758,15 +758,15 @@ const (
 	//
 	//   - MetricReservationVaultFeeDebtSat is in satoshi, matching the
 	//     on-chain inKindFeeDebtSat view.
-	//   - MetricReservationVaultFeeReserveTbtc is in TBTC base units
+	//   - MetricReservationVaultFeeReserveTbtcBaseUnits is in TBTC base units
 	//     (1e18 per whole TBTC): a gauge value of N means N / 1e18
 	//     whole TBTC held in reserve. The balance is a big.Int while
 	//     the gauge API takes a float64, so the base-unit figure is
 	//     published directly; float64 represents base units
 	//     approximately above 2^53 base units, so consumers must
 	//     treat the gauge as an indicator, not for exact accounting.
-	MetricReservationVaultFeeDebtSat     = "reservation_vault_fee_debt_sat"
-	MetricReservationVaultFeeReserveTbtc = "reservation_vault_fee_reserve_tbtc"
+	MetricReservationVaultFeeDebtSat              = "reservation_vault_fee_debt_sat"
+	MetricReservationVaultFeeReserveTbtcBaseUnits = "reservation_vault_fee_reserve_tbtc_base_units"
 )
 
 // Network join request failure reasons. These are the low-cardinality

@@ -12,12 +12,6 @@ import (
 )
 
 const (
-	// reservationLookBackBlocks bounds how far back the reservation anchor
-	// action's DepositRevealed event lookup scans. 216000 blocks is ~30
-	// days at 12s/block, the same convention used by
-	// MovingFundsCommitmentLookBackBlocks in moving_funds.go.
-	reservationLookBackBlocks = uint64(216000)
-
 	// reservationAnchorProposalValidityBlocks determines the reservation
 	// anchor proposal validity time expressed in blocks.
 	reservationAnchorProposalValidityBlocks = 600
@@ -508,36 +502,6 @@ func (raa *reservationAnchorAction) execute() error {
 		return fmt.Errorf("cannot fetch funding transaction: [%v]", err)
 	}
 
-	// The proposal carries only the deposit's funding outpoint, not the
-	// block it was revealed at, so the DepositRevealed event lookup cannot
-	// be block-range narrowed the way the deposit sweep validation path
-	// narrows it via DepositsRevealBlocks. Narrow by wallet PKH instead and
-	// match the exact funding outpoint among the returned events.
-	eventsStartBlock := uint64(0)
-	if raa.startBlock > reservationLookBackBlocks {
-		eventsStartBlock = raa.startBlock - reservationLookBackBlocks
-	}
-
-	events, err := raa.chain.PastDepositRevealedEvents(&DepositRevealedEventFilter{
-		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		StartBlock:          eventsStartBlock,
-	})
-	if err != nil {
-		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", err)
-	}
-
-	var matchingEvent *DepositRevealedEvent
-	for _, event := range events {
-		if event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
-			event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex {
-			matchingEvent = event
-			break
-		}
-	}
-	if matchingEvent == nil {
-		return fmt.Errorf("no matching DepositRevealed event for deposit")
-	}
-
 	depositRequest, found, err := raa.chain.GetDepositRequest(
 		raa.proposal.DepositFundingTxHash,
 		raa.proposal.DepositFundingOutputIndex,
@@ -547,6 +511,37 @@ func (raa *reservationAnchorAction) execute() error {
 	}
 	if !found {
 		return fmt.Errorf("deposit request not found")
+	}
+
+	// The proposal carries only the deposit's funding outpoint, not the
+	// block it was revealed at. A depositor may request acceptance long
+	// after the reveal, so the DepositRevealed event is located from the
+	// deposit's on-chain reveal timestamp rather than from a fixed
+	// look-back window, and matched on the exact funding outpoint. The
+	// chain's configured block time is used when it exposes one.
+	averageBlockTime := DepositRevealLookupDefaultBlockTime
+	if timedChain, ok := raa.chain.(interface {
+		AverageBlockTime() time.Duration
+	}); ok {
+		averageBlockTime = timedChain.AverageBlockTime()
+	}
+	matchingEvent, err := FindDepositRevealedEventByRevealTime(
+		raa.chain,
+		walletPublicKeyHash,
+		depositRequest.RevealedAt,
+		time.Now(),
+		raa.startBlock,
+		averageBlockTime,
+		func(event *DepositRevealedEvent) bool {
+			return event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
+				event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", err)
+	}
+	if matchingEvent == nil {
+		return fmt.Errorf("no matching DepositRevealed event for deposit")
 	}
 
 	deposit := matchingEvent.unpack(depositRequest.ExtraData)
