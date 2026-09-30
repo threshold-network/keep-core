@@ -116,6 +116,9 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // resumed at its real nonce and authorized target rather than skipped, so
 // an in-flight authorization is not abandoned and re-requested.
 //
+// A pass sends at most one RequestReservationReanchor: once a request has
+// been sent, any later failure ends the pass without a proposal.
+//
 // Once a MovingFunds wallet's reservations are fully drained, Run also
 // checks whether its main UTXO has fallen below the moving funds dust
 // threshold and, if so, notifies the Bridge so wallet closing can proceed
@@ -371,6 +374,15 @@ reservationLoop:
 					err,
 				)
 
+				var postSubmitErr *errReservationReanchorPostSubmitFailure
+				if errors.As(err, &postSubmitErr) {
+					// The request was sent. End the pass so it sends at
+					// most one request; a later round picks the request
+					// up from chain state (resume path once mined, a new
+					// request if the reservation is still Active).
+					return nil, false, nil
+				}
+
 				if isReservationCapRevertError(err) {
 					// The target's capacity changed since our headroom
 					// pre-check (a concurrent re-anchor or acceptance
@@ -381,10 +393,9 @@ reservationLoop:
 					continue
 				}
 
-				// Skip this reservation this pass. A request that went
-				// on-chain is picked up from chain state on a later
-				// round: once mined, the reservation is ActionPending
-				// and takes the resume path above.
+				// Nothing was sent (fee estimation, assembly, or another
+				// request revert), so no chain state changed: skip this
+				// reservation this pass.
 				continue reservationLoop
 			}
 
@@ -416,24 +427,48 @@ func isReservationCapRevertError(err error) bool {
 	return strings.Contains(err.Error(), "cap exceeded")
 }
 
+// errReservationReanchorPostSubmitFailure marks a ProposeReservationReanchor
+// failure that happened after RequestReservationReanchor was sent. Run
+// checks for it with errors.As and ends the pass instead of moving on to
+// another target or reservation, so a pass sends at most one re-anchor
+// request. A failure before the request was sent leaves no chain state
+// behind and is not wrapped.
+type errReservationReanchorPostSubmitFailure struct {
+	err error
+}
+
+func (e *errReservationReanchorPostSubmitFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *errReservationReanchorPostSubmitFailure) Unwrap() error {
+	return e.err
+}
+
 // ProposeReservationReanchor assembles a single reservation re-anchor
 // proposal for the given reservation, targeting the given wallet.
 //
 // If the reservation's current generation is not already a Pending
 // Reanchor action authorizing this exact target, this call first requests
 // one on-chain (RequestReservationReanchor) and waits for it to be mined
-// before re-reading the reservation and action for the real request nonce
-// and snapshotted fee bound; only then does it build and validate the
-// proposal. This ordering is required by the on-chain validator, which
-// requires the action at proposal.RequestNonce to already be a Pending
-// Reanchor -- Reservation.sol's requestReservationReanchor is what writes
-// that record, so validating first would read the zero action and always
-// revert.
+// before re-reading the reservation and action for the real request nonce;
+// only then does it build and validate the proposal. This ordering is
+// required by the on-chain validator, which requires the action at
+// proposal.RequestNonce to already be a Pending Reanchor --
+// Reservation.sol's requestReservationReanchor is what writes that record,
+// so validating first would read the zero action and always revert.
+//
+// Before sending the request, the fee is estimated and the transaction is
+// assembled against the live ReservationTxMaxFee, the value Solidity
+// snapshots into the action the request creates. A fee that cannot fit
+// therefore fails before anything is sent instead of leaving an unusable
+// request on-chain. Any failure after the request was sent is returned as
+// an *errReservationReanchorPostSubmitFailure.
 //
 // A caller resuming an already-Pending generation (Run does this for
 // reservations in ActionPending state) passes that generation's own
-// authorized target and reaches this method with no chain write of its
-// own; a failure here is therefore a pre-write failure, safe to retry.
+// authorized target; the fee is then checked against the action's own
+// snapshotted TxMaxFee and no chain write happens.
 //
 // The supplied fee may be 0 to trigger on-chain-driven fee estimation.
 func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
@@ -489,58 +524,120 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		action.ActionType == tbtc.ReservationActionTypeReanchor &&
 		action.State == tbtc.ReservationActionStatePending &&
 		action.TargetWalletPublicKeyHash == targetWalletPublicKeyHash
-	requestNonce := reservation.RequestNonce
 
-	if !resuming {
-		if reservation.State != tbtc.ReservationStateActive {
-			return nil, fmt.Errorf(
-				"reservation [0x%x] is not active and has no matching "+
-					"pending re-anchor action to resume",
-				reservationKey,
-			)
-		}
-
-		taskLogger.Infof(
-			"requesting reservation re-anchor for [0x%x] to wallet [0x%x]",
-			reservationKey,
-			targetWalletPublicKeyHash,
-		)
-
-		if err := rrt.chain.RequestReservationReanchor(
-			reservationKey,
-			targetWalletPublicKeyHash,
-		); err != nil {
-			return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
-		}
-
-		reservation, action, err = rrt.waitForReservationReanchorRequestMined(
+	if resuming {
+		// The fee bound is the action's own snapshotted txMaxFee:
+		// WalletProposalValidator.validateReservationReanchorProposal
+		// checks the proposed fee against action.txMaxFee, not the live
+		// parameter.
+		fee, err = rrt.prepareReservationReanchorTransaction(
 			taskLogger,
-			reservationKey,
+			reservation.AnchorUtxo,
 			targetWalletPublicKeyHash,
-			requestNonce,
+			action.TxMaxFee,
+			fee,
 		)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"reservation re-anchor request not confirmed: [%w]",
-				err,
-			)
+			return nil, err
 		}
-		requestNonce = reservation.RequestNonce
+
+		return rrt.validatedReservationReanchorProposal(
+			taskLogger,
+			sourceWalletPublicKeyHash,
+			reservationKey,
+			reservation.RequestNonce,
+			targetWalletPublicKeyHash,
+			fee,
+		)
 	}
 
-	// The fee bound is the action's own snapshotted txMaxFee, not a live
-	// parameter value: WalletProposalValidator.validateReservationReanchorProposal
-	// checks the proposed fee against action.txMaxFee specifically (mirroring
-	// how it checks a redemption's fee against the request's own stored
-	// txMaxFee rather than a live Bridge parameter).
-	feeBoundAction := &tbtc.ReservationAction{TxMaxFee: action.TxMaxFee}
+	if reservation.State != tbtc.ReservationStateActive {
+		return nil, fmt.Errorf(
+			"reservation [0x%x] is not active and has no matching "+
+				"pending re-anchor action to resume",
+			reservationKey,
+		)
+	}
 
+	params, err := rrt.chain.ReservationParameters()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get reservation parameters: [%w]",
+			err,
+		)
+	}
+
+	fee, err = rrt.prepareReservationReanchorTransaction(
+		taskLogger,
+		reservation.AnchorUtxo,
+		targetWalletPublicKeyHash,
+		params.ReservationTxMaxFee,
+		fee,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	taskLogger.Infof(
+		"requesting reservation re-anchor for [0x%x] to wallet [0x%x]",
+		reservationKey,
+		targetWalletPublicKeyHash,
+	)
+
+	if err := rrt.chain.RequestReservationReanchor(
+		reservationKey,
+		targetWalletPublicKeyHash,
+	); err != nil {
+		return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
+	}
+
+	minedReservation, err := rrt.waitForReservationReanchorRequestMined(
+		taskLogger,
+		reservationKey,
+		targetWalletPublicKeyHash,
+		reservation.RequestNonce,
+	)
+	if err != nil {
+		return nil, &errReservationReanchorPostSubmitFailure{
+			err: fmt.Errorf(
+				"reservation re-anchor request not confirmed: [%w]",
+				err,
+			),
+		}
+	}
+
+	proposal, err := rrt.validatedReservationReanchorProposal(
+		taskLogger,
+		sourceWalletPublicKeyHash,
+		reservationKey,
+		minedReservation.RequestNonce,
+		targetWalletPublicKeyHash,
+		fee,
+	)
+	if err != nil {
+		return nil, &errReservationReanchorPostSubmitFailure{err: err}
+	}
+
+	return proposal, nil
+}
+
+// prepareReservationReanchorTransaction estimates the re-anchor fee when
+// fee is not positive, and checks that the re-anchor transaction can be
+// assembled with that fee under txMaxFee. It returns the fee to propose.
+func (rrt *ReservationReanchorTask) prepareReservationReanchorTransaction(
+	taskLogger log.StandardLogger,
+	anchorUtxo *bitcoin.UnspentTransactionOutput,
+	targetWalletPublicKeyHash [20]byte,
+	txMaxFee uint64,
+	fee int64,
+) (int64, error) {
 	if fee <= 0 {
 		taskLogger.Infof("estimating reservation re-anchor transaction fee")
 
-		fee, err = estimateReservationReanchorFee(rrt.btcChain, action.TxMaxFee)
+		var err error
+		fee, err = estimateReservationReanchorFee(rrt.btcChain, txMaxFee)
 		if err != nil {
-			return nil, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"cannot estimate reservation re-anchor transaction fee: [%w]",
 				err,
 			)
@@ -551,17 +648,30 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 
 	if _, err := tbtc.AssembleReservationReanchorTransaction(
 		rrt.btcChain,
-		reservation.AnchorUtxo,
+		anchorUtxo,
 		targetWalletPublicKeyHash,
-		feeBoundAction,
+		&tbtc.ReservationAction{TxMaxFee: txMaxFee},
 		fee,
 	); err != nil {
-		return nil, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"cannot assemble reservation re-anchor transaction: [%v]",
 			err,
 		)
 	}
 
+	return fee, nil
+}
+
+// validatedReservationReanchorProposal builds the proposal for the given
+// generation and validates it on-chain.
+func (rrt *ReservationReanchorTask) validatedReservationReanchorProposal(
+	taskLogger log.StandardLogger,
+	sourceWalletPublicKeyHash [20]byte,
+	reservationKey *big.Int,
+	requestNonce uint64,
+	targetWalletPublicKeyHash [20]byte,
+	fee int64,
+) (*tbtc.ReservationReanchorProposal, error) {
 	proposal := &tbtc.ReservationReanchorProposal{
 		ReservationKey:            new(big.Int).Set(reservationKey),
 		RequestNonce:              requestNonce,
@@ -589,26 +699,28 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 // RequestReservationReanchor transaction to be mined: the reservation's
 // RequestNonce must have advanced past preRequestNonce, and the action at
 // the new nonce must be the Pending Reanchor generation authorizing
-// targetWalletPublicKeyHash.
+// targetWalletPublicKeyHash. If the nonce advanced to any other action,
+// another request was mined first and this one can only revert, so the
+// wait ends immediately with an error.
 func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 	taskLogger log.StandardLogger,
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
 	preRequestNonce uint64,
-) (*tbtc.Reservation, *tbtc.ReservationAction, error) {
+) (*tbtc.Reservation, error) {
 	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
-		return nil, nil, fmt.Errorf("error getting block counter: [%w]", err)
+		return nil, fmt.Errorf("error getting block counter: [%w]", err)
 	}
 
 	currentBlock, err := blockCounter.CurrentBlock()
 	if err != nil {
-		return nil, nil, fmt.Errorf("error getting current block: [%w]", err)
+		return nil, fmt.Errorf("error getting current block: [%w]", err)
 	}
 
 	for blockHeight := currentBlock + 1; blockHeight <= currentBlock+reservationReanchorRequestWaitBlocks; blockHeight++ {
 		if err := blockCounter.WaitForBlockHeight(blockHeight); err != nil {
-			return nil, nil, fmt.Errorf("error while waiting for block height: [%w]", err)
+			return nil, fmt.Errorf("error while waiting for block height: [%w]", err)
 		}
 
 		reservation, err := rrt.chain.GetReservation(reservationKey)
@@ -636,18 +748,29 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 				continue
 			}
 
-			if action.ActionType == tbtc.ReservationActionTypeReanchor &&
-				action.State == tbtc.ReservationActionStatePending &&
-				action.TargetWalletPublicKeyHash == targetWalletPublicKeyHash {
-				taskLogger.Infof(
-					"reservation re-anchor request for [0x%x] confirmed at "+
-						"block [%d], nonce [%d]",
+			if action.ActionType != tbtc.ReservationActionTypeReanchor ||
+				action.State != tbtc.ReservationActionStatePending ||
+				action.TargetWalletPublicKeyHash != targetWalletPublicKeyHash {
+				return nil, fmt.Errorf(
+					"reservation [0x%x] advanced to nonce [%d] with a "+
+						"different action (type=%v, state=%v, target=0x%x); "+
+						"another request was mined first",
 					reservationKey,
-					blockHeight,
 					reservation.RequestNonce,
+					action.ActionType,
+					action.State,
+					action.TargetWalletPublicKeyHash,
 				)
-				return reservation, action, nil
 			}
+
+			taskLogger.Infof(
+				"reservation re-anchor request for [0x%x] confirmed at "+
+					"block [%d], nonce [%d]",
+				reservationKey,
+				blockHeight,
+				reservation.RequestNonce,
+			)
+			return reservation, nil
 		}
 
 		taskLogger.Infof(
@@ -658,7 +781,7 @@ func (rrt *ReservationReanchorTask) waitForReservationReanchorRequestMined(
 		)
 	}
 
-	return nil, nil, fmt.Errorf(
+	return nil, fmt.Errorf(
 		"reservation re-anchor request for [0x%x] not confirmed within "+
 			"[%d] blocks",
 		reservationKey,

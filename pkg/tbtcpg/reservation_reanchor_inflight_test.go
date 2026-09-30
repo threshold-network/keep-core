@@ -481,3 +481,207 @@ func TestReservationReanchorTask_ClosingSource(t *testing.T) {
 		}
 	})
 }
+
+// addActiveReanchorReservation adds another Active reservation, with its
+// anchor transaction, to the source wallet of a newInFlightReanchorFixture.
+func addActiveReanchorReservation(
+	t *testing.T,
+	tbtcChain *LocalChain,
+	btcChain *LocalBitcoinChain,
+	sourceWalletPublicKeyHash [20]byte,
+	reservationKey *big.Int,
+	anchorTxHash bitcoin.Hash,
+	anchorValue int64,
+) {
+	t.Helper()
+
+	sourceWalletScript, err := bitcoin.PayToWitnessPublicKeyHash(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: anchorValue, PublicKeyScript: sourceWalletScript},
+		},
+	})
+	tbtcChain.SetReservation(reservationKey, &tbtc.Reservation{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     0,
+			},
+			Value: anchorValue,
+		},
+		State: tbtc.ReservationStateActive,
+	})
+	keys, err := tbtcChain.WalletReservations(sourceWalletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbtcChain.SetWalletReservations(
+		sourceWalletPublicKeyHash,
+		append(keys, reservationKey),
+	)
+}
+
+// TestReservationReanchorTask_FeeAboveCap_SendsNoRequest pins that the fee
+// is estimated against the live ReservationTxMaxFee before the request is
+// sent. During a Bitcoin fee spike the estimate exceeds the cap, and the
+// pass must end without an on-chain request: a request sent first would
+// only hold the target's capacity until the action times out and then
+// start a cooldown.
+func TestReservationReanchorTask_FeeAboveCap_SendsNoRequest(t *testing.T) {
+	tbtcChain, btcChain, _, task, sourceWalletPublicKeyHash, _, _ :=
+		newInFlightReanchorFixture(t)
+	// About 110 vbytes at 1000 sat/vbyte is well above the 100000 cap.
+	btcChain.SetEstimateSatPerVByteFee(1, 1000)
+
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || proposal != nil {
+		t.Fatalf("expected no proposal, got ok=%v proposal=%v", ok, proposal)
+	}
+	if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 0 {
+		t.Fatalf("expected no re-anchor request when the fee exceeds the cap, got %d", got)
+	}
+}
+
+// TestReservationReanchorTask_OneRequestPerPass pins that a pass sends at
+// most one RequestReservationReanchor. Once a request has been sent, any
+// later failure (not mined within the wait, or proposal validation
+// failing) must end the pass instead of moving on to the next
+// reservation, which would send a second request in the same pass.
+func TestReservationReanchorTask_OneRequestPerPass(t *testing.T) {
+	t.Run("request not mined within the wait", func(t *testing.T) {
+		tbtcChain, btcChain, _, task, sourceWalletPublicKeyHash, _, _ :=
+			newInFlightReanchorFixture(t)
+		addActiveReanchorReservation(
+			t, tbtcChain, btcChain, sourceWalletPublicKeyHash,
+			big.NewInt(7002), bitcoin.Hash{0x72}, 200000,
+		)
+		tbtcChain.SetNextReservationReanchorRequestPending()
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok || proposal != nil {
+			t.Fatalf("expected no proposal, got ok=%v proposal=%v", ok, proposal)
+		}
+		if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 1 {
+			t.Fatalf("expected exactly 1 re-anchor request in the pass, got %d", got)
+		}
+	})
+
+	t.Run("validation fails after the request was mined", func(t *testing.T) {
+		tbtcChain, btcChain, _, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, reservationKey :=
+			newInFlightReanchorFixture(t)
+		addActiveReanchorReservation(
+			t, tbtcChain, btcChain, sourceWalletPublicKeyHash,
+			big.NewInt(7002), bitcoin.Hash{0x72}, 200000,
+		)
+		if err := tbtcChain.SetReservationReanchorProposalValidationResult(
+			sourceWalletPublicKeyHash,
+			&tbtc.ReservationReanchorProposal{
+				ReservationKey:            reservationKey,
+				RequestNonce:              1,
+				TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+				ReanchorTxFee:             big.NewInt(550),
+			},
+			false,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok || proposal != nil {
+			t.Fatalf("expected no proposal, got ok=%v proposal=%v", ok, proposal)
+		}
+		if got := tbtcChain.GetReservationReanchorValidationCallCount(); got != 1 {
+			t.Fatalf("expected the forced validation failure to be reached once, got %d", got)
+		}
+		if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 1 {
+			t.Fatalf("expected exactly 1 re-anchor request in the pass, got %d", got)
+		}
+	})
+}
+
+// frontRunReanchorChain models another requester whose re-anchor request
+// for the same reservation, to a different target, is mined before ours:
+// our request call succeeds, but the chain holds the other generation.
+type frontRunReanchorChain struct {
+	*LocalChain
+
+	frontRunTarget [20]byte
+}
+
+func (c *frontRunReanchorChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+) error {
+	return c.LocalChain.RequestReservationReanchor(reservationKey, c.frontRunTarget)
+}
+
+// countingBlockCounter counts WaitForBlockHeight calls.
+type countingBlockCounter struct {
+	*MockBlockCounter
+
+	waits int
+}
+
+func (c *countingBlockCounter) WaitForBlockHeight(blockNumber uint64) error {
+	c.waits++
+	return c.MockBlockCounter.WaitForBlockHeight(blockNumber)
+}
+
+// TestReservationReanchorTask_FrontRunRequest_StopsWaiting pins that the
+// mined-wait stops as soon as the reservation's nonce advances to an
+// action that is not ours: our request can then only revert, so waiting
+// out the remaining blocks would only delay the coordination window.
+func TestReservationReanchorTask_FrontRunRequest_StopsWaiting(t *testing.T) {
+	tbtcChain, btcChain, _, _, sourceWalletPublicKeyHash, _, _ :=
+		newInFlightReanchorFixture(t)
+
+	frontRunTarget := [20]byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9}
+	tbtcChain.SetWallet(frontRunTarget, &tbtc.WalletChainData{State: tbtc.StateLive})
+
+	blockCounter := &countingBlockCounter{MockBlockCounter: NewMockBlockCounter()}
+	blockCounter.SetCurrentBlock(1000)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	chain := &frontRunReanchorChain{LocalChain: tbtcChain, frontRunTarget: frontRunTarget}
+	task := NewReservationReanchorTask(chain, btcChain)
+
+	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: sourceWalletPublicKeyHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || proposal != nil {
+		t.Fatalf("expected no proposal for a front-run request, got ok=%v proposal=%v", ok, proposal)
+	}
+	if blockCounter.waits != 1 {
+		t.Fatalf(
+			"expected the wait to stop at the first block showing the "+
+				"other generation, waited for %d blocks",
+			blockCounter.waits,
+		)
+	}
+	if got := len(tbtcChain.GetReservationReanchorRequestAttempts()); got != 1 {
+		t.Fatalf("expected exactly 1 re-anchor request in the pass, got %d", got)
+	}
+}
