@@ -1059,18 +1059,44 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 	}
 }
 
+// awaitReservationWatcherPanicRecoveries installs
+// reservationWatcherPanicRecovered for the duration of the test and
+// returns a function that waits, bounded, until count watcher goroutines
+// have finished their recovered-panic path. Waiting before the test ends
+// also keeps those goroutines from reading the hook while the next test
+// replaces it.
+func awaitReservationWatcherPanicRecoveries(t *testing.T, count int) func() {
+	recovered := make(chan struct{}, count)
+	previous := reservationWatcherPanicRecovered
+	reservationWatcherPanicRecovered = func() { recovered <- struct{}{} }
+	t.Cleanup(func() { reservationWatcherPanicRecovered = previous })
+
+	return func() {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for range count {
+			select {
+			case <-recovered:
+			case <-deadline:
+				t.Fatal("a watcher goroutine never completed its recovered-panic path")
+			}
+		}
+	}
+}
+
 // TestWireReservationWatchers_WatcherDeathIncrementsMetric verifies that
 // when a watcher goroutine dies (here: a panic during its initial poll
 // pass, recovered by the goroutine's panic-recover), the watcher-death
 // counter is incremented on the supplied MetricsRecorder - not just a
 // log line - so a dead watcher is observable in metrics. Both watcher
 // goroutines are forced through the death path, and the test asserts
-// exactly two increments (one per goroutine), read through the
-// recorder's mutex-safe accessor so the polling race is real but
-// data-race-free.
+// exactly two increments (one per goroutine) once both goroutines have
+// finished their recover path.
 func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 2)
 
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -1084,9 +1110,7 @@ func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	waitForReservationWiringCondition(t, 500*time.Millisecond, func() bool {
-		return recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal) >= 2
-	})
+	awaitRecoveries()
 
 	if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 2 {
 		t.Fatalf("expected exactly two watcher-death increments (one per watcher goroutine), got %v", got)
@@ -1096,30 +1120,20 @@ func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 // watcherDeathPanickingChain wraps a *localChain and panics on the first
 // chain read each watcher's initial poll pass performs, so the
 // goroutine's panic-recover (and thus the watcher-death counter) fires
-// deterministically. Each intercepted read also signals deathSignal before
-// it panics, so an end-to-end test can wait for both watcher goroutines to
-// actually reach their forced panic - a real completion signal in place of
-// a sleep. The channel is buffered enough for one send from each watcher.
+// deterministically.
 type watcherDeathPanickingChain struct {
 	*localChain
-	deathSignal chan struct{}
 }
 
 func (c *watcherDeathPanickingChain) PastDepositRevealedEvents(
 	filter *tbtc.DepositRevealedEventFilter,
 ) ([]*tbtc.DepositRevealedEvent, error) {
-	if c.deathSignal != nil {
-		c.deathSignal <- struct{}{}
-	}
 	panic("stale-deposit watcher boom")
 }
 
 func (c *watcherDeathPanickingChain) PastReservationAcceptanceRequestedEvents(
 	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
 ) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
-	if c.deathSignal != nil {
-		c.deathSignal <- struct{}{}
-	}
 	panic("action-timeout watcher boom")
 }
 
@@ -1179,17 +1193,13 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	recovered := make(chan struct{}, 2)
-	previousHook := reservationWatcherPanicRecovered
-	reservationWatcherPanicRecovered = func() { recovered <- struct{}{} }
-	t.Cleanup(func() { reservationWatcherPanicRecovered = previousHook })
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 2)
 
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
-	deathSignal := make(chan struct{}, 2)
-	panickingChain := &watcherDeathPanickingChain{localChain: spvChain, deathSignal: deathSignal}
+	panickingChain := &watcherDeathPanickingChain{localChain: spvChain}
 
 	var typedNilMetrics *clientinfo.PerformanceMetrics
 
@@ -1208,14 +1218,7 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	// recordReservationWatcherDeath against the typed-nil recorder, has
 	// completed. A crash there would take the whole test process down,
 	// so receiving both signals is the assertion.
-	deadline := time.After(5 * time.Second)
-	for range 2 {
-		select {
-		case <-recovered:
-		case <-deadline:
-			t.Fatal("a watcher goroutine never completed its recovered-panic path")
-		}
-	}
+	awaitRecoveries()
 }
 
 // TestScanReservationStrandingStartupRegistrations verifies that the
