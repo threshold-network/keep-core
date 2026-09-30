@@ -187,9 +187,12 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 				State: test.actionState,
 			})
 			watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-			seedStaleDeadline(watcher, depositKey, test.refundDeadline)
 
-			resolution, err := watcher.CheckStaleReservedDeposit(depositKey, test.now)
+			resolution, err := watcher.CheckStaleReservedDeposit(
+				depositKey,
+				test.refundDeadline,
+				test.now,
+			)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -929,11 +932,12 @@ func TestRunStaleDepositPollTick_SnapshotsRefundDeadlineFromRevealEvent(t *testi
 	if trackedCount != 1 {
 		t.Fatalf("expected 1 tracked deposit after the first tick, got %d", trackedCount)
 	}
-	if _, ok := watcher.pending[depositKey.String()]; !ok {
+	tracked, ok := watcher.pending[depositKey.String()]
+	if !ok {
 		t.Fatalf("expected the deposit to be tracked, got %v", watcher.pending)
 	}
-	if deadline, ok := watcher.refundDeadlineMemo[depositKey.String()]; !ok || deadline != 5_000 {
-		t.Fatalf("expected the refund deadline snapshotted from the reveal event (5000), got %d (ok=%v)", deadline, ok)
+	if tracked.refundDeadline != 5_000 {
+		t.Fatalf("expected the refund deadline decoded from the reveal event (5000), got %d", tracked.refundDeadline)
 	}
 	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
 		t.Fatalf("deposit is before its deadline; expected zero notifications, got %d", len(calls))
