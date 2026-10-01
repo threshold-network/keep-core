@@ -21,6 +21,33 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
+func TestNode_RestoresTransactionMonitor(t *testing.T) {
+	handle, _ := transactionMonitorDisk(t)
+	handle = persistence.NewEncryptedBasicPersistence(handle, "test-transaction-monitor")
+	hash := bitcoin.Hash{1}
+	broadcastAt := time.Now().Add(-7 * time.Hour)
+	saveTransactionMonitorFixture(t, handle, hash, broadcastAt, false)
+
+	node, err := newNode(
+		&GroupParameters{GroupSize: 5, GroupQuorum: 4, HonestThreshold: 3},
+		Connect(),
+		newLocalBitcoinChain(),
+		local.Connect(),
+		&mockPersistenceHandle{},
+		handle,
+		newTestScheduler(t),
+		&mockCoordinationProposalGenerator{},
+		Config{PreParamsGenerationTimeout: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := node.transactionMonitor.snapshotByAge(); len(got) != 1 ||
+		got[0].hash != hash || !got[0].broadcastAt.Equal(broadcastAt) {
+		t.Fatalf("node did not restore the monitor from work storage: %+v", got)
+	}
+}
+
 func TestNode_GetSigningExecutor(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,

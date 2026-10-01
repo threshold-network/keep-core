@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
@@ -35,10 +36,10 @@ const (
 	// tracking table and starving monitoring of new transactions (~24 hours).
 	transactionMonitorMaxTrackingAge = 24 * time.Hour
 
-	// transactionMonitorCheckBudget bounds the wall-clock time of a single check
-	// pass so that a slow chain call cannot stall monitoring of every remaining
-	// transaction; transactions not reached within the budget are handled on the
-	// next pass.
+	// transactionMonitorCheckBudget bounds the confirmation scan so that a slow
+	// chain call cannot stall monitoring of every remaining transaction. Local
+	// persistence retries run before this budget starts; confirmation lookups
+	// not reached within the budget are handled on the next pass.
 	transactionMonitorCheckBudget = 2 * time.Minute
 )
 
@@ -48,6 +49,10 @@ type trackedTransaction struct {
 	walletPublicKeyHash [20]byte
 	broadcastAt         time.Time
 	alerted             bool
+	// dirty and pendingRemoval retain failed storage operations for retry on
+	// the next check pass. Neither flag is persisted.
+	dirty          bool
+	pendingRemoval bool
 }
 
 // trackedTransactionSnapshot pairs a copy of a tracked transaction with its hash
@@ -93,12 +98,12 @@ func (tm *transactionMonitor) snapshotByAge() []trackedTransactionSnapshot {
 // transaction tracks it independently, so the metric and log are emitted per
 // operator and should be de-duplicated by transaction hash downstream.
 //
-// The tracked set is in-memory only. A transaction that is already stuck when
-// the node restarts is not re-tracked (it was broadcast by the previous
-// process), so cross-restart stuck transactions are not detected here; they
-// remain covered by the coarser wallet-level liveness metrics.
+// The tracked set is restored from work storage during construction, before
+// any broadcasts or check passes. Broadcast times and alert state survive
+// restarts, so downtime counts toward the stuck threshold and tracking age.
 type transactionMonitor struct {
-	btcChain bitcoin.Chain
+	btcChain    bitcoin.Chain
+	persistence persistence.BasicHandle
 
 	mu      sync.Mutex
 	tracked map[bitcoin.Hash]*trackedTransaction
@@ -108,12 +113,18 @@ type transactionMonitor struct {
 	metricsRecorder clientinfo.PerformanceMetricsRecorder
 }
 
-func newTransactionMonitor(btcChain bitcoin.Chain) *transactionMonitor {
-	return &transactionMonitor{
-		btcChain:  btcChain,
-		tracked:   make(map[bitcoin.Hash]*trackedTransaction),
-		threshold: defaultStuckTransactionThreshold,
+func newTransactionMonitor(
+	btcChain bitcoin.Chain,
+	workPersistence persistence.BasicHandle,
+) *transactionMonitor {
+	monitor := &transactionMonitor{
+		btcChain:    btcChain,
+		persistence: workPersistence,
+		tracked:     make(map[bitcoin.Hash]*trackedTransaction),
+		threshold:   defaultStuckTransactionThreshold,
 	}
+	monitor.restore()
+	return monitor
 }
 
 // setMetricsRecorder wires the performance metrics recorder used to expose the
@@ -128,8 +139,9 @@ func (tm *transactionMonitor) setMetricsRecorder(
 
 // track registers a freshly broadcast wallet transaction for confirmation
 // monitoring. It is a no-op if the transaction is already tracked or the
-// tracking table is full. It performs no network calls, so it never blocks the
-// broadcast path or silently drops a transaction due to a chain lookup failure.
+// tracking table is full. It persists locally before returning and performs no
+// network calls. A storage failure is logged and retried by the check loop;
+// the transaction remains monitored in memory in the meantime.
 func (tm *transactionMonitor) track(
 	txHash bitcoin.Hash,
 	walletPublicKeyHash [20]byte,
@@ -164,7 +176,9 @@ func (tm *transactionMonitor) track(
 	tm.tracked[txHash] = &trackedTransaction{
 		walletPublicKeyHash: walletPublicKeyHash,
 		broadcastAt:         time.Now(),
+		dirty:               true,
 	}
+	tm.persist(txHash)
 	tm.mu.Unlock()
 }
 
@@ -199,6 +213,23 @@ func (tm *transactionMonitor) checkWithBudget(
 	ctx context.Context,
 	checkBudget time.Duration,
 ) {
+	ordered := tm.snapshotByAge()
+	// Retry every pending storage operation before starting confirmation
+	// lookups. Otherwise an older transaction's lookup can exhaust the budget
+	// on every pass and indefinitely starve persistence of newer transactions.
+	for _, t := range ordered {
+		if ctx.Err() != nil {
+			return
+		}
+		if t.pendingRemoval {
+			tm.remove(t.hash)
+		} else if t.dirty {
+			tm.mu.Lock()
+			tm.persist(t.hash)
+			tm.mu.Unlock()
+		}
+	}
+
 	checkCtx, cancelCheck := context.WithTimeout(
 		ctx,
 		checkBudget,
@@ -211,8 +242,15 @@ func (tm *transactionMonitor) checkWithBudget(
 	// hits its time budget never starves the transactions closest to the stuck
 	// threshold; only the newest, furthest-from-alerting ones are deferred to the
 	// next pass. Chain calls are made on the copy, outside the lock.
-	for _, t := range tm.snapshotByAge() {
+	for _, t := range ordered {
 		txHash := t.hash
+		if ctx.Err() != nil {
+			return
+		}
+		if t.pendingRemoval {
+			// The storage pass handles these entries, even if deletion fails.
+			continue
+		}
 		// The chain call is bounded by checkCtx, so a slow or hung backend cannot
 		// keep this run loop blocked past the check budget: when the budget
 		// expires the call is cancelled and returns.
@@ -268,6 +306,8 @@ func (tm *transactionMonitor) checkWithBudget(
 			tm.mu.Lock()
 			if tracked, ok := tm.tracked[txHash]; ok {
 				tracked.alerted = true
+				tracked.dirty = true
+				tm.persist(txHash)
 			}
 			recorder := tm.metricsRecorder
 			tm.mu.Unlock()
@@ -307,9 +347,20 @@ func (tm *transactionMonitor) checkWithBudget(
 	}
 }
 
-// remove stops tracking the transaction with the given hash.
+// remove stops tracking a transaction once its durable records are deleted.
+// Failed deletions are retried without emitting further alerts for the entry.
 func (tm *transactionMonitor) remove(txHash bitcoin.Hash) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	tracked, ok := tm.tracked[txHash]
+	if !ok {
+		return
+	}
+	tracked.pendingRemoval = true
+	if err := tm.deletePersisted(txHash); err != nil {
+		logger.Errorf("could not remove monitored transaction [%s] from storage; "+
+			"will retry: [%v]", txHash.Hex(bitcoin.ReversedByteOrder), err)
+		return
+	}
 	delete(tm.tracked, txHash)
 }
