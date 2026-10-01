@@ -48,7 +48,12 @@ type RPCHealthChecker struct {
 	ethLastSuccess  time.Time
 	ethLastError    error
 	ethLastDuration time.Duration // Last successful RPC call duration
-	ethMutex        sync.RWMutex
+	// Highest block number seen and when it last advanced. CurrentBlock can
+	// keep returning a cached height after the chain subscription dies, so a
+	// "successful" check alone does not prove the node still sees the chain.
+	ethLastBlock         uint64
+	ethLastBlockChangeAt time.Time
+	ethMutex             sync.RWMutex
 
 	// Bitcoin health check
 	btcChain        bitcoin.Chain
@@ -56,6 +61,11 @@ type RPCHealthChecker struct {
 	btcLastSuccess  time.Time
 	btcLastError    error
 	btcLastDuration time.Duration // Last successful RPC call duration
+	// Highest block height seen and when it last advanced. A stuck Electrum
+	// server keeps answering with the same tip, so health checks pass while
+	// every sweep fails.
+	btcLastHeight         uint
+	btcLastHeightChangeAt time.Time
 	// Count of known-benign -32602 GetBlockHeader errors observed. Kept as
 	// a counter so the condition remains observable through metrics even
 	// though it is no longer logged at warning level.
@@ -191,6 +201,10 @@ func (r *RPCHealthChecker) checkEthereumHealth(ctx context.Context) {
 	r.ethLastSuccess = time.Now()
 	r.ethLastError = nil
 	r.ethLastDuration = duration
+	if currentBlock > r.ethLastBlock {
+		r.ethLastBlock = currentBlock
+		r.ethLastBlockChangeAt = r.ethLastSuccess
+	}
 	r.ethMutex.Unlock()
 
 	rpcHealthLogger.Debugf(
@@ -242,6 +256,16 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 		)
 		return
 	}
+
+	// The tip is tracked as soon as a non-zero height is returned, before the
+	// header check: servers that reject cp_height (the known-benign -32602)
+	// still report a valid tip, and their tip must not look stale.
+	r.btcMutex.Lock()
+	if latestHeight > r.btcLastHeight {
+		r.btcLastHeight = latestHeight
+		r.btcLastHeightChangeAt = time.Now()
+	}
+	r.btcMutex.Unlock()
 
 	// Third check: Try to get block header for the latest block
 	// This verifies the RPC can actually retrieve block data, not just return a number
@@ -308,6 +332,32 @@ func (r *RPCHealthChecker) GetBitcoinHealthStatus() (isHealthy bool, lastCheck t
 	return isHealthy, r.btcLastCheck, r.btcLastSuccess, r.btcLastError, r.btcLastDuration
 }
 
+// GetEthereumTipStatus returns the highest Ethereum block number observed by
+// the health check and how long ago it last advanced. Both are zero until the
+// first successful check.
+func (r *RPCHealthChecker) GetEthereumTipStatus(now time.Time) (block uint64, staleFor time.Duration) {
+	r.ethMutex.RLock()
+	defer r.ethMutex.RUnlock()
+
+	if r.ethLastBlockChangeAt.IsZero() {
+		return 0, 0
+	}
+	return r.ethLastBlock, now.Sub(r.ethLastBlockChangeAt)
+}
+
+// GetBitcoinTipStatus returns the highest Bitcoin block height observed by
+// the health check and how long ago it last advanced. Both are zero until the
+// first successful check.
+func (r *RPCHealthChecker) GetBitcoinTipStatus(now time.Time) (height uint, staleFor time.Duration) {
+	r.btcMutex.RLock()
+	defer r.btcMutex.RUnlock()
+
+	if r.btcLastHeightChangeAt.IsZero() {
+		return 0, 0
+	}
+	return r.btcLastHeight, now.Sub(r.btcLastHeightChangeAt)
+}
+
 // GetBitcoinBenignHeaderErrorCount returns the number of known-benign -32602
 // GetBlockHeader errors observed by the Bitcoin health check.
 func (r *RPCHealthChecker) GetBitcoinBenignHeaderErrorCount() float64 {
@@ -337,6 +387,32 @@ func (r *RPCHealthChecker) registerMetrics() {
 			"rpc_btc_response_time_seconds": func() float64 {
 				_, _, _, _, lastDuration := r.GetBitcoinHealthStatus()
 				return lastDuration.Seconds()
+			},
+		},
+	)
+
+	// Chain tips seen by the health checks and how long since they last
+	// advanced. Monitoring compares the tip against the fleet and alerts on
+	// staleness: a stuck Electrum server or a dead Ethereum subscription
+	// otherwise looks healthy here while every wallet action fails.
+	r.registry.ObserveApplicationSource(
+		"performance",
+		map[string]Source{
+			"rpc_eth_latest_block_number": func() float64 {
+				block, _ := r.GetEthereumTipStatus(time.Now())
+				return float64(block)
+			},
+			"rpc_eth_block_stale_seconds": func() float64 {
+				_, staleFor := r.GetEthereumTipStatus(time.Now())
+				return staleFor.Seconds()
+			},
+			"rpc_btc_latest_block_height": func() float64 {
+				height, _ := r.GetBitcoinTipStatus(time.Now())
+				return float64(height)
+			},
+			"rpc_btc_block_stale_seconds": func() float64 {
+				_, staleFor := r.GetBitcoinTipStatus(time.Now())
+				return staleFor.Seconds()
 			},
 		},
 	)

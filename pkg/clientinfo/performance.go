@@ -129,6 +129,8 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
 		MetricCoordinationLeaderTimeoutTotal,
+		MetricCoordinationLeaderProposalsTotal,
+		MetricCoordinationLeaderNoopProposalsTotal,
 		MetricPeerConnectionsTotal,
 		MetricPeerDisconnectionsTotal,
 		MetricMessageBroadcastTotal,
@@ -656,6 +658,12 @@ const (
 	MetricCoordinationFailedTotal             = "coordination_failed_total"         // Only when node is leader
 	MetricCoordinationLeaderTimeoutTotal      = "coordination_leader_timeout_total" // When follower observes leader timeout
 	MetricCoordinationDurationSeconds         = "coordination_duration_seconds"
+	// Leader outcomes. A leader that keeps broadcasting a noop proposal while
+	// the wallet has eligible work (e.g. its ETH backend cannot look back far
+	// enough to see pending deposits) is invisible to the counters above,
+	// because a noop proposal is a successful coordination.
+	MetricCoordinationLeaderProposalsTotal     = "coordination_leader_proposals_total"
+	MetricCoordinationLeaderNoopProposalsTotal = "coordination_leader_noop_proposals_total"
 
 	// Coordination Window Metrics (per-window tracking)
 	MetricCoordinationWindowDurationSeconds    = "coordination_window_duration_seconds"

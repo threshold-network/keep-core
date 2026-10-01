@@ -442,6 +442,13 @@ func (ce *coordinationExecutor) coordinate(
 		}
 
 		execLogger.Infof("broadcasted proposal: [%s]", proposal.ActionType())
+
+		if ce.metricsRecorder != nil {
+			ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationLeaderProposalsTotal, 1)
+			if proposal.ActionType() == ActionNoop {
+				ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationLeaderNoopProposalsTotal, 1)
+			}
+		}
 	} else {
 		execLogger.Info("executing follower's routine")
 

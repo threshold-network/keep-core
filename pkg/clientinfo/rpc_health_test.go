@@ -548,3 +548,83 @@ func TestRPCHealthChecker_StartIdempotent(t *testing.T) {
 		t.Error("expected healthy after Start")
 	}
 }
+
+// --- chain tip tracking ---
+
+func TestRPCHealthChecker_EthereumTipStaleWhenBlockStopsAdvancing(t *testing.T) {
+	eth := &fakeBlockCounter{currentBlock: 100}
+	checker := newTestChecker(eth, nil)
+
+	if block, stale := checker.GetEthereumTipStatus(time.Now()); block != 0 || stale != 0 {
+		t.Fatalf("expected zero tip before first check, got block %d stale %v", block, stale)
+	}
+
+	checker.checkEthereumHealth(context.Background())
+	firstChange := checker.ethLastBlockChangeAt
+
+	// A cached height keeps CurrentBlock "succeeding" with the same number.
+	checker.checkEthereumHealth(context.Background())
+	block, stale := checker.GetEthereumTipStatus(firstChange.Add(10 * time.Minute))
+	if block != 100 {
+		t.Errorf("expected block 100, got %d", block)
+	}
+	if stale != 10*time.Minute {
+		t.Errorf("expected 10m stale, got %v", stale)
+	}
+	if healthy, _, _, _, _ := checker.GetEthereumHealthStatus(); !healthy {
+		t.Error("health status itself stays healthy; staleness is reported separately")
+	}
+
+	// Advancing resets staleness.
+	eth.currentBlock = 101
+	checker.checkEthereumHealth(context.Background())
+	if block, _ := checker.GetEthereumTipStatus(time.Now()); block != 101 {
+		t.Errorf("expected block 101, got %d", block)
+	}
+	if !checker.ethLastBlockChangeAt.After(firstChange) {
+		t.Error("expected change time to move forward when the block advances")
+	}
+}
+
+func TestRPCHealthChecker_BitcoinTipTrackedDespiteBenignHeaderError(t *testing.T) {
+	btc := &fakeBitcoinChain{
+		latestHeight: 860000,
+		headerErr:    fmt.Errorf("-32602: invalid params (cp_height)"),
+	}
+	checker := newTestChecker(nil, btc)
+
+	checker.checkBitcoinHealth(context.Background())
+
+	height, _ := checker.GetBitcoinTipStatus(time.Now())
+	if height != 860000 {
+		t.Errorf("expected tip 860000 even when the header check fails, got %d", height)
+	}
+}
+
+func TestRPCHealthChecker_BitcoinTipDoesNotRegress(t *testing.T) {
+	btc := &fakeBitcoinChain{latestHeight: 860000}
+	checker := newTestChecker(nil, btc)
+	checker.checkBitcoinHealth(context.Background())
+	changedAt := checker.btcLastHeightChangeAt
+
+	// A failover backend that is behind must not move the tip backwards or
+	// reset the staleness clock.
+	btc.latestHeight = 859990
+	checker.checkBitcoinHealth(context.Background())
+
+	height, _ := checker.GetBitcoinTipStatus(time.Now())
+	if height != 860000 {
+		t.Errorf("expected tip to stay at 860000, got %d", height)
+	}
+	if !checker.btcLastHeightChangeAt.Equal(changedAt) {
+		t.Error("expected change time to stay put on a lower height")
+	}
+}
+
+func TestRPCHealthChecker_TipZeroHeightIgnored(t *testing.T) {
+	checker := newTestChecker(nil, &fakeBitcoinChain{latestHeight: 0})
+	checker.checkBitcoinHealth(context.Background())
+	if height, stale := checker.GetBitcoinTipStatus(time.Now()); height != 0 || stale != 0 {
+		t.Errorf("expected no tip on zero height, got %d / %v", height, stale)
+	}
+}
