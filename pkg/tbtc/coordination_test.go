@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"math/big"
 	"reflect"
 	"testing"
@@ -353,20 +354,30 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 
 	reportChan := make(chan *report, 3)
 
+	// One recorder per executor: only the leader may count a proposal.
+	recorders := []*countingMetricsRecorder{
+		newCountingMetricsRecorder(),
+		newCountingMetricsRecorder(),
+		newCountingMetricsRecorder(),
+	}
+
 	for i, currentOperator := range []*operatorFixture{
 		operator1,
 		operator2,
 		operator3,
 	} {
-		go func(operatorIndex int, operator *operatorFixture) {
-			result, err := generateExecutor(operator).coordinate(window)
+		executor := generateExecutor(currentOperator)
+		executor.setMetricsRecorder(recorders[i])
+
+		go func(operatorIndex int, executor *coordinationExecutor) {
+			result, err := executor.coordinate(window)
 
 			reportChan <- &report{
 				operatorIndex: operatorIndex,
 				result:        result,
 				err:           err,
 			}
-		}(i+1, currentOperator)
+		}(i+1, executor)
 	}
 
 	reports := make([]*report, 0)
@@ -437,6 +448,17 @@ loop:
 		false,
 		protocolLatch.IsExecuting(),
 	)
+
+	// operator2 is the leader and proposed a redemption, not a noop.
+	for i, expectedProposals := range []float64{0, 1, 0} {
+		recorder := recorders[i]
+		if got := recorder.GetCounterValue(clientinfo.MetricCoordinationLeaderProposalsTotal); got != expectedProposals {
+			t.Errorf("operator%d leader proposals: expected %v, got %v", i+1, expectedProposals, got)
+		}
+		if got := recorder.GetCounterValue(clientinfo.MetricCoordinationLeaderNoopProposalsTotal); got != 0 {
+			t.Errorf("operator%d leader noop proposals: expected 0, got %v", i+1, got)
+		}
+	}
 }
 
 func TestCoordinationExecutor_GetSeed(t *testing.T) {
