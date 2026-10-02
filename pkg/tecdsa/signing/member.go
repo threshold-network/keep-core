@@ -163,7 +163,7 @@ func (skgm *symmetricKeyGeneratingMember) initializeTssRoundOne() *tssRoundOneMe
 	}
 
 	tssOutgoingMessagesChan := make(chan tss.Message, len(groupTssPartiesIDs))
-	tssResultChan := make(chan tsslibcommon.SignatureData, 1)
+	tssResultChan := make(chan *tsslibcommon.SignatureData, 1)
 
 	tssParty := signing.NewLocalParty(
 		skgm.message,
@@ -191,7 +191,7 @@ type tssRoundOneMember struct {
 	tssParty                tss.Party
 	tssParameters           *tss.Parameters
 	tssOutgoingMessagesChan <-chan tss.Message
-	tssResultChan           <-chan tsslibcommon.SignatureData
+	tssResultChan           <-chan *tsslibcommon.SignatureData
 }
 
 // initializeTssRoundTwo returns a member to perform next protocol operations.

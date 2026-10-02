@@ -735,7 +735,7 @@ func (fm *finalizingMember) tssFinalize(
 
 	select {
 	case tssResult := <-fm.tssResultChan:
-		fm.tssResult = &tssResult
+		fm.tssResult = tssResult
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf(

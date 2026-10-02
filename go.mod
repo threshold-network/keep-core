@@ -6,7 +6,7 @@ replace (
 	// Threshold fork of tss-lib carrying the hardened GG20 proof transcript (protocol-mode selection, historical-Bob compatibility).
 	// Pinned to the `dev` branch head (PR #38: Paillier decryption cache removal); the module path inside the fork is still
 	// `github.com/bnb-chain/tss-lib`, which is what keep-core and first-party code import.
-	github.com/bnb-chain/tss-lib => github.com/threshold-network/tss-lib v0.0.0-20261002094641-f8bbafff1b38
+	github.com/bnb-chain/tss-lib => github.com/threshold-network/tss-lib v0.0.0-20261002145648-605617037f7d
 	// btcd v0.23 extracted `btcd/btcec` into the separate module `btcd/btcec/v2`
 	// and later btcd versions no longer ship the pre-split package. The tss-lib
 	// fork (replace above) and first-party key-handling code still import the
