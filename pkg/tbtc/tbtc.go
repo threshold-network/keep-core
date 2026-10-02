@@ -96,6 +96,14 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
+	// LegacyHistoricalBobCompatibility re-admits, in the tECDSA signing
+	// protocol, the unbounded-witness Bob/BobMid proofs produced by
+	// pre-hardening signers so they verify during a mixed-version rollout.
+	// Disabled by default; enable only while not every signer in the group
+	// is upgraded to the hardened tss-lib. This flag (and the widened
+	// verification it enables) is scheduled for removal in the next release
+	// once every signer is on the hardened protocol.
+	LegacyHistoricalBobCompatibility bool
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -116,6 +124,21 @@ func Initialize(
 	ethereumNetwork ethereum.Network,
 ) error {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
+	if config.LegacyHistoricalBobCompatibility {
+		logger.Warnf(
+			"TBTC legacy historical Bob compatibility is ENABLED: " +
+				"the tECDSA signing protocol re-admits the historical " +
+				"unbounded-witness Bob/BobMid proofs produced by " +
+				"pre-hardening signers. This widens the round-3 " +
+				"verification bounds and must be disabled once every " +
+				"signer in the group is upgraded to the hardened " +
+				"protocol. This flag (and the compatibility it " +
+				"enables) is scheduled for removal in the next release. " +
+				"Disable it (set " +
+				"tbtc.legacyHistoricalBobCompatibility=false) as soon " +
+				"as all signers are upgraded.",
+		)
+	}
 
 	if ethChain, ok := chain.(interface {
 		EcdsaWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)

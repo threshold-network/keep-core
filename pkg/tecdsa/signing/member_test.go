@@ -97,6 +97,8 @@ func TestShouldAcceptMessage(t *testing.T) {
 				"1",
 				big.NewInt(100),
 				tecdsa.NewPrivateKeyShare(testData[0]),
+				32,
+				false,
 			)
 
 			filter := member.inactiveMemberFilter()

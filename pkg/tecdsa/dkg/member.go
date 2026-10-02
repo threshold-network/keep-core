@@ -144,6 +144,12 @@ func (skgm *symmetricKeyGeneratingMember) initializeTssRoundOne() (
 	)
 	tssParameters.SetConcurrency(skgm.keyGenerationConcurrency)
 
+	// The hardened tss-lib fails closed unless the proof-transcript mode is
+	// selected before a local party is constructed. keep-core's first
+	// hardened release always runs the legacy untagged GG20 transcript; a
+	// session nonce is not used in legacy mode.
+	tssParameters.SetProtocolMode(tss.ProtocolModeLegacy)
+
 	tssOutgoingMessagesChan := make(chan tss.Message, len(groupTssPartiesIDs))
 	tssResultChan := make(chan keygen.LocalPartySaveData, 1)
 

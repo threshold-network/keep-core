@@ -34,6 +34,14 @@ const (
 	// completed by the slowest signing group member (the one who sends the
 	// signingDoneMessage as the last one).
 	signingBatchInterludeBlocks = 2
+
+	// fullSigningMessageBytes is the fixed byte width of the message that the
+	// tBTC node signs. The tECDSA signature is computed over Bitcoin
+	// transaction signature hashes (SIGHASH_ALL sighashes) which are always
+	// 32 bytes (a single digest). All signers in the group must pass the
+	// same width to the tss-lib signing party constructor, so it is fixed
+	// here and shared across the whole group.
+	fullSigningMessageBytes = 32
 )
 
 // errSigningExecutorBusy is an error returned when the signing executor
@@ -61,6 +69,11 @@ type signingExecutor struct {
 	// limit is hit the signer gives up.
 	signingAttemptsLimit uint
 
+	// legacyHistoricalBobCompatibility re-admits the historical unbounded-
+	// witness Bob/BobMid proofs of pre-hardening signers during a
+	// mixed-version rollout. Enabled by the node config flag.
+	legacyHistoricalBobCompatibility bool
+
 	// metricsRecorder is optional and used for recording performance metrics
 	metricsRecorder interface {
 		IncrementCounter(name string, value float64)
@@ -78,17 +91,19 @@ func newSigningExecutor(
 	getCurrentBlockFn getCurrentBlockFn,
 	waitForBlockFn waitForBlockFn,
 	signingAttemptsLimit uint,
+	legacyHistoricalBobCompatibility bool,
 ) *signingExecutor {
 	return &signingExecutor{
-		lock:                 semaphore.NewWeighted(1),
-		signers:              signers,
-		broadcastChannel:     broadcastChannel,
-		membershipValidator:  membershipValidator,
-		groupParameters:      groupParameters,
-		protocolLatch:        protocolLatch,
-		getCurrentBlockFn:    getCurrentBlockFn,
-		waitForBlockFn:       waitForBlockFn,
-		signingAttemptsLimit: signingAttemptsLimit,
+		lock:                             semaphore.NewWeighted(1),
+		signers:                          signers,
+		broadcastChannel:                 broadcastChannel,
+		membershipValidator:              membershipValidator,
+		groupParameters:                  groupParameters,
+		protocolLatch:                    protocolLatch,
+		getCurrentBlockFn:                getCurrentBlockFn,
+		waitForBlockFn:                   waitForBlockFn,
+		signingAttemptsLimit:             signingAttemptsLimit,
+		legacyHistoricalBobCompatibility: legacyHistoricalBobCompatibility,
 	}
 }
 
@@ -333,6 +348,8 @@ func (se *signingExecutor) sign(
 						attempt.excludedMembersIndexes,
 						se.broadcastChannel,
 						se.membershipValidator,
+						fullSigningMessageBytes,
+						se.legacyHistoricalBobCompatibility,
 					)
 					if err != nil {
 						return nil, 0, err

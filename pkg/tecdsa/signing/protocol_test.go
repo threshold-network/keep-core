@@ -2439,6 +2439,7 @@ func initializeEphemeralKeyPairGeneratingMembersGroup(
 				message:           big.NewInt(100),
 				privateKeyShare:   tecdsa.NewPrivateKeyShare(testData[i-1]),
 				identityConverter: &identityConverter{keys: testData[i-1].Ks},
+				fullBytesLen:      32,
 			},
 			ephemeralKeyPairs: make(map[group.MemberIndex]*ephemeral.KeyPair),
 		})

@@ -44,6 +44,10 @@ const (
 // node represents the current state of an ECDSA node.
 type node struct {
 	groupParameters *GroupParameters
+	// legacyHistoricalBobCompatibility is copied from the node config at
+	// startup and passed to signing executors so that not-yet-upgraded
+	// signers' historical proofs verify during a mixed-version rollout.
+	legacyHistoricalBobCompatibility bool
 
 	chain          Chain
 	btcChain       bitcoin.Chain
@@ -142,19 +146,20 @@ func newNode(
 	scheduler.RegisterProtocol(latch)
 
 	node := &node{
-		groupParameters:          groupParameters,
-		chain:                    chain,
-		btcChain:                 btcChain,
-		netProvider:              netProvider,
-		walletRegistry:           walletRegistry,
-		walletDispatcher:         newWalletDispatcher(),
-		protocolLatch:            latch,
-		heartbeatFailureCounter:  newHeartbeatFailureCounter(),
-		signingExecutors:         make(map[string]*signingExecutor),
-		inactivityClaimExecutors: make(map[string]*inactivityClaimExecutor),
-		coordinationExecutors:    make(map[string]*coordinationExecutor),
-		proposalGenerator:        proposalGenerator,
-		transactionMonitor:       newTransactionMonitor(btcChain),
+		groupParameters:                  groupParameters,
+		chain:                            chain,
+		btcChain:                         btcChain,
+		netProvider:                      netProvider,
+		walletRegistry:                   walletRegistry,
+		walletDispatcher:                 newWalletDispatcher(),
+		protocolLatch:                    latch,
+		heartbeatFailureCounter:          newHeartbeatFailureCounter(),
+		signingExecutors:                 make(map[string]*signingExecutor),
+		inactivityClaimExecutors:         make(map[string]*inactivityClaimExecutor),
+		coordinationExecutors:            make(map[string]*coordinationExecutor),
+		proposalGenerator:                proposalGenerator,
+		transactionMonitor:               newTransactionMonitor(btcChain),
+		legacyHistoricalBobCompatibility: config.LegacyHistoricalBobCompatibility,
 	}
 
 	// Archive any wallets that might have been closed or terminated while the

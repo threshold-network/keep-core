@@ -34,6 +34,14 @@ type member struct {
 	privateKeyShare *tecdsa.PrivateKeyShare
 	// Instance of the member identity converter.
 	identityConverter *identityConverter
+	// fullBytesLen is the fixed byte width of the signed message, which all
+	// signers in the ceremony must use identically.
+	fullBytesLen int
+	// legacyHistoricalBobCompatibility re-admits the historical unbounded-
+	// witness Bob/BobMid proofs of not-yet-upgraded signers during a
+	// mixed-version rollout. See tss-lib's
+	// Parameters.SetLegacyHistoricalBobCompatibility.
+	legacyHistoricalBobCompatibility bool
 }
 
 // newMember creates a new member in an initial state
@@ -46,16 +54,20 @@ func newMember(
 	sessionID string,
 	message *big.Int,
 	privateKeyShare *tecdsa.PrivateKeyShare,
+	fullBytesLen int,
+	legacyHistoricalBobCompatibility bool,
 ) *member {
 	return &member{
-		logger:              logger,
-		id:                  memberID,
-		group:               group.NewGroup(dishonestThreshold, groupSize),
-		membershipValidator: membershipValidator,
-		sessionID:           sessionID,
-		message:             message,
-		privateKeyShare:     privateKeyShare,
-		identityConverter:   &identityConverter{keys: privateKeyShare.Data().Ks},
+		logger:                           logger,
+		id:                               memberID,
+		group:                            group.NewGroup(dishonestThreshold, groupSize),
+		membershipValidator:              membershipValidator,
+		sessionID:                        sessionID,
+		message:                          message,
+		privateKeyShare:                  privateKeyShare,
+		identityConverter:                &identityConverter{keys: privateKeyShare.Data().Ks},
+		fullBytesLen:                     fullBytesLen,
+		legacyHistoricalBobCompatibility: legacyHistoricalBobCompatibility,
 	}
 }
 
@@ -141,6 +153,15 @@ func (skgm *symmetricKeyGeneratingMember) initializeTssRoundOne() *tssRoundOneMe
 		skgm.group.HonestThreshold()-1,
 	)
 
+	// The hardened tss-lib fails closed unless the proof-transcript mode is
+	// selected before a local party is constructed. keep-core's first
+	// hardened release always runs the legacy untagged GG20 transcript; a
+	// session nonce is not used in legacy mode.
+	tssParameters.SetProtocolMode(tss.ProtocolModeLegacy)
+	if skgm.legacyHistoricalBobCompatibility {
+		tssParameters.SetLegacyHistoricalBobCompatibility(true)
+	}
+
 	tssOutgoingMessagesChan := make(chan tss.Message, len(groupTssPartiesIDs))
 	tssResultChan := make(chan tsslibcommon.SignatureData, 1)
 
@@ -150,6 +171,7 @@ func (skgm *symmetricKeyGeneratingMember) initializeTssRoundOne() *tssRoundOneMe
 		skgm.privateKeyShare.Data(),
 		tssOutgoingMessagesChan,
 		tssResultChan,
+		skgm.fullBytesLen,
 	)
 
 	return &tssRoundOneMember{

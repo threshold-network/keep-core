@@ -117,6 +117,7 @@ Port = 9601
 # PreParamsGenerationDelay = "10s"
 # PreParamsGenerationConcurrency = 1
 # KeyGenerationConcurrency = 1
+# LegacyHistoricalBobCompatibility = false
 
 # Developer options to work with locally deployed contracts
 #

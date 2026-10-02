@@ -1,12 +1,15 @@
 FROM golang:1.24-alpine3.21 AS build-sources
 
+# GOTOOLCHAIN=auto: go.mod requires Go 1.25.7 (hardened tss-lib) and the
+# official golang images default to GOTOOLCHAIN=local, so let go fetch it.
 ENV GOPATH=/go \
 	GOBIN=/go/bin \
 	APP_NAME=keep-client \
 	APP_DIR=/go/src/github.com/keep-network/keep-core \
 	TEST_RESULTS_DIR=/mnt/test-results \
 	BIN_PATH=/usr/local/bin \
-	LD_LIBRARY_PATH=/usr/local/lib/
+	LD_LIBRARY_PATH=/usr/local/lib/ \
+	GOTOOLCHAIN=auto
 
 # TODO: Remove perl once go-ethereum is upgraded to 1.11.
 #       See pkg/chain/ethereum/tbtc/gen/Makefile and after_abi_hook for details.
@@ -114,6 +117,9 @@ CMD []
 FROM golang:1.24-bullseye AS build-bins
 
 ENV APP_DIR=/go/src/github.com/keep-network/keep-core
+# Keep the bullseye base (release binaries' glibc floor); go.mod's Go 1.25.7
+# toolchain is fetched because the image defaults to GOTOOLCHAIN=local.
+ENV GOTOOLCHAIN=auto
 
 WORKDIR $APP_DIR
 

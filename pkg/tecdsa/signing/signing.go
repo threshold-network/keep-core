@@ -33,6 +33,8 @@ func Execute(
 	excludedMembersIndexes []group.MemberIndex,
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
+	fullBytesLen int,
+	legacyHistoricalBobCompatibility bool,
 ) (*Result, error) {
 	logger.Debugf("[member:%v] initializing member", memberIndex)
 
@@ -45,6 +47,8 @@ func Execute(
 		sessionID,
 		message,
 		privateKeyShare,
+		fullBytesLen,
+		legacyHistoricalBobCompatibility,
 	)
 
 	// Mark excluded members as disqualified in order to not exchange messages
