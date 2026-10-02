@@ -7,35 +7,73 @@ on:
 
 permissions:
   contents: write
+  # Keyless Sigstore signing and attestation building exchange a GitHub OIDC
+  # identity token.
+  id-token: write
+  # actions/attest-build-provenance stores the provenance statement as an
+  # attestation storage record and pushes it to the image registry.
+  attestations: write
+
+# Rehearsal gate: any tag whose name contains "-rehearsal" forces a dry run
+# in every job, whatever the RELEASE_DRY_RUN repository variable says;
+# setting RELEASE_DRY_RUN to "true" additionally forces a dry run for any
+# tag. In a dry run the pipeline builds, signs and verifies everything but
+# performs no live mutations (no Docker Hub push, no GitHub release, no
+# registry signing). See docs/release-process.md, "Rehearsal Dry Run".
+env:
+  RELEASE_DRY_RUN: ${{ vars.RELEASE_DRY_RUN }}
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch the whole history for the `git describe` command to work.
+          # Fetch the whole history for the `git describe` previous-tag
+          # lookup in the release notes.
           fetch-depth: 0
 
       - name: Resolve versions
         run: |
-          echo "version=$(git describe --tags --match 'v[0-9]*' HEAD)" \
-            >> $GITHUB_ENV
-          echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          # The release version is the tag that triggered this run, never
+          # a discovery: `git describe` cannot say which of several
+          # matching tags on this commit (for example a disposable
+          # rehearsal tag and the real release tag) actually fired the
+          # workflow.
+          version="${GITHUB_REF_NAME}"
+          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag ${version} does not match the supported version-tag syntax (vMAJOR.MINOR.PATCH[-PRERELEASE])" >&2
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "revision=$(git rev-parse --short HEAD)"
+            dry_run="false"
+            # A tag name containing "-rehearsal" forces a dry run in every
+            # job, whatever the RELEASE_DRY_RUN variable says.
+            if [[ "${version}" == *"-rehearsal"* ]]; then
+              dry_run="true"
+            fi
+            if [ "${RELEASE_DRY_RUN:-}" = "true" ]; then
+              dry_run="true"
+            fi
+            echo "dry_run=${dry_run}"
+            # Identity of this workflow run, as signed into every keyless
+            # signature below; operators pin these two values when verifying.
+            echo "cert_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+            echo "cert_issuer=https://token.actions.githubusercontent.com"
+          } >> "${GITHUB_ENV}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+      # The signed release build restores no shared Actions cache: every
+      # cache entry restored by prefix could come from any earlier run on any
+      # branch, so a provenance attestation over the build could no longer
+      # describe what the build actually consumed.
 
       - name: Build Docker Build Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           target: build-docker
           tags: go-build-env
@@ -44,8 +82,6 @@ jobs:
             REVISION=${{ env.revision }}
           # load image to local registry to use it in next steps
           load: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
           context: .
 
       - name: Run Go tests
@@ -56,7 +92,7 @@ jobs:
             gotestsum -- -timeout 15m
 
       - name: Build Client Binaries
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           target: output-bins
           outputs: type=local,dest=./out/bin/
@@ -67,38 +103,80 @@ jobs:
           push: false
           context: .
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          cosign-release: v3.1.3
+
+      # Keyless Sigstore signing: on GitHub Actions cosign exchanges the
+      # workflow's OIDC identity and signs without a user key; the signature
+      # is verified against the public sigstore transparency log.
+      - name: Sign release tarballs
+        run: |
+          # Keyless signing of a blob (a file that is not in a registry)
+          # writes its signature, certificate and transparency-log entry
+          # into a Sigstore bundle next to the artifact; the bundle is
+          # uploaded with the release so offline verification is possible.
+          for tarball in out/bin/*.tar.gz; do
+            cosign sign-blob --yes --bundle "${tarball}.sigstore.json" "${tarball}"
+          done
+
+      - name: Verify release tarballs
+        run: |
+          for tarball in out/bin/*.tar.gz; do
+            cosign verify-blob \
+              --bundle "${tarball}.sigstore.json" \
+              --certificate-identity="${cert_identity}" \
+              --certificate-oidc-issuer="${cert_issuer}" \
+              "${tarball}"
+          done
+
+      - name: Attest tarball build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            out/bin/*.tar.gz
+
       - name: Generate release notes
         id: release_notes
         run: |
           # Get the previous tag for release notes
-          PREV_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' \
-            HEAD^ 2>/dev/null || echo "")
+          prev_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' \
+            "HEAD^" 2>/dev/null || true)"
 
           # Create release notes
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "## Keep Core ${{ env.version }}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "Built from commit: ${{ env.revision }}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "### Downloads" >> $GITHUB_OUTPUT
-          echo "- **Linux AMD64**: \`keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz\`" \
-            >> $GITHUB_OUTPUT
-          echo "- **macOS AMD64**: \`keep-client-mainnet-${{ env.version }}-darwin-amd64.tar.gz\`" \
-            >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "### Verification" >> $GITHUB_OUTPUT
-          echo "All binaries include MD5 and SHA256 checksums for verification." \
-            >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          if [ -n "$PREV_TAG" ]; then
-            echo "### Changes since $PREV_TAG" >> $GITHUB_OUTPUT
-            git log --oneline --no-merges "$PREV_TAG..HEAD" | head -20 \
-              >> $GITHUB_OUTPUT
-          fi
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "RELEASE_NOTES<<EOF"
+            echo "## Keep Core ${{ env.version }}"
+            echo ""
+            echo "Built from commit: ${{ env.revision }}"
+            echo ""
+            echo "### Downloads"
+            echo "- **Linux AMD64**: \`keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz\`"
+            echo "- **macOS AMD64**: \`keep-client-mainnet-${{ env.version }}-darwin-amd64.tar.gz\`"
+            echo ""
+            echo "### Verification"
+            echo "Tarballs are keyless-signed with Sigstore during the run that built them. Each tarball ships a Sigstore bundle (\`[name].sigstore.json\`) next to it. Pin the issuer and the workflow identity, then:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "cosign verify-blob \\"
+            echo "  --bundle keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz.sigstore.json \\"
+            echo "  --certificate-identity=\"${cert_identity}\" \\"
+            echo "  --certificate-oidc-issuer=\"${cert_issuer}\" \\"
+            echo "  keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz"
+            echo "\`\`\`"
+            echo ""
+            echo "Docker image digests are published with the image publication step; pull images by digest, never by tag."
+            if [ -n "${prev_tag}" ]; then
+              echo "### Changes since ${prev_tag}"
+              git log --oneline --no-merges "${prev_tag}..HEAD" | head -20
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create draft GitHub Release
+        if: env.dry_run != 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: Release ${{ env.version }}
           body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
@@ -106,57 +184,78 @@ jobs:
             out/bin/*.tar.gz
             out/bin/*.md5
             out/bin/*.sha256
-          draft: false
+            out/bin/*.sigstore.json
+          # The release stays a draft until the image job has signed,
+          # verified and attested the image and published its digest;
+          # "Publish the GitHub release" in publish-docker-images
+          # publishes it as the final step, so no consumer-visible release
+          # exists while image evidence is still outstanding.
+          draft: true
           prerelease: ${{ contains(env.version, '-') }}
           generate_release_notes: false
-
-      - name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
   publish-docker-images:
     needs: build-and-release
     runs-on: ubuntu-latest
     environment: keep-production  # Requires release-admin team approval
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Resolve versions
-        run: |
-          echo "version=$(git describe --tags --match 'v[0-9]*' HEAD)" >> $GITHUB_ENV
-          echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          echo "dockerhub_org=${DOCKERHUB_ORG:-thresholdnetwork}" >> $GITHUB_ENV
         env:
           DOCKERHUB_ORG: ${{ secrets.DOCKERHUB_ORG }}
+        run: |
+          # The version is the tag that triggered this run, never the result
+          # of tag discovery: multiple tags may point at the same commit
+          # (for example a disposable rehearsal tag and the real release tag
+          # both on this commit), and `git describe` cannot say which one
+          # fired the workflow. GITHUB_REF_NAME is the exact triggering tag.
+          version="${GITHUB_REF_NAME}"
+          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag [${version}] does not match the supported version-tag syntax (vMAJOR.MINOR.PATCH[-PRERELEASE])" >&2
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "revision=$(git rev-parse --short HEAD)"
+            echo "dockerhub_org=${DOCKERHUB_ORG:-thresholdnetwork}"
+            dry_run="false"
+            # A tag name containing "-rehearsal" forces a dry run in every
+            # job, whatever the RELEASE_DRY_RUN variable says.
+            if [[ "${version}" == *"-rehearsal"* ]]; then
+              dry_run="true"
+            fi
+            if [ "${RELEASE_DRY_RUN:-}" = "true" ]; then
+              dry_run="true"
+            fi
+            echo "dry_run=${dry_run}"
+            echo "cert_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+            echo "cert_issuer=https://token.actions.githubusercontent.com"
+          } >> "${GITHUB_ENV}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-docker-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-docker-
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        if: env.dry_run != 'true'
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and Push Docker Images
-        uses: docker/build-push-action@v5
+        if: env.dry_run != 'true'
+        id: image-build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           target: runtime-docker
+          # Only the version tag is pushed here. The mutable operator
+          # aliases (latest, mainnet) are exposed only after the image
+          # evidence below succeeds ("Promote image aliases").
           tags: |
-            ${{ env.dockerhub_org }}/keep-client:latest
             ${{ env.dockerhub_org }}/keep-client:${{ env.version }}
-            ${{ env.dockerhub_org }}/keep-client:mainnet
           labels: |
             version=${{ env.version }}
             revision=${{ env.revision }}
@@ -165,11 +264,147 @@ jobs:
             VERSION=${{ env.version }}
             REVISION=${{ env.revision }}
           push: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-docker-new
+          # Attach build provenance to the pushed image: the SLSA predicate
+          # and the org.opencontainers.image.* annotations travel with the
+          # manifest operators pull.
+          provenance: mode=max
           context: .
 
-      - name: Move Docker cache
+      - name: Build Docker Images Locally (dry run)
+        if: env.dry_run == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          target: runtime-docker
+          tags: |
+            ${{ env.dockerhub_org }}/keep-client:${{ env.version }}
+          labels: |
+            version=${{ env.version }}
+            revision=${{ env.revision }}
+          build-args: |
+            ENVIRONMENT=mainnet
+            VERSION=${{ env.version }}
+            REVISION=${{ env.revision }}
+          load: true
+          context: .
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          cosign-release: v3.1.3
+
+      - name: Publish image digests
+        env:
+          IMAGE_DIGEST: ${{ steps.image-build.outputs.digest }}
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-docker-new /tmp/.buildx-cache          
+          # This job runs on its own hosted runner: out/bin does not
+          # exist here yet, so create it before the first write.
+          mkdir -p out/bin
+          digest_file="out/bin/keep-client-${version}-image-digests.txt"
+          if [ "${dry_run}" = "true" ]; then
+            # No registry push in a dry run: the image is saved locally and
+            # the recorded digest is the sha256 of that saved image.
+            local_image_tar="out/bin/keep-client-${version}-image-linux-amd64.tar"
+            docker save -o "${local_image_tar}" \
+              "${dockerhub_org}/keep-client:${version}"
+            echo "sha256:$(sha256sum "${local_image_tar}" | cut -d' ' -f1)" \
+              > "${digest_file}"
+          else
+            {
+              echo "${dockerhub_org}/keep-client:latest ${IMAGE_DIGEST}"
+              echo "${dockerhub_org}/keep-client:${version} ${IMAGE_DIGEST}"
+              echo "${dockerhub_org}/keep-client:mainnet ${IMAGE_DIGEST}"
+            } > "${digest_file}"
+          fi
+          echo "digest_file=${digest_file}" >> "${GITHUB_ENV}"
+          echo "image_digest=${IMAGE_DIGEST:-}" >> "${GITHUB_ENV}"
+          cat "${digest_file}"
+
+      - name: Sign image (keyless)
+        if: env.dry_run != 'true'
+        run: |
+          cosign sign --yes "${dockerhub_org}/keep-client@${image_digest}"
+
+      - name: Sign local image (keyless, dry run)
+        if: env.dry_run == 'true'
+        run: |
+          cosign sign-blob --yes --bundle "out/bin/keep-client-${version}-image-linux-amd64.tar.sigstore.json" \
+            "out/bin/keep-client-${version}-image-linux-amd64.tar"
+
+      - name: Verify image signature
+        if: env.dry_run != 'true'
+        run: |
+          cosign verify "${dockerhub_org}/keep-client@${image_digest}" \
+            --certificate-identity="${cert_identity}" \
+            --certificate-oidc-issuer="${cert_issuer}"
+          # The pushed manifest must carry the build provenance.
+          docker buildx imagetools inspect "${dockerhub_org}/keep-client@${image_digest}"
+
+      - name: Verify local image signature (dry run)
+        if: env.dry_run == 'true'
+        run: |
+          cosign verify-blob \
+            --bundle "out/bin/keep-client-${version}-image-linux-amd64.tar.sigstore.json" \
+            --certificate-identity="${cert_identity}" \
+            --certificate-oidc-issuer="${cert_issuer}" \
+            "out/bin/keep-client-${version}-image-linux-amd64.tar"
+
+      - name: Attest image build provenance
+        if: env.dry_run != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: index.docker.io/${{ env.dockerhub_org }}/keep-client
+          subject-digest: ${{ env.image_digest }}
+          push-to-registry: true
+
+      - name: Attest local image provenance (dry run)
+        if: env.dry_run == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/bin/keep-client-${{ env.version }}-image-linux-amd64.tar
+
+      - name: Promote image aliases
+        if: env.dry_run != 'true'
+        run: |
+          # The build pushed only the version tag; the mutable operator
+          # aliases are exposed only now, after the signature,
+          # verification and build provenance of the pushed manifest
+          # have all passed. Point them at the verified digest.
+          docker buildx imagetools create \
+            -t "${dockerhub_org}/keep-client:latest" \
+            -t "${dockerhub_org}/keep-client:mainnet" \
+            "${dockerhub_org}/keep-client@${image_digest}"
+
+      - name: Publish image digests and finalize the GitHub release
+        if: env.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release is still a draft here: the GET
+          # .../releases/tags/<tag> REST route `gh api` would call 404s on
+          # drafts, but `gh release view` resolves drafts correctly.
+          notes_file="$(mktemp)"
+          gh release view "${version}" --repo "${GITHUB_REPOSITORY}" \
+            --json body --jq .body > "${notes_file}"
+          {
+            echo ""
+            echo "### Docker image digests"
+            echo ""
+            cat "${digest_file}"
+            echo ""
+            echo "Pull images by digest. Verify the signature of the exact digest:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "cosign verify ${dockerhub_org}/keep-client@${image_digest} \\"
+            echo "  --certificate-identity=\"${cert_identity}\" \\"
+            echo "  --certificate-oidc-issuer=\"${cert_issuer}\""
+            echo "\`\`\`"
+          } >> "${notes_file}"
+          gh release edit "${version}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --notes-file "${notes_file}"
+          gh release upload "${version}" "${digest_file}"
+          # All image evidence is now in place, so the draft release the
+          # first job created is published as the final mutation.
+          gh release edit "${version}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false
