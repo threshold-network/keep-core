@@ -225,6 +225,15 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: 101,
 		defaultValue:          runtime.GOMAXPROCS(0),
 	},
+	"tbtc.legacyHistoricalBobCompatibility": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.LegacyHistoricalBobCompatibility
+		},
+		flagName:              "--tbtc.legacyHistoricalBobCompatibility",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 		flagName:              "--bitcoinDifficulty",

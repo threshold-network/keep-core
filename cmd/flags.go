@@ -310,6 +310,17 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
 	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.LegacyHistoricalBobCompatibility,
+		"tbtc.legacyHistoricalBobCompatibility",
+		false,
+		"Re-admit the historical unbounded-witness tECDSA Bob/BobMid "+
+			"proofs of pre-hardening signers during a mixed-version "+
+			"rollout. Only enable while not every signer in the group is "+
+			"upgraded; the flag is scheduled for removal in the next "+
+			"release. (default false)",
+	)
 }
 
 // Initialize flags for Maintainer configuration.

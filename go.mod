@@ -1,11 +1,12 @@
 module github.com/keep-network/keep-core
 
-go 1.24.0
-
-toolchain go1.24.1
+go 1.25.7
 
 replace (
-	github.com/bnb-chain/tss-lib => github.com/threshold-network/tss-lib v0.0.0-20230901144531-2e712689cfbe
+	// Threshold fork of tss-lib carrying the hardened GG20 proof transcript (protocol-mode selection, historical-Bob compatibility).
+	// Pinned to the `dev` branch head (PR #38: Paillier decryption cache removal); the module path inside the fork is still
+	// `github.com/bnb-chain/tss-lib`, which is what keep-core and first-party code import.
+	github.com/bnb-chain/tss-lib => github.com/threshold-network/tss-lib v0.0.0-20261002145648-605617037f7d
 	// btcd v0.23 extracted `btcd/btcec` into the separate module `btcd/btcec/v2`
 	// and later btcd versions no longer ship the pre-split package. The tss-lib
 	// fork (replace above) and first-party key-handling code still import the
@@ -70,16 +71,17 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.12.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.32.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
-	golang.org/x/sync v0.10.0
-	golang.org/x/term v0.28.0
+	golang.org/x/sync v0.20.0
+	golang.org/x/term v0.43.0
 	google.golang.org/protobuf v1.36.3
 	google.golang.org/protobuf/dev v0.0.0-00010101000000-000000000000
 )
 
 require (
-	github.com/btcsuite/btcutil v0.0.0-20190425235716-9e5f4b9a998d // indirect
+	bou.ke/monkey v1.0.2 // indirect
+	filippo.io/bigmod v0.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.0.1 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
@@ -105,13 +107,13 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa // indirect
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/aead/siphash v1.0.1 // indirect
-	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.10.0 // indirect
@@ -124,7 +126,6 @@ require (
 	github.com/crate-crypto/go-kzg-4844 v0.7.0 // indirect
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
 	github.com/deckarep/golang-set/v2 v2.1.0 // indirect
-	github.com/decred/dcrd/dcrec/edwards/v2 v2.0.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/deepmap/oapi-codegen v1.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
@@ -233,12 +234,12 @@ require (
 	go.uber.org/fx v1.23.0 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/mod v0.22.0 // indirect
-	golang.org/x/net v0.34.0 // indirect
-	golang.org/x/sys v0.29.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/net v0.54.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.5.0
-	golang.org/x/tools v0.29.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
 	gonum.org/v1/gonum v0.15.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

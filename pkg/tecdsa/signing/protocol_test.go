@@ -2319,7 +2319,7 @@ func TestTssFinalize_ResultTimeout(t *testing.T) {
 		//   result from the underlying TSS local party
 		ctx, cancelCtx := context.WithCancel(context.Background())
 		cancelCtx()
-		member.tssResultChan = make(<-chan common.SignatureData)
+		member.tssResultChan = make(<-chan *common.SignatureData)
 
 		err := member.tssFinalize(ctx, receivedMessages)
 
@@ -2439,6 +2439,7 @@ func initializeEphemeralKeyPairGeneratingMembersGroup(
 				message:           big.NewInt(100),
 				privateKeyShare:   tecdsa.NewPrivateKeyShare(testData[i-1]),
 				identityConverter: &identityConverter{keys: testData[i-1].Ks},
+				fullBytesLen:      32,
 			},
 			ephemeralKeyPairs: make(map[group.MemberIndex]*ephemeral.KeyPair),
 		})
