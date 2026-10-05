@@ -30,6 +30,7 @@ type localChannel struct {
 	unmarshalersMutex    sync.Mutex
 	unmarshalersByType   map[string]func() net.TaggedUnmarshaler
 	retransmissionTicker *retransmission.Ticker
+	session              *broadcastSession
 }
 
 func (lc *localChannel) nextSeqno() uint64 {
@@ -84,12 +85,14 @@ func (lc *localChannel) Send(
 		logger,
 		lc.retransmissionTicker,
 		func() error {
-			return broadcastMessage(lc.name, netMessage)
+			lc.session.broadcast(netMessage)
+			return nil
 		},
 		retransmission.WithStrategy(strategy),
 	)
 
-	return broadcastMessage(lc.name, netMessage)
+	lc.session.broadcast(netMessage)
+	return nil
 }
 
 func (lc *localChannel) deliver(message net.Message) {

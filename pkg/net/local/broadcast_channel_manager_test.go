@@ -131,3 +131,122 @@ func TestReleaseBroadcastChannel(t *testing.T) {
 	// 3. Releasing a name with zero registered channels is a safe no-op.
 	ReleaseBroadcastChannel("nonexistent")
 }
+
+// TestLocalBroadcastRelease_BarriersInFlightRetransmit verifies that release
+// is a barrier: once a name has been released and re-created, a delivery
+// issued by a channel of the released session must not reach the channel of
+// the new session. Retransmissions and the initial send share this delivery
+// path, so a send on the released channel models a retransmission that was
+// already in flight when the release took effect.
+//
+// Before the fix, delivery re-resolved the channel list by name, so the
+// released channel's message (old sender transport ID, old sequence number)
+// landed in the new session's channel.
+func TestLocalBroadcastRelease_BarriersInFlightRetransmit(t *testing.T) {
+	name := t.Name()
+	t.Cleanup(func() { ReleaseBroadcastChannel(name) })
+
+	_, pubKey, err := operator.GenerateKeyPair(DefaultCurve)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createChannel := func(name string) *localChannel {
+		ch := getBroadcastChannel(name, pubKey)
+		lc := ch.(*localChannel)
+		lc.SetUnmarshaler(func() net.TaggedUnmarshaler {
+			return &mockNetMessage{}
+		})
+		return lc
+	}
+
+	registerRawHandler := func(lc *localChannel) <-chan net.Message {
+		handler := &messageHandler{
+			ctx:     context.Background(),
+			channel: make(chan net.Message, 64),
+		}
+		lc.messageHandlersMutex.Lock()
+		lc.messageHandlers = append(lc.messageHandlers, handler)
+		lc.messageHandlersMutex.Unlock()
+		return handler.channel
+	}
+
+	collect := func(ch <-chan net.Message, window time.Duration) []net.Message {
+		deadline := time.After(window)
+		var messages []net.Message
+		for {
+			select {
+			case message := <-ch:
+				messages = append(messages, message)
+			case <-deadline:
+				return messages
+			}
+		}
+	}
+
+	// Session A: open a channel and let its retransmissions run.
+	chA := createChannel(name)
+	deliveriesA := registerRawHandler(chA)
+
+	if err := chA.Send(context.Background(), &mockNetMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(collect(deliveriesA, RetransmissionTick*3)); got <= 1 {
+		t.Fatalf(
+			"expected repeated retransmissions in the first session, got %d",
+			got,
+		)
+	}
+
+	// Release session A and start session B under the same name.
+	ReleaseBroadcastChannel(name)
+
+	// A tick that snapshotted the channel list just before the release can
+	// still deliver to session A's own channel; absorb it before asserting.
+	collect(deliveriesA, RetransmissionTick)
+
+	chB := createChannel(name)
+	deliveriesB := registerRawHandler(chB)
+
+	if err := chB.Send(context.Background(), &mockNetMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(collect(deliveriesB, RetransmissionTick*3)); got <= 1 {
+		t.Fatalf(
+			"expected repeated retransmissions in the second session, got %d",
+			got,
+		)
+	}
+
+	// Deliver once more through the released session A.
+	if err := chA.Send(context.Background(), &mockNetMessage{}); err != nil {
+		t.Fatal(err)
+	}
+
+	crossed := 0
+	own := 0
+	for _, message := range collect(deliveriesB, RetransmissionTick*3) {
+		if message.TransportSenderID() == chA.identifier {
+			crossed++
+		} else {
+			own++
+		}
+	}
+
+	if crossed != 0 {
+		t.Errorf(
+			"expected no message of the released session to reach the new "+
+				"session's channel, got %d",
+			crossed,
+		)
+	}
+	if own == 0 {
+		t.Error("expected the new session's channel to keep receiving its own messages")
+	}
+	if got := len(collect(deliveriesA, RetransmissionTick*2)); got != 0 {
+		t.Errorf(
+			"expected the released session's channel to receive nothing, got %d",
+			got,
+		)
+	}
+}
