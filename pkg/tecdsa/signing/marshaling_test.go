@@ -72,6 +72,81 @@ func TestFuzzEphemeralPublicKeyMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&ephemeralPublicKeyMessage{})
 }
 
+// TestEphemeralPublicKeyMessage_RejectsMalformedEphemeralKey ensures that a
+// corrupted targeted ephemeral key entry makes the whole message fail wire
+// unmarshaling, so that every receiver drops it uniformly instead of only
+// the receiver whose own entry is corrupt marking the sender inactive.
+func TestEphemeralPublicKeyMessage_RejectsMalformedEphemeralKey(t *testing.T) {
+	keyPair, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKeys := map[uint32][]byte{
+		2: {0x02},
+		3: keyPair.PublicKey.Marshal(),
+	}
+
+	if _, err := unmarshalPublicKeyMap(publicKeys); err == nil {
+		t.Error("expected unmarshalPublicKeyMap to reject a map with a " +
+			"malformed ephemeral key entry")
+	}
+
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(2): {0x02},
+			group.MemberIndex(3): keyPair.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := new(ephemeralPublicKeyMessage).Unmarshal(data); err == nil {
+		t.Error("expected Unmarshal to reject a message with a " +
+			"malformed ephemeral key entry")
+	}
+}
+
+// TestEphemeralPublicKeyMessage_AcceptsValidKeys ensures that a map in
+// which every entry is a valid 33-byte compressed point unmarshals
+// without error and preserves the entries verbatim.
+func TestEphemeralPublicKeyMessage_AcceptsValidKeys(t *testing.T) {
+	keyPair1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyPair2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKeys := map[uint32][]byte{
+		2: keyPair1.PublicKey.Marshal(),
+		3: keyPair2.PublicKey.Marshal(),
+	}
+
+	unmarshalled, err := unmarshalPublicKeyMap(publicKeys)
+	if err != nil {
+		t.Fatalf("unexpected unmarshalPublicKeyMap error: %v", err)
+	}
+
+	if !reflect.DeepEqual(
+		map[group.MemberIndex][]byte{
+			group.MemberIndex(2): keyPair1.PublicKey.Marshal(),
+			group.MemberIndex(3): keyPair2.PublicKey.Marshal(),
+		},
+		unmarshalled,
+	) {
+		t.Error("unexpected content of unmarshaled public keys map")
+	}
+}
+
 func TestTssRoundOneMessage_MarshalingRoundtrip(t *testing.T) {
 	msg := &tssRoundOneMessage{
 		senderID:         group.MemberIndex(50),
@@ -595,8 +670,8 @@ func BenchmarkMarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
 	}
 }
 
-// Benchmarks unmarshaling the wire-format bytes. EC point parsing is
-// deferred to use-time in generateSymmetricKeys (protocol.go).
+// Benchmarks unmarshaling the wire-format bytes, which now validates each
+// ephemeral key entry's 33-byte compressed-point shape at unmarshal time.
 func BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
 	msg := &ephemeralPublicKeyMessage{
 		senderID:            group.MemberIndex(1),
