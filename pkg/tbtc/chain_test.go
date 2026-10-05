@@ -107,6 +107,12 @@ type localChain struct {
 	eligibleStakesMutex sync.Mutex
 	eligibleStakes      map[chain.Address]*big.Int
 
+	walletParametersMutex sync.Mutex
+	walletParameters      WalletParameters
+
+	latestBlockTimestampMutex sync.Mutex
+	latestBlockTimestamp      time.Time
+
 	blockCounter       chain.BlockCounter
 	operatorPrivateKey *operator.PrivateKey
 
@@ -971,17 +977,32 @@ func (lc *localChain) operatorAddress() (chain.Address, error) {
 	return lc.Signing().PublicKeyToAddress(operatorPublicKey)
 }
 
-func (lc *localChain) GetWalletParameters() (
-	creationPeriod uint32,
-	creationMinBtcBalance uint64,
-	creationMaxBtcBalance uint64,
-	closureMinBtcBalance uint64,
-	maxAge uint32,
-	maxBtcTransfer uint64,
-	closingPeriod uint32,
-	err error,
-) {
-	panic("unsupported")
+func (lc *localChain) GetWalletParameters() (WalletParameters, error) {
+	lc.walletParametersMutex.Lock()
+	defer lc.walletParametersMutex.Unlock()
+
+	return lc.walletParameters, nil
+}
+
+func (lc *localChain) SetWalletParameters(parameters WalletParameters) {
+	lc.walletParametersMutex.Lock()
+	defer lc.walletParametersMutex.Unlock()
+
+	lc.walletParameters = parameters
+}
+
+func (lc *localChain) GetLatestBlockTimestamp() (time.Time, error) {
+	lc.latestBlockTimestampMutex.Lock()
+	defer lc.latestBlockTimestampMutex.Unlock()
+
+	return lc.latestBlockTimestamp, nil
+}
+
+func (lc *localChain) SetLatestBlockTimestamp(timestamp time.Time) {
+	lc.latestBlockTimestampMutex.Lock()
+	defer lc.latestBlockTimestampMutex.Unlock()
+
+	lc.latestBlockTimestamp = timestamp
 }
 
 func (lc *localChain) ValidateDepositSweepProposal(
@@ -1457,6 +1478,7 @@ func ConnectWithKey(
 		eligibleStakes:                           make(map[chain.Address]*big.Int),
 		blockCounter:                             blockCounter,
 		operatorPrivateKey:                       operatorPrivateKey,
+		latestBlockTimestamp:                     time.Now(),
 	}
 
 	return localChain

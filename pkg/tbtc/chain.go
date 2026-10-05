@@ -319,6 +319,15 @@ type BridgeChain interface {
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *MovingFundsCommitmentSubmittedEventFilter,
 	) ([]*MovingFundsCommitmentSubmittedEvent, error)
+
+	// GetWalletParameters gets the current value of parameters relevant
+	// to the wallet.
+	GetWalletParameters() (WalletParameters, error)
+
+	// GetLatestBlockTimestamp gets the latest Ethereum block header time,
+	// read with a bounded timeout. Callers use it instead of time.Now()
+	// for comparisons against on-chain deadlines.
+	GetLatestBlockTimestamp() (time.Time, error)
 }
 
 // NewWalletRegisteredEvent represents a new wallet registered event.

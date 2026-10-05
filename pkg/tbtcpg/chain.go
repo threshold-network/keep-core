@@ -23,10 +23,6 @@ type Chain interface {
 		filter *tbtc.NewWalletRegisteredEventFilter,
 	) ([]*tbtc.NewWalletRegisteredEvent, error)
 
-	// GetWalletParameters gets the current value of parameters relevant to
-	// wallet.
-	GetWalletParameters() (tbtc.WalletParameters, error)
-
 	// GetLiveWalletsCount gets the current count of live wallets.
 	GetLiveWalletsCount() (uint32, error)
 

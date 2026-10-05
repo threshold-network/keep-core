@@ -128,6 +128,8 @@ type LocalChain struct {
 	reservedDeposits       map[string]bool
 	liveWalletsCountValue  uint32
 	liveWalletsCountSet    bool
+
+	latestBlockTimestamp time.Time
 }
 
 func NewLocalChain() *LocalChain {
@@ -158,6 +160,8 @@ func NewLocalChain() *LocalChain {
 		belowDustNotifications:                make([]*belowDustNotification, 0),
 		reservationWalletKeys:                 make(map[[20]byte][]*big.Int),
 		reservedDeposits:                      make(map[string]bool),
+
+		latestBlockTimestamp: time.Now(),
 	}
 }
 
@@ -178,6 +182,20 @@ func (lc *LocalChain) PastDepositRevealedEvents(
 	}
 
 	return events, nil
+}
+
+func (lc *LocalChain) GetLatestBlockTimestamp() (time.Time, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.latestBlockTimestamp, nil
+}
+
+func (lc *LocalChain) SetLatestBlockTimestamp(timestamp time.Time) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.latestBlockTimestamp = timestamp
 }
 
 func (lc *LocalChain) AddPastDepositRevealedEvent(
