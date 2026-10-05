@@ -66,6 +66,15 @@ func (ts *ThresholdSigner) Unmarshal(bytes []byte) error {
 	if !ok {
 		return fmt.Errorf("error occurred while converting a private key share to string")
 	}
+	// A valid share is a non-zero scalar below the curve order. Anything else
+	// would yield signature shares that cannot verify.
+	if privateKeyShare.Sign() <= 0 || privateKeyShare.Cmp(bn256.Order) >= 0 {
+		return fmt.Errorf(
+			"private key share [%s] is out of the valid range [1, %s)",
+			pbThresholdSigner.GroupPrivateKeyShare,
+			bn256.Order,
+		)
+	}
 
 	groupPublicKeyShares, err := unmarshalGroupPublicKeyShares(
 		pbThresholdSigner.GroupPublicKeyShares,
