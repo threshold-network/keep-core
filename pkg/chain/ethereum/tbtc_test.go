@@ -652,18 +652,74 @@ func TestResolveCustodiedReservationKeys(t *testing.T) {
 		}
 	})
 
-	t.Run("lookup error short-circuits the whole call", func(t *testing.T) {
+	t.Run("a failing lookup skips only that key", func(t *testing.T) {
+		// Keys 1 and 3 both belong to the wallet; the lookup of key 1
+		// fails. Key 3 must still be queried and returned: one unreadable
+		// reservation must not drop the wallet's other reservations.
+		var queried []int64
 		failingLookup := func(key *big.Int) (*tbtc.Reservation, error) {
-			return nil, fmt.Errorf("simulated lookup failure")
+			queried = append(queried, key.Int64())
+			if key.Int64() == 1 {
+				return nil, fmt.Errorf("simulated transient RPC failure on key 1")
+			}
+			return &tbtc.Reservation{WalletPublicKeyHash: walletPKH}, nil
 		}
-		_, err := resolveCustodiedReservationKeys(
+
+		keys, err := resolveCustodiedReservationKeys(
 			walletPKH,
-			[]*tbtc.ReservationAcceptanceRequestedEvent{acceptance(1, walletPKH)},
+			[]*tbtc.ReservationAcceptanceRequestedEvent{
+				acceptance(1, walletPKH),
+				acceptance(3, walletPKH),
+			},
 			nil,
 			failingLookup,
 		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reflect.DeepEqual([]int64{1, 3}, queried) {
+			t.Errorf("expected keys [1 3] to be queried, actual %v", queried)
+		}
+		if expectedKeys := []*big.Int{big.NewInt(3)}; !reflect.DeepEqual(expectedKeys, keys) {
+			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		}
+	})
+}
+
+// TestRegistrationScanStartBlock_TransientErrorFailsPass pins G2-F10/G2-F11:
+// a failed registration-block lookup must surface as an error to
+// WalletReservations and WalletTerminationCause instead of degrading to
+// the chunked block-zero scan.
+func TestRegistrationScanStartBlock_TransientErrorFailsPass(t *testing.T) {
+	walletPKH := [20]byte{0x42}
+
+	t.Run("lookup error is returned and never becomes block 0", func(t *testing.T) {
+		startBlock, err := registrationScanStartBlock(
+			walletPKH,
+			func([20]byte) (uint64, error) {
+				return 0, fmt.Errorf("simulated transient RPC failure")
+			},
+		)
 		if err == nil {
-			t.Fatal("expected lookup error to propagate out of resolveCustodiedReservationKeys")
+			t.Fatalf("expected the lookup error, got start block %d", startBlock)
+		}
+	})
+
+	t.Run("resolved block is passed through", func(t *testing.T) {
+		startBlock, err := registrationScanStartBlock(
+			walletPKH,
+			func(hash [20]byte) (uint64, error) {
+				if hash != walletPKH {
+					t.Errorf("unexpected wallet [0x%x]", hash)
+				}
+				return 1234, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if startBlock != 1234 {
+			t.Errorf("expected start block 1234, got %d", startBlock)
 		}
 	})
 }

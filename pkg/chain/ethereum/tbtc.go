@@ -1067,16 +1067,18 @@ func (tc *TbtcChain) NotifyReservationStranded(
 // as originally documented), and - conditionally - from the 1-minute
 // action-timeout poll loop's recheck path whenever a Reanchor-type
 // reservation action times out against a wallet that is already
-// Closed/Terminated. A failure to resolve the registration bound
-// falls back to genesis (StartBlock 0), matching WalletReservations'
-// own fallback, so a transient RPC error degrades to the previous
-// unbounded behavior rather than skipping a real termination event.
+// Closed/Terminated. A failure to resolve the registration bound fails
+// the call instead of widening the scan to genesis (StartBlock 0): the
+// caller treats the cause as best-effort and the next pass retries.
 func (tc *TbtcChain) WalletTerminationCause(
 	walletPublicKeyHash [20]byte,
 ) (tbtc.WalletTerminationCause, error) {
-	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	startBlock, err := registrationScanStartBlock(
+		walletPublicKeyHash,
+		tc.earliestWalletRegistrationBlock,
+	)
 	if err != nil {
-		startBlock = 0
+		return tbtc.WalletTerminationCauseUnknown, err
 	}
 
 	filter := [][20]byte{walletPublicKeyHash}
@@ -1319,13 +1321,16 @@ func (tc *TbtcChain) WalletReservations(
 
 	// Bound the two event queries to the wallet's own registration block
 	// (earliest if it registered multiple times - recovery, re-activation):
-	// a wallet cannot have reservation events before it existed. Falls
-	// back to a full-history scan only when the registration lookup
-	// itself fails, so a transient RPC error degrades to the previous
-	// behavior rather than skipping real reservations.
-	startBlock, err := tc.earliestWalletRegistrationBlock(walletPublicKeyHash)
+	// a wallet cannot have reservation events before it existed. A failed
+	// registration lookup fails this call instead of widening the scan to
+	// genesis: the caller retries on its next pass, whereas a genesis scan
+	// is a chain of 10,000-block eth_getLogs chunks most providers reject.
+	startBlock, err := registrationScanStartBlock(
+		walletPublicKeyHash,
+		tc.earliestWalletRegistrationBlock,
+	)
 	if err != nil {
-		startBlock = 0
+		return nil, err
 	}
 
 	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
@@ -1420,6 +1425,27 @@ func (tc *TbtcChain) earliestWalletRegistrationBlock(
 	}
 
 	return registrationBlock, nil
+}
+
+// registrationScanStartBlock returns the block from which a wallet's event
+// scans start. A failed registration lookup is returned as an error and
+// never degrades to block 0: the chunked genesis scan it would trigger is
+// made of eth_getLogs ranges most providers reject, so the caller retries
+// on its next pass instead.
+func registrationScanStartBlock(
+	walletPublicKeyHash [20]byte,
+	resolve func(walletPublicKeyHash [20]byte) (uint64, error),
+) (uint64, error) {
+	startBlock, err := resolve(walletPublicKeyHash)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot resolve registration block of wallet [0x%x]: [%v]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return startBlock, nil
 }
 
 // resolveEarliestWalletRegistrationBlock is the pure-logic core of
@@ -1531,9 +1557,9 @@ func resolveCustodiedReservationKeys(
 
 	// Sort the candidate keys BEFORE the per-key lookup loop so the
 	// order in which GetReservation is called is deterministic. This
-	// matters for the partial-failure case: if the loop returns on
-	// the first lookup error, that error must reproduce against the
-	// same input rather than depending on Go map iteration order.
+	// matters for logging: the skipped keys of a partially failing
+	// lookup must reproduce against the same input rather than
+	// depending on Go map iteration order.
 	keys := make([]*big.Int, 0, len(candidateKeys))
 	for _, key := range candidateKeys {
 		keys = append(keys, key)
@@ -1546,11 +1572,16 @@ func resolveCustodiedReservationKeys(
 	for _, key := range keys {
 		reservation, err := reservationLookup(key)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot get reservation [%v]: [%v]",
+			// One unreadable reservation must not hide the wallet's other
+			// reservations: log it and keep resolving the remaining keys.
+			logger.Warnf(
+				"skipping reservation [%v] of wallet [0x%x]: cannot get "+
+					"reservation: [%v]",
 				key,
+				walletPublicKeyHash,
 				err,
 			)
+			continue
 		}
 
 		if reservation.WalletPublicKeyHash != walletPublicKeyHash {
