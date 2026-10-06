@@ -73,7 +73,7 @@ func start(cmd *cobra.Command) error {
 
 	netProvider, err := initializeNetwork(
 		ctx,
-		[]firewall.Application{beaconChain, tbtcChain},
+		admissionApplications(tbtcChain),
 		operatorPrivateKey,
 		blockCounter,
 	)
@@ -201,22 +201,44 @@ func isBootstrap() bool {
 	return clientConfig.LibP2P.Bootstrap
 }
 
+// admissionApplications lists the chain handles that can authorize a peer.
+// Network admission follows the wallet registry's current eligible stake so
+// legacy beacon registrations do not bypass authorization changes.
+// Random Beacon initialization still requires its operator registration, but
+// that startup prerequisite is not a network admission authority.
+func admissionApplications(
+	tbtcChain *ethereum.TbtcChain,
+) []firewall.Application {
+	return []firewall.Application{tbtcChain}
+}
+
+// admissionPolicy builds the firewall policy guarding peer connections. The
+// static allow list is empty, so no peer is admitted without an application
+// recognizing it on chain.
+func admissionPolicy(applications []firewall.Application) net.Firewall {
+	return firewall.AnyApplicationPolicy(
+		applications,
+		firewall.EmptyAllowList(),
+	)
+}
+
+// connectNetwork opens the network provider. The indirection exists so the
+// admission policy the client hands the network layer can be read back without
+// a host behind it - see tbtcAdmissionReader in pkg/chain/ethereum for the same
+// pattern on the chain reads.
+var connectNetwork = libp2p.Connect
+
 func initializeNetwork(
 	ctx context.Context,
 	applications []firewall.Application,
 	operatorPrivateKey *operator.PrivateKey,
 	blockCounter chain.BlockCounter,
 ) (net.Provider, error) {
-	firewall := firewall.AnyApplicationPolicy(
-		applications,
-		firewall.EmptyAllowList(),
-	)
-
-	netProvider, err := libp2p.Connect(
+	netProvider, err := connectNetwork(
 		ctx,
 		clientConfig.LibP2P,
 		operatorPrivateKey,
-		firewall,
+		admissionPolicy(applications),
 		retransmission.NewTicker(blockCounter.WatchBlocks(ctx)),
 	)
 	if err != nil {

@@ -28,6 +28,12 @@ register an operator for the Random Beacon and TBTC applications.
 CAUTION: An Operator for the Provider registration can be submitted just once. The
 Operator address assignment cannot be updated.
 
+IMPORTANT: Operators must register on both `WalletRegistry` and `RandomBeacon`.
+Registering on only `RandomBeacon` without a pre-existing legacy `TokenStaking`
+delegation results in permanent peer-admission lockout on the beacon branch
+with no available remedy, unlike the tBTC branch which correctly gates on
+current eligible stake.
+
 If a Key File for the Staking Provider account is available the registration
 can be performed from the <<register-operator-client>>.
 

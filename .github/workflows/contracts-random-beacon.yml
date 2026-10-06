@@ -73,8 +73,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
@@ -101,13 +102,15 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
           # download fails with HH502 (see PR description for details).
           node-version: "24.11.1"
+
       - uses: actions/setup-python@v4
         with:
           python-version: 3.10.8
@@ -138,9 +141,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
@@ -168,9 +171,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
@@ -220,9 +223,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
@@ -338,7 +341,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: keep-network/ci/actions/upstream-builds-query@v2
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -364,7 +367,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: keep-network/npm-version-bump@v2
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: ${{ github.event.inputs.environment }}
@@ -386,11 +389,11 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
-          module: "github.com/keep-network/keep-core/random-beacon"
+          module: "github.com/threshold-network/keep-core/random-beacon"
           url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           environment: ${{ github.event.inputs.environment }}
           upstream_builds: ${{ github.event.inputs.upstream_builds }}
@@ -418,9 +421,9 @@ jobs:
       run:
         working-directory: ./solidity/random-beacon
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           # Pinned to match the Dockerfiles exactly so CI and the image cannot
           # drift apart. Node 24 requires hardhat >= 2.26 - below it, the solc
@@ -433,7 +436,7 @@ jobs:
           working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
-        uses: keep-network/ci/actions/upstream-builds-query@v2
+        uses: threshold-network/ci/actions/upstream-builds-query@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         id: upstream-builds-query
         with:
           upstream-builds: ${{ github.event.inputs.upstream_builds }}
@@ -454,7 +457,7 @@ jobs:
 
       - name: Bump up package version
         id: npm-version-bump
-        uses: keep-network/npm-version-bump@v2
+        uses: threshold-network/ci/actions/npm-version-bump@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         with:
           work-dir: solidity/random-beacon
           environment: dapp-dev-${{ github.event.inputs.environment }}
@@ -476,11 +479,11 @@ jobs:
           gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
 
       - name: Notify CI about completion of the workflow
-        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        uses: threshold-network/ci/actions/notify-workflow-completed@86506f8dcdd80179a95ee149cccf4ce9a793ad8d
         env:
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
         with:
-          module: "github.com/keep-network/keep-core/random-beacon"
+          module: "github.com/threshold-network/keep-core/random-beacon"
           url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           environment: ${{ github.event.inputs.environment }}
           upstream_builds: ${{ github.event.inputs.upstream_builds }}

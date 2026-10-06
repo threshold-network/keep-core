@@ -80,12 +80,14 @@ require (
 
 require (
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
-	github.com/btcsuite/btcutil v0.0.0-20190425235716-9e5f4b9a998d // indirect
+	github.com/btcsuite/btcutil v1.0.2 // indirect
+	github.com/cespare/cp v1.1.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.0.1 // indirect
 	github.com/emicklei/dot v1.6.2 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
+	github.com/gballet/go-libpcsclite v0.0.0-20191108122812-4678299bea08 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
@@ -129,7 +131,7 @@ require (
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/edwards/v2 v2.0.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
-	github.com/deepmap/oapi-codegen v1.6.0 // indirect
+	github.com/deepmap/oapi-codegen v1.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/elastic/gosigar v0.14.3 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
@@ -151,7 +153,7 @@ require (
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/influxdata/line-protocol v0.0.0-20200327222509-2487e7298839 // indirect
+	github.com/influxdata/line-protocol v0.0.0-20210311194329-9aa0e372d097 // indirect
 	github.com/ipfs/boxo v0.27.2 // indirect
 	github.com/ipfs/go-cid v0.5.0 // indirect
 	github.com/ipfs/go-ipfs-addr v0.0.1 // indirect

@@ -15,8 +15,11 @@ Dockerfile
 # NPM stuff.
 **/node_modules/*
 
-# Solidity stuff.
-solidity/
+# Solidity stuff. The build context only needs the committed deploy-data
+# fixtures; the integration tests read them from the container.
+solidity/**
+!solidity/ecdsa/deploy-data/
+!solidity/ecdsa/deploy-data/**
 
 # Token Stakedrop stuff.
 token-stakedrop/

@@ -82,6 +82,13 @@ The Operator Account has to maintain a positive Ether balance at all times.
 We strongly advice you monitor the account and top-up when its balance gets below
 0,5 Ether. 
 
+WARNING: Do not request a tBTC authorization decrease to zero while the operator
+holds live wallet key shares. The Wallet Registry subtracts a pending decrease
+immediately upon request, so tBTC peer admission ends before the decrease is
+approved, even though existing wallet signing obligations continue. To reduce DKG
+selection weight without disconnecting the operator, decrease authorization to the
+current `minimumAuthorization` instead, then call `updateOperatorStatus`.
+
 // TODO: Link to a reimbursements documentation.
 
 [#config-ethereum-api]
