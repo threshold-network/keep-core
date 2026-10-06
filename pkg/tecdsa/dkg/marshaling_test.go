@@ -96,7 +96,7 @@ func TestEphemeralPublicKeyMessage_RejectsMalformedEphemeralKey(t *testing.T) {
 	}
 
 	msg := &ephemeralPublicKeyMessage{
-		senderID:            group.MemberIndex(38),
+		senderID: group.MemberIndex(38),
 		ephemeralPublicKeys: map[group.MemberIndex][]byte{
 			group.MemberIndex(2): {0x02},
 			group.MemberIndex(3): keyPair.PublicKey.Marshal(),
