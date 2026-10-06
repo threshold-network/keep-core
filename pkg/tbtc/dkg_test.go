@@ -753,11 +753,16 @@ func TestDkgExecutor_ExecuteDkgValidation_ValidResult_NotMember(t *testing.T) {
 }
 
 // TestDkgExecutor_ExecuteDkgValidation_ValidResult_OperatorIDError verifies
-// that executeDkgValidation returns gracefully when the result is valid but
-// operatorIDFn returns an error (unable to determine operator identity).
+// that executeDkgValidation returns before scheduling DKG result approval when
+// operatorIDFn fails. Members includes operator ID 0 - the zero value
+// operatorIDFn returns alongside its error - so that if the early-return guard
+// were dropped, that zero value would spuriously match a member and execution
+// would reach DKGParameters(), which dkgParamsTrapChain fails the test on. An
+// empty Members slice made this guard unobservable: the "not eligible" branch
+// returned cleanly either way.
 func TestDkgExecutor_ExecuteDkgValidation_ValidResult_OperatorIDError(t *testing.T) {
-	c := Connect()
-	c.setDKGResultValidity(true)
+	c := &dkgParamsTrapChain{Connect(), t}
+	c.localChain.setDKGResultValidity(true)
 
 	de := &dkgExecutor{
 		chain: c,
@@ -766,7 +771,25 @@ func TestDkgExecutor_ExecuteDkgValidation_ValidResult_OperatorIDError(t *testing
 		},
 	}
 
-	de.executeDkgValidation(big.NewInt(1), 0, &DKGChainResult{}, [32]byte{})
+	result := &DKGChainResult{
+		Members: chain.OperatorIDs{0, 2, 3, 4, 5},
+	}
+
+	de.executeDkgValidation(big.NewInt(1), 0, result, [32]byte{})
+}
+
+// dkgParamsTrapChain wraps localChain and fails the test if DKGParameters is
+// called, proving that executeDkgValidation stops before reaching the
+// approval-scheduling logic when operatorIDFn fails.
+type dkgParamsTrapChain struct {
+	*localChain
+	t *testing.T
+}
+
+func (c *dkgParamsTrapChain) DKGParameters() (*DKGParameters, error) {
+	c.t.Helper()
+	c.t.Fatal("DKGParameters should not be called when operatorIDFn fails")
+	return nil, nil
 }
 
 // TestDkgExecutor_ExecuteDkgValidation_ValidResult_MemberDKGParamsError verifies

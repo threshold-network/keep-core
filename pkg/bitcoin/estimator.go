@@ -2,6 +2,8 @@ package bitcoin
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/mempool"
@@ -247,6 +249,18 @@ func (tfe *TransactionFeeEstimator) EstimateFee(
 		return 0, fmt.Errorf("cannot get estimated sat/vbyte fee: [%v]", err)
 	}
 
+	if transactionVirtualSize <= 0 {
+		return 0, fmt.Errorf(
+			"invalid transaction virtual size: [%v]",
+			transactionVirtualSize,
+		)
+	}
+	if satPerVByteFee <= 0 {
+		return 0, fmt.Errorf("estimated sat/vbyte fee is less than or equal zero")
+	}
+	if satPerVByteFee > math.MaxInt64/transactionVirtualSize {
+		return 0, fmt.Errorf("estimated fee exceeds int64 range")
+	}
 	fee := satPerVByteFee * transactionVirtualSize
 
 	// Just in case check.

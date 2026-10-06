@@ -21,7 +21,9 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   if (!helpers.address.equal(currentOwner, newProxyAdminOwner)) {
     log(`transferring ownership of ProxyAdmin to ${newProxyAdminOwner}`)
     await (
-      await proxyAdmin.connect(deployer).transferOwnership(newProxyAdminOwner)
+      await proxyAdmin.connect(deployer).getFunction("transferOwnership")(
+        newProxyAdminOwner,
+      )
     ).wait()
   }
 }

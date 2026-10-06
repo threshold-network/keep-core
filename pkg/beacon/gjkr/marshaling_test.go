@@ -67,12 +67,14 @@ func TestFuzzEphemeralPublicKeyMessageRoundtrip(t *testing.T) {
 			sessionID:           sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &EphemeralPublicKeyMessage{})
+		if err := pbutils.RoundTrip(message, &EphemeralPublicKeyMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzEphemeralPublicKeyMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&EphemeralPublicKeyMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&EphemeralPublicKeyMessage{})
 }
 
 func TestMemberCommitmentsMessageRoundtrip(t *testing.T) {
@@ -119,12 +121,14 @@ func TestFuzzMemberCommitmentsMessageRoundtrip(t *testing.T) {
 			sessionID:   sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MemberCommitmentsMessage{})
+		if err := pbutils.RoundTrip(message, &MemberCommitmentsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMemberCommitmentsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MemberCommitmentsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MemberCommitmentsMessage{})
 }
 
 func TestPeerSharesMessageRoundtrip(t *testing.T) {
@@ -191,12 +195,14 @@ func TestFuzzPeerSharesMessageRoundtrip(t *testing.T) {
 			sessionID: sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &PeerSharesMessage{})
+		if err := pbutils.RoundTrip(message, &PeerSharesMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzPeerSharesMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&PeerSharesMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&PeerSharesMessage{})
 }
 
 func TestSecretSharesAccusationsMessageRoundtrip(t *testing.T) {
@@ -252,12 +258,14 @@ func TestFuzzSecretSharesAccusationsMessageRoundtrip(t *testing.T) {
 			sessionID:          sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &SecretSharesAccusationsMessage{})
+		if err := pbutils.RoundTrip(message, &SecretSharesAccusationsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzSecretSharesAccusationsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&SecretSharesAccusationsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&SecretSharesAccusationsMessage{})
 }
 
 func TestMemberPublicKeySharePointsMessageRoundtrip(t *testing.T) {
@@ -305,12 +313,14 @@ func TestFuzzMemberPublicKeySharePointsMessageRoundtrip(t *testing.T) {
 			sessionID:            sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MemberPublicKeySharePointsMessage{})
+		if err := pbutils.RoundTrip(message, &MemberPublicKeySharePointsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMemberPublicKeySharePointsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MemberPublicKeySharePointsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MemberPublicKeySharePointsMessage{})
 }
 
 func TestPointsAccusationsMessageRoundtrip(t *testing.T) {
@@ -366,12 +376,14 @@ func TestFuzzPointsAccusationsMessageRoundtrip(t *testing.T) {
 			sessionID:          sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &PointsAccusationsMessage{})
+		if err := pbutils.RoundTrip(message, &PointsAccusationsMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzPointsAccusationsMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&PointsAccusationsMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&PointsAccusationsMessage{})
 }
 
 func TestMisbehavedEphemeralKeysMessageRoundtrip(t *testing.T) {
@@ -427,10 +439,129 @@ func TestFuzzMisbehavedEphemeralKeysMessageRoundtrip(t *testing.T) {
 			sessionID:   sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &MisbehavedEphemeralKeysMessage{})
+		if err := pbutils.RoundTrip(message, &MisbehavedEphemeralKeysMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzMisbehavedEphemeralKeysMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&MisbehavedEphemeralKeysMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&MisbehavedEphemeralKeysMessage{})
+}
+
+// --- Benchmarks ---
+
+// buildEphemeralKeyMap generates n key pairs and returns the public key map as
+// it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex]*ephemeral.PublicKey {
+	b.Helper()
+	m := make(map[group.MemberIndex]*ephemeral.PublicKey, n)
+	for i := 0; i < n; i++ {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			b.Fatal(err)
+		}
+		m[group.MemberIndex(i+1)] = kp.PublicKey
+	}
+	return m
+}
+
+func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &EphemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &EphemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(EphemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// The _64Keys benchmarks below (BenchmarkMarshalEphemeralPublicKeyMessage_64Keys
+// and BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys) measure marshal and
+// unmarshal cost on a 64-member beacon group (63 peer keys per message) as
+// the gjkr package stands today. Unmarshal currently parses every peer key
+// eagerly through ephemeral.UnmarshalPublicKey (each call wraps
+// btcec.ParsePubKey and dominates the work), so these numbers reflect that
+// eager-parsing cost.
+//
+// pkg/tecdsa/dkg and pkg/tecdsa/signing received a
+// deferred-ephemeral-key-parsing optimization in this release cycle that
+// turns the per-message cost from O(N^2) over the group into O(1) at
+// unmarshal plus O(1) per key on demand. Porting that optimization to gjkr
+// is intentionally out of scope here and is tracked as a follow-up
+// improvement. The _64Keys benchmarks are kept as a pre-optimization
+// baseline so reviewers do not mistake the suffix or the surrounding
+// comments for evidence that gjkr already has the optimization.
+
+// BenchmarkMarshalEphemeralPublicKeyMessage_64Keys benchmarks marshaling with
+// the beacon group size (64 members = 63 peer keys per message).
+func BenchmarkMarshalEphemeralPublicKeyMessage_64Keys(b *testing.B) {
+	msg := &EphemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 63),
+		sessionID:           "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+// BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys benchmarks unmarshaling
+// with the beacon group size. Each btcec.ParsePubKey call dominates; with 63
+// peers this represents the real per-participant beacon DKG cost.
+func BenchmarkUnmarshalEphemeralPublicKeyMessage_64Keys(b *testing.B) {
+	msg := &EphemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 63),
+		sessionID:           "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(EphemeralPublicKeyMessage).Unmarshal(data)
+	}
 }

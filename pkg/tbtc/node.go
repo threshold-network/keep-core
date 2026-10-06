@@ -10,9 +10,9 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 const (
@@ -130,6 +130,15 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
+	transactionMonitor, err := newTransactionMonitor(
+		btcChain,
+		workPersistence,
+		config.TransactionMonitor,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	walletRegistry, err := newWalletRegistry(
 		keyStorePersistance,
 		chain.CalculateWalletID,
@@ -154,7 +163,7 @@ func newNode(
 		inactivityClaimExecutors: make(map[string]*inactivityClaimExecutor),
 		coordinationExecutors:    make(map[string]*coordinationExecutor),
 		proposalGenerator:        proposalGenerator,
-		transactionMonitor:       newTransactionMonitor(btcChain, workPersistence),
+		transactionMonitor:       transactionMonitor,
 	}
 
 	// Archive any wallets that might have been closed or terminated while the
@@ -227,6 +236,13 @@ func (n *node) setPerformanceMetrics(metrics interface {
 		})
 	}); ok {
 		pg.SetRedemptionMetricsRecorder(metrics)
+	}
+	if pg, ok := n.proposalGenerator.(interface {
+		SetProposalMetricsRecorder(recorder interface {
+			IncrementCounter(name string, value float64)
+		})
+	}); ok {
+		pg.SetProposalMetricsRecorder(metrics)
 	}
 
 	// Update metrics recorder for all cached coordination executors

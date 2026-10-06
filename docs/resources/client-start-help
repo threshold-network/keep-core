@@ -13,6 +13,7 @@ Flags:
       --ethereum.concurrencyLimit int                       The maximum number of concurrent requests which can be executed against Ethereum client. (default 30)
       --ethereum.balanceAlertThreshold wei                  The minimum balance of operator account below which client starts reporting errors in logs. (default 500000000 gwei)
       --bitcoin.electrum.url scheme://hostname:port         URL to the Electrum server in format: scheme://hostname:port.
+      --bitcoin.electrum.fallbackURLs strings               Comma-separated list of alternate Electrum server URLs used for failover when the primary server becomes unavailable. When no primary URL is configured, these are appended behind the auto-selected embedded primary; an explicitly configured primary URL remains preferred, with these tried on failure.
       --bitcoin.electrum.connectTimeout duration            Timeout for a single attempt of Electrum connection establishment. (default 10s)
       --bitcoin.electrum.connectRetryTimeout duration       Timeout for Electrum connection establishment retries. (default 1m0s)
       --bitcoin.electrum.requestTimeout duration            Timeout for a single attempt of Electrum protocol request. (default 30s)

@@ -204,3 +204,21 @@ func TestIdentityConverter_TssPartyIDToMemberIndex_Corrupted(t *testing.T) {
 
 	testutils.AssertIntsEqual(t, "member ID", 0, int(memberIndex))
 }
+
+func TestIdentityConverter_TssPartyIDToMemberIndex_Overflow(t *testing.T) {
+	keys := make([]*big.Int, group.MaxMemberIndex+1)
+	for i := range keys {
+		keys[i] = big.NewInt(int64(1000 + i))
+	}
+	converter := &identityConverter{keys: keys}
+
+	// The matching key sits at slice index group.MaxMemberIndex (the 256th
+	// entry), one past the last valid member index; it should never happen,
+	// so the party ID is considered corrupted and MemberIndex(0) is returned.
+	targetKey := keys[group.MaxMemberIndex]
+	partyID := tss.NewPartyID(targetKey.Text(10), "member-256", targetKey)
+
+	memberIndex := converter.TssPartyIDToMemberIndex(partyID)
+
+	testutils.AssertIntsEqual(t, "member ID", 0, int(memberIndex))
+}

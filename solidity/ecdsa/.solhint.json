@@ -1,8 +1,42 @@
 {
-  "extends": "keep",
   "plugins": [],
   "rules": {
-    "func-visibility": ["error", { "ignoreConstructors": true }],
-    "no-inline-assembly": "off"
+    "max-states-count": ["warn", 15],
+    "no-unused-vars": "error",
+    "payable-fallback": "warn",
+    "reason-string": [
+      "error",
+      {
+        "maxLength": 250
+      }
+    ],
+    "constructor-syntax": "error",
+    "quotes": ["error", "double"],
+    "event-name-capwords": "warn",
+    "func-name-mixedcase": "warn",
+    "use-forbidden-name": "error",
+    "imports-on-top": "error",
+    "ordering": "warn",
+    "visibility-modifier-order": "error",
+    "avoid-call-value": "error",
+    "avoid-low-level-calls": "error",
+    "avoid-sha3": "error",
+    "avoid-suicide": "error",
+    "avoid-throw": "error",
+    "avoid-tx-origin": "error",
+    "check-send-result": "error",
+    "func-visibility": [
+      "error",
+      {
+        "ignoreConstructors": true
+      }
+    ],
+    "multiple-sends": "error",
+    "no-complex-fallback": "error",
+    "no-inline-assembly": "off",
+    "not-rely-on-block-hash": "error",
+    "not-rely-on-time": "error",
+    "reentrancy": "error",
+    "state-visibility": "error"
   }
 }

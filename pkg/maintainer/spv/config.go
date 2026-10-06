@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -28,6 +29,12 @@ const (
 	// DefaultIdleBackOffTime is the default value for idle back-off time.
 	DefaultIdleBackOffTime = 10 * time.Minute
 )
+
+// DefaultMaxProofHeaders is the default value for the maximum number of
+// block headers allowed in a single SPV proof. It caps the forward walk
+// over headers when assembling a proof; see the documentation on the
+// MaxProofHeaders config field and on getProofInfo in spv.go.
+const DefaultMaxProofHeaders = 144
 
 // Config holds configurable properties.
 type Config struct {
@@ -65,4 +72,63 @@ type Config struct {
 	// IdleBackoffTime is a wait time which should be applied when there are no
 	// more transaction proofs to submit.
 	IdleBackoffTime time.Duration
+
+	// MaxProofHeaders caps the forward walk over headers when assembling an
+	// SPV proof. The proof window is anchored at a fixed start block, so a
+	// run of leading minimum-difficulty (DIFF1) headers longer than this
+	// bound makes the transaction permanently unprovable rather than merely
+	// delayed. Raise the value on networks (e.g. testnet4 with extended
+	// BIP94 minimum-difficulty runs) where the default 144 headers is
+	// insufficient.
+	MaxProofHeaders uint
+}
+
+// Validate checks that the configuration is usable, returning an error
+// describing the first problem found.
+//
+// A zero or negative value is rejected rather than normalized to the
+// default: the default only protects against omission, and each of these
+// values silently degrades the maintainer at runtime when set to zero -
+// for example a zero MaxProofHeaders makes getProofInfo skip every
+// transaction on the first iteration. Silently substituting the default
+// would hide an operator's explicit, if mistaken, instruction; failing at
+// startup surfaces it.
+func (c Config) Validate() error {
+	if c.MaxProofHeaders == 0 {
+		return fmt.Errorf(
+			"spv.maxProofHeaders must be greater than 0; " +
+				"a zero bound skips every transaction and disables SPV proving",
+		)
+	}
+
+	if c.HistoryDepth == 0 {
+		return fmt.Errorf(
+			"spv.historyDepth must be greater than 0; " +
+				"a zero depth makes the event search start at the " +
+				"current tip, so no past transactions are ever found",
+		)
+	}
+
+	if c.TransactionLimit <= 0 {
+		return fmt.Errorf(
+			"spv.transactionLimit must be greater than 0; " +
+				"the maintainer would find no candidate transactions",
+		)
+	}
+
+	if c.RestartBackoffTime <= 0 {
+		return fmt.Errorf(
+			"spv.restartBackoffTime must be greater than 0; " +
+				"a non-positive backoff tight-loops the restart of the maintainer",
+		)
+	}
+
+	if c.IdleBackoffTime <= 0 {
+		return fmt.Errorf(
+			"spv.idleBackoffTime must be greater than 0; " +
+				"a non-positive backoff tight-loops the proof task rounds",
+		)
+	}
+
+	return nil
 }

@@ -197,6 +197,9 @@ func waitForDkgResultEvent(
 	blockCounter chain.BlockCounter,
 ) (*event.DKGResultSubmission, error) {
 	config := beaconChain.GetConfig()
+	if config.GroupSize <= 0 {
+		return nil, fmt.Errorf("invalid group size: [%v]", config.GroupSize)
+	}
 
 	timeoutBlock := startPublicationBlockHeight +
 		dkgResult.PrePublicationBlocks() +

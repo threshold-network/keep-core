@@ -289,3 +289,176 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 		t.Errorf("invalid unproven transaction hashes: %v", diff)
 	}
 }
+
+// TestGetUnprovenMovingFundsTransactions_MultipleMatchesForSameWallet proves
+// that getUnprovenMovingFundsTransactions collects ALL unproven moving funds
+// transactions for a wallet, not just the first one found. It calls
+// collectUnprovenWalletTransactions with stopAtFirstMatch set to false, and
+// this test guards against that argument accidentally being flipped to true,
+// which none of the other action-level tests in this package would catch
+// since they never give a single wallet more than one genuinely-qualifying
+// transaction.
+func TestGetUnprovenMovingFundsTransactions_MultipleMatchesForSameWallet(t *testing.T) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	bytes20FromHex := func(str string) [20]byte {
+		var value [20]byte
+		copy(value[:], bytesFromHex(str))
+		return value
+	}
+
+	txFromHex := func(str string) *bitcoin.Transaction {
+		transaction := new(bitcoin.Transaction)
+		err := transaction.Deserialize(bytesFromHex(str))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return transaction
+	}
+
+	// Set an arbitrary history depth and transaction limit.
+	historyDepth := uint64(5)
+	transactionLimit := 10
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	// Set a predictable current block.
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletPublicKeyHash := bytes20FromHex("8db50eb52063ea9d98b3eac91489a90f738986f6")
+
+	targetWalletsPublicKeyHashes := [][20]byte{
+		bytes20FromHex("3091d288521caec06ea912eacfd733edc5a36d6e"),
+		bytes20FromHex("92a6ec889a8fa34f731e639edede4c75e184307c"),
+		bytes20FromHex("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+	}
+
+	// Transaction that creates the wallet's main UTXO:
+	// https://live.blockcypher.com/btc-testnet/tx/11d27b4af5598bd0e5cea22c40f0ed8623278ad18f7fb2afc139ce99087aae44/
+	mainUtxoCreationTransaction := txFromHex("02000000000101cf063c32da06ff5044f38220c61ee57ac5f3c31368a665bddb109d225d8b4d1a0100000000fdffffff02409c0000000000001600148db50eb52063ea9d98b3eac91489a90f738986f6df66000000000000160014be8347707d02375d1bd0c8f21a59f44c62990d8f024730440220166fbabc5d144d639e350826a04f1d2d148702312ce532da962076eb3859b81c02203d640f23f84a3792451539616432ffb07dc8ddac72047da56a22ecb842165bb4012103399de99c1d409735b7d20f46f616cd485f6b0442db13dfe4cd1b3772ae675fe024572700")
+
+	err := btcChain.BroadcastTransaction(mainUtxoCreationTransaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// buildMovingFundsTransaction constructs a transaction whose single input
+	// spends the wallet's main UTXO and whose outputs pay the target wallets
+	// from the commitment, in order. Such a transaction independently
+	// satisfies isUnprovenMovingFundsTransaction. Varying outputValues across
+	// calls yields distinct transaction hashes, mimicking a wallet operator
+	// broadcasting more than one moving funds attempt (e.g. a fee bump)
+	// against the same main UTXO before either gets proven.
+	buildMovingFundsTransaction := func(outputValues [3]int64) *bitcoin.Transaction {
+		outputs := make([]*bitcoin.TransactionOutput, len(targetWalletsPublicKeyHashes))
+		for i, targetWalletPublicKeyHash := range targetWalletsPublicKeyHashes {
+			script, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			outputs[i] = &bitcoin.TransactionOutput{
+				Value:           outputValues[i],
+				PublicKeyScript: script,
+			}
+		}
+
+		return &bitcoin.Transaction{
+			Version: 1,
+			Inputs: []*bitcoin.TransactionInput{
+				{
+					Outpoint: &bitcoin.TransactionOutpoint{
+						TransactionHash: mainUtxoCreationTransaction.Hash(),
+						OutputIndex:     0,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+			Outputs:  outputs,
+			Locktime: 0,
+		}
+	}
+
+	movingFundsTransaction1 := buildMovingFundsTransaction([3]int64{30000, 30000, 30000})
+	movingFundsTransaction2 := buildMovingFundsTransaction([3]int64{29000, 29500, 30500})
+
+	err = btcChain.BroadcastTransaction(movingFundsTransaction1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = btcChain.BroadcastTransaction(movingFundsTransaction2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	walletData := &tbtc.WalletChainData{
+		MainUtxoHash: spvChain.ComputeMainUtxoHash(
+			&bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: mainUtxoCreationTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Value: mainUtxoCreationTransaction.Outputs[0].Value,
+			},
+		),
+		State: tbtc.StateMovingFunds,
+	}
+
+	spvChain.setWallet(walletPublicKeyHash, walletData)
+
+	event := &tbtc.MovingFundsCommitmentSubmittedEvent{
+		WalletPublicKeyHash: walletPublicKeyHash,
+		TargetWallets:       targetWalletsPublicKeyHashes,
+		BlockNumber:         100,
+	}
+
+	err = spvChain.addPastMovingFundsCommitmentSubmittedEvent(
+		&tbtc.MovingFundsCommitmentSubmittedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err := getUnprovenMovingFundsTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transactionsHashes := make([]bitcoin.Hash, len(transactions))
+	for i, transaction := range transactions {
+		transactionsHashes[i] = transaction.Hash()
+	}
+
+	// Both transactions were broadcast in this order and
+	// localBitcoinChain.GetTransactionsForPublicKeyHash preserves broadcast
+	// (insertion) order, so asserting this exact order is not incidental.
+	expectedTransactionsHashes := []bitcoin.Hash{
+		movingFundsTransaction1.Hash(),
+		movingFundsTransaction2.Hash(),
+	}
+
+	if diff := deep.Equal(expectedTransactionsHashes, transactionsHashes); diff != nil {
+		t.Errorf("invalid unproven transaction hashes: %v", diff)
+	}
+}

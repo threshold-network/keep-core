@@ -47,11 +47,11 @@ func (am *announcementMessage) Unmarshal(bytes []byte) error {
 		)
 	}
 
-	if senderID := pbMessage.SenderID; senderID > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", senderID)
-	} else {
-		am.senderID = group.MemberIndex(senderID)
+	senderID, err := group.MemberIndexFromUint32(pbMessage.SenderID)
+	if err != nil {
+		return err
 	}
+	am.senderID = senderID
 
 	am.protocolID = pbMessage.ProtocolID
 	am.sessionID = pbMessage.SessionID

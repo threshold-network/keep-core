@@ -3,6 +3,7 @@ package tbtc
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -348,6 +349,66 @@ func ValidateRedemptionProposal(
 		"redemption proposal is valid",
 	)
 
+	// Follower-side soft check on the proposed fee. The on-chain
+	// WalletProposalValidator only bounds the redemption fee from above, not
+	// below, so a misbehaving or unpatched leader can propose a fee at the
+	// ~1 sat/vByte relay floor that this node would otherwise sign - the same
+	// underpricing that jams the wallet (see
+	// threshold-network/keep-core#4171). We recompute the safe minimum
+	// (applying the 25% safety buffer that tbtcpg.applyWalletTxFeeFloor would
+	// also enforce on the leader side) and warn if the proposal is below it.
+	//
+	// This is intentionally log-only, not a rejection: rejecting a below-floor
+	// proposal here would, during a mixed-version rollout, split signers
+	// (patched nodes reject, unpatched nodes sign) and could stall signing.
+	// Hard enforcement belongs on-chain in the WalletProposalValidator, or
+	// behind a coordinated all-nodes upgrade. The threshold is recomputed in
+	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go);
+	// keep the size estimator below in sync with the leader-side estimator
+	// in tbtcpg/redemptions.go.
+	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(1, true)
+	canEstimate := true
+	for _, script := range proposal.RedeemersOutputScripts {
+		switch bitcoin.GetScriptType(script) {
+		case bitcoin.P2PKHScript:
+			sizeEstimator.AddPublicKeyHashOutputs(1, false)
+		case bitcoin.P2WPKHScript:
+			sizeEstimator.AddPublicKeyHashOutputs(1, true)
+		case bitcoin.P2SHScript:
+			sizeEstimator.AddScriptHashOutputs(1, false)
+		case bitcoin.P2WSHScript:
+			sizeEstimator.AddScriptHashOutputs(1, true)
+		default:
+			validateProposalLogger.Warnf(
+				"cannot estimate redemption tx size for the fee sanity " +
+					"check: non-standard redeemer output script type",
+			)
+			canEstimate = false
+		}
+		if !canEstimate {
+			break
+		}
+	}
+	if canEstimate {
+		if redemptionTxSize, sizeErr := sizeEstimator.VirtualSize(); sizeErr != nil {
+			validateProposalLogger.Warnf(
+				"cannot estimate redemption tx size for the fee sanity "+
+					"check: [%v]",
+				sizeErr,
+			)
+		} else {
+			warnIfProposedWalletTxFeeBelowBufferedFloor(
+				validateProposalLogger,
+				MinWalletTxSatPerVByteFee,
+				redemptionTxSize,
+				proposal.RedemptionTxFee,
+				"redemption",
+			)
+		}
+	}
+
 	requests := make([]*RedemptionRequest, len(proposal.RedeemersOutputScripts))
 	for i, script := range proposal.RedeemersOutputScripts {
 		requestDisplayIndex := fmt.Sprintf(
@@ -481,7 +542,14 @@ func assembleRedemptionTransaction(
 		// The redeemable amount for a redemption request is the difference
 		// between the requested amount and treasury fee computed upon
 		// request creation.
-		redeemableAmount := int64(request.RequestedAmount - request.TreasuryFee)
+		if request.TreasuryFee > request.RequestedAmount {
+			return nil, fmt.Errorf("treasury fee exceeds requested amount")
+		}
+		amount := request.RequestedAmount - request.TreasuryFee
+		if amount > math.MaxInt64 {
+			return nil, fmt.Errorf("redeemable amount exceeds int64 range: [%v]", amount)
+		}
+		redeemableAmount := int64(amount)
 		// The actual value of the redemption output is the difference between
 		// the request's redeemable amount and share of the transaction fee
 		// incurred by the given request.

@@ -380,9 +380,6 @@ func (ce *coordinationExecutor) coordinate(
 
 	startTime := time.Now()
 
-	// Record duration metric once at the end using defer
-	var coordinationFailed bool
-
 	seed, err := ce.getSeed(window.coordinationBlock)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute coordination seed: [%v]", err)
@@ -431,7 +428,6 @@ func (ce *coordinationExecutor) coordinate(
 			// no point to keep the context active as retransmissions do not
 			// occur anyway.
 			cancelCtx()
-			coordinationFailed = true
 			if ce.metricsRecorder != nil {
 				ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationFailedTotal, 1)
 			}
@@ -455,7 +451,6 @@ func (ce *coordinationExecutor) coordinate(
 			append(actionsChecklist, ActionNoop),
 		)
 		if err != nil {
-			coordinationFailed = true
 			// Record as leader timeout observation, not as a failure of this node.
 			// The actual failure is on the leader's side.
 			if ce.metricsRecorder != nil {
@@ -498,7 +493,7 @@ func (ce *coordinationExecutor) coordinate(
 	execLogger.Infof("coordination completed with result: [%s]", result)
 
 	// Record successful coordination counter
-	if ce.metricsRecorder != nil && !coordinationFailed {
+	if ce.metricsRecorder != nil {
 		ce.metricsRecorder.IncrementCounter(clientinfo.MetricCoordinationProceduresExecutedTotal, 1)
 		ce.metricsRecorder.RecordDuration(clientinfo.MetricCoordinationDurationSeconds, time.Since(startTime))
 	}
@@ -561,6 +556,7 @@ func (ce *coordinationExecutor) getLeader(seed [32]byte) chain.Address {
 	// #nosec G404 (insecure random number source (rand))
 	// Shuffling operators does not require secure randomness.
 	// Use first 8 bytes of the seed to initialize the RNG.
+	// #nosec G115 -- Preserve all 64 seed bits so existing operators select the same leader/actions.
 	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8]))))
 
 	// Shuffle the list of unique operators.
@@ -608,15 +604,12 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// proposal generator performs a full-history chain scan.
 	if coordinationBlock < DepositSweepEveryWindowActivationBlock {
 		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionDepositSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovedFundsSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovingFunds)
+			actions = append(
+				actions,
+				ActionDepositSweep,
+				ActionMovedFundsSweep,
+				ActionMovingFunds,
+			)
 		}
 	} else {
 		actions = append(actions, ActionDepositSweep)
@@ -634,6 +627,7 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// #nosec G404 (insecure random number source (rand))
 	// Drawing a decision about heartbeat does not require secure randomness.
 	// Use first 8 bytes of the seed to initialize the RNG.
+	// #nosec G115 -- Preserve all 64 seed bits so existing operators select the same leader/actions.
 	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8]))))
 	if rng.Float64() < coordinationHeartbeatProbability {
 		actions = append(actions, ActionHeartbeat)
@@ -685,7 +679,28 @@ func (ce *coordinationExecutor) executeLeaderRoutine(
 		net.BackoffRetransmissionStrategy,
 	)
 	if err != nil {
+		if proposal.ActionType() == ActionRedemption {
+			if ce.metricsRecorder != nil {
+				ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalBroadcastFailedTotal, 1)
+			}
+			logger.With(
+				zap.String("event", "redemption_proposal_broadcast_failed"),
+				zap.String("walletPKH", fmt.Sprintf("0x%x", walletPublicKeyHash)),
+				zap.Uint64("coordinationBlock", coordinationBlock),
+				zap.Error(err),
+			).Error("redemption proposal broadcast to wallet coordination channel failed")
+		}
 		return nil, fmt.Errorf("failed to send coordination message: [%v]", err)
+	}
+	if proposal.ActionType() == ActionRedemption {
+		if ce.metricsRecorder != nil {
+			ce.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProposalBroadcastTotal, 1)
+		}
+		logger.With(
+			zap.String("event", "redemption_proposal_broadcast"),
+			zap.String("walletPKH", fmt.Sprintf("0x%x", walletPublicKeyHash)),
+			zap.Uint64("coordinationBlock", coordinationBlock),
+		).Info("redemption proposal broadcast to wallet coordination channel")
 	}
 
 	return proposal, nil

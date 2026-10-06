@@ -17,7 +17,7 @@ pragma solidity 0.8.17;
 import "./BytesLib.sol";
 import "./Groups.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "../legacy/sortition/SortitionPool.sol";
 
 library BeaconInactivity {
     using BytesLib for bytes;

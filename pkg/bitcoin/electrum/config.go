@@ -28,6 +28,12 @@ const (
 type Config struct {
 	// URL to the Electrum server in format: `scheme://hostname:port`.
 	URL string
+	// FallbackURLs contains the remaining embedded servers when URL was
+	// auto-selected, or operator-supplied alternates from the
+	// `bitcoin.electrum.fallbackURLs` flag or config file. An explicit URL
+	// stays the pool's primary; these are tried in order after it fails,
+	// and the client heals back to the primary when it recovers.
+	FallbackURLs []string
 	// Timeout for a single attempt of Electrum connection establishment.
 	ConnectTimeout time.Duration
 	// Timeout for Electrum connection establishment retries.

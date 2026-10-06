@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 const transactionMonitorDirectory = "transaction_monitor"
@@ -96,9 +96,9 @@ func (tm *transactionMonitor) restore() {
 				if previous.alerted {
 					continue
 				}
-			} else if len(tm.tracked) >= transactionMonitorMaxTracked {
+			} else if len(tm.tracked) >= tm.config.MaxTracked {
 				logger.Warnf("transaction monitor tracking table is full ([%d]); "+
-					"cannot restore transaction [%s]", transactionMonitorMaxTracked,
+					"cannot restore transaction [%s]", tm.config.MaxTracked,
 					txHash.Hex(bitcoin.ReversedByteOrder))
 				continue
 			}

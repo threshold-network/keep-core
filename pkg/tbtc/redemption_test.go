@@ -2,7 +2,10 @@ package tbtc
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"math/big"
+	"reflect"
 	"testing"
 	"time"
 
@@ -266,6 +269,77 @@ func TestAssembleRedemptionTransaction(t *testing.T) {
 				scenario.ExpectedRedemptionTransactionWitnessHash.Hex(bitcoin.InternalByteOrder),
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
+		})
+	}
+}
+
+func TestAssembleRedemptionTransaction_ValidationErrors(t *testing.T) {
+	scenarios, err := test.LoadRedemptionTestScenarios()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario := scenarios[0]
+
+	var tests = map[string]struct {
+		requestedAmount uint64
+		treasuryFee     uint64
+		expectedError   error
+	}{
+		"treasury fee exceeds requested amount": {
+			requestedAmount: 10000,
+			treasuryFee:     10001,
+			expectedError:   fmt.Errorf("treasury fee exceeds requested amount"),
+		},
+		"redeemable amount exceeds int64 range": {
+			requestedAmount: math.MaxUint64,
+			treasuryFee:     0,
+			expectedError: fmt.Errorf(
+				"redeemable amount exceeds int64 range: [%v]",
+				uint64(math.MaxUint64),
+			),
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			bitcoinChain := newLocalBitcoinChain()
+
+			err := bitcoinChain.BroadcastTransaction(scenario.InputTransaction)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			requests := []*RedemptionRequest{
+				{
+					Redeemer:             scenario.RedemptionRequests[0].Redeemer,
+					RedeemerOutputScript: scenario.RedemptionRequests[0].RedeemerOutputScript,
+					RequestedAmount:      test.requestedAmount,
+					TreasuryFee:          test.treasuryFee,
+					TxMaxFee:             scenario.RedemptionRequests[0].TxMaxFee,
+					RequestedAt:          scenario.RedemptionRequests[0].RequestedAt,
+				},
+			}
+
+			feeDistribution := func(requests []*RedemptionRequest) []int64 {
+				return []int64{0}
+			}
+
+			_, err = assembleRedemptionTransaction(
+				bitcoinChain,
+				scenario.WalletPublicKey,
+				scenario.WalletMainUtxo,
+				requests,
+				feeDistribution,
+				RedemptionChangeLast,
+			)
+
+			if !reflect.DeepEqual(test.expectedError, err) {
+				t.Errorf(
+					"unexpected error\nexpected: %v\nactual:   %v\n",
+					test.expectedError,
+					err,
+				)
+			}
 		})
 	}
 }

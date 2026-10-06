@@ -330,5 +330,8 @@ func (ic *identityConverter) TssPartyIDToMemberIndex(
 		return key.Cmp(partyID.KeyInt()) == 0
 	})
 
+	if index < 0 || index >= group.MaxMemberIndex {
+		return 0
+	}
 	return group.MemberIndex(index + 1)
 }

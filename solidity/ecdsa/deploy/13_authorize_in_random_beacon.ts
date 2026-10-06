@@ -19,7 +19,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     { from, log: true, waitConfirmations: 1 },
     "setRequesterAuthorization",
     WalletRegistry.address,
-    true
+    true,
   )
 }
 

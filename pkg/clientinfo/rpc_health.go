@@ -10,10 +10,18 @@ import (
 	"github.com/ipfs/go-log"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/chain"
 )
 
 var rpcHealthLogger = log.Logger("keep-rpc-health")
+
+const ethereumRPCProbeTimeout = 30 * time.Second
+
+// EthereumRPC provides an uncached Ethereum endpoint probe. Implementations must
+// contact the endpoint on every call and forward ctx to the underlying RPC.
+// A subscription-backed BlockCounter.CurrentBlock() is not a health probe.
+type EthereumRPC interface {
+	LatestBlockNumber(ctx context.Context) (uint64, error)
+}
 
 // benignBtcHeaderErrorPattern matches the JSON-RPC error code -32602
 // ("invalid params") returned by some Electrum servers that reject the
@@ -43,7 +51,7 @@ type RPCHealthChecker struct {
 	registry *Registry
 
 	// Ethereum health check
-	ethBlockCounter chain.BlockCounter
+	ethRPC          EthereumRPC
 	ethLastCheck    time.Time
 	ethLastSuccess  time.Time
 	ethLastError    error
@@ -72,19 +80,22 @@ type RPCHealthChecker struct {
 // NewRPCHealthChecker creates a new RPC health checker instance.
 func NewRPCHealthChecker(
 	registry *Registry,
-	ethBlockCounter chain.BlockCounter,
+	ethRPC EthereumRPC,
 	btcChain bitcoin.Chain,
 	checkInterval time.Duration,
 ) *RPCHealthChecker {
 	if checkInterval == 0 {
-		checkInterval = 30 * time.Second // Default: check every 30 seconds
+		// Default kept comfortably above ethereumRPCProbeTimeout so a probe
+		// that consumes the full deadline during an outage still leaves an
+		// idle gap before the next tick, instead of re-probing back-to-back.
+		checkInterval = 60 * time.Second
 	}
 
 	return &RPCHealthChecker{
-		registry:        registry,
-		ethBlockCounter: ethBlockCounter,
-		btcChain:        btcChain,
-		checkInterval:   checkInterval,
+		registry:      registry,
+		ethRPC:        ethRPC,
+		btcChain:      btcChain,
+		checkInterval: checkInterval,
 	}
 }
 
@@ -98,6 +109,9 @@ func (r *RPCHealthChecker) Start(ctx context.Context) {
 
 // start is the internal implementation of Start. Use Start() for public API.
 func (r *RPCHealthChecker) start(ctx context.Context) {
+	// Export unknown health before making calls, including when an RPC hangs.
+	r.registerMetrics()
+
 	// Perform initial health checks immediately
 	r.checkEthereumHealth(ctx)
 	r.checkBitcoinHealth(ctx)
@@ -106,8 +120,6 @@ func (r *RPCHealthChecker) start(ctx context.Context) {
 	go r.runEthereumHealthChecks(ctx)
 	go r.runBitcoinHealthChecks(ctx)
 
-	// Register metrics observers
-	r.registerMetrics()
 }
 
 // runEthereumHealthChecks runs periodic Ethereum RPC health checks.
@@ -140,58 +152,47 @@ func (r *RPCHealthChecker) runBitcoinHealthChecks(ctx context.Context) {
 	}
 }
 
-// checkEthereumHealth performs a comprehensive health check on the Ethereum RPC endpoint
-// by making actual RPC calls to verify the service is working properly.
-// It checks:
-// 1. Current block number retrieval
-// 2. Block number is reasonable (not stuck at 0 or extremely old)
+// checkEthereumHealth probes the Ethereum endpoint for a nonzero latest block.
+// The caller's cancellation and a probe deadline are forwarded to the RPC.
+// A successful response confirms connectivity, not chain synchronization.
 func (r *RPCHealthChecker) checkEthereumHealth(ctx context.Context) {
-	if r.ethBlockCounter == nil {
+	if r.ethRPC == nil {
 		return
 	}
 
 	startTime := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, ethereumRPCProbeTimeout)
+	defer cancel()
 
-	// First check: Get current block number
-	currentBlock, err := r.ethBlockCounter.CurrentBlock()
-	if err != nil {
-		r.ethMutex.Lock()
-		r.ethLastCheck = startTime
-		r.ethLastError = err
-		r.ethMutex.Unlock()
-		rpcHealthLogger.Warnf(
-			"Ethereum RPC health check failed (CurrentBlock): [%v] (duration: %v)",
-			err,
-			time.Since(startTime),
-		)
-		return
+	currentBlock, err := r.ethRPC.LatestBlockNumber(probeCtx)
+	if err == nil {
+		// Never count a response received after cancellation/deadline as healthy.
+		err = probeCtx.Err()
+	}
+	if err == nil && currentBlock == 0 {
+		err = fmt.Errorf("block number is 0, node may not be synced")
 	}
 
-	// Second check: Verify block number is reasonable
-	// Block number should be > 0 (unless on a very new testnet)
-	// For mainnet/testnet, block numbers should be in thousands/millions
-	if currentBlock == 0 {
-		blockErr := fmt.Errorf("block number is 0, node may not be synced")
-		r.ethMutex.Lock()
-		r.ethLastCheck = startTime
-		r.ethLastError = blockErr
-		r.ethMutex.Unlock()
-		rpcHealthLogger.Warnf(
-			"Ethereum RPC health check failed (block number is 0): [%v] (duration: %v)",
-			blockErr,
-			time.Since(startTime),
-		)
-		return
-	}
-
-	duration := time.Since(startTime)
+	completedAt := time.Now()
+	duration := completedAt.Sub(startTime)
 
 	r.ethMutex.Lock()
-	r.ethLastCheck = startTime
-	r.ethLastSuccess = time.Now()
-	r.ethLastError = nil
-	r.ethLastDuration = duration
+	r.ethLastCheck = completedAt
+	r.ethLastError = err
+	if err == nil {
+		r.ethLastSuccess = completedAt
+		r.ethLastDuration = duration
+	}
 	r.ethMutex.Unlock()
+
+	if err != nil {
+		rpcHealthLogger.Warnf(
+			"Ethereum RPC health check failed (LatestBlockNumber): [%v] (duration: %v)",
+			err,
+			duration,
+		)
+		return
+	}
 
 	rpcHealthLogger.Debugf(
 		"Ethereum RPC health check succeeded (block: %d, duration: %v)",
@@ -204,8 +205,8 @@ func (r *RPCHealthChecker) checkEthereumHealth(ctx context.Context) {
 // by making actual RPC calls to verify the service is working properly.
 // It checks:
 // 1. Latest block height retrieval
-// 2. Block header retrieval for the latest block (verifies RPC can retrieve block data)
-// 3. Block height is reasonable (not 0)
+// 2. Block height is reasonable (not 0)
+// 3. Block header retrieval for the latest block (verifies RPC can retrieve block data)
 func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	if r.btcChain == nil {
 		return
@@ -216,8 +217,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	// First check: Get latest block height
 	latestHeight, err := r.btcChain.GetLatestBlockHeight()
 	if err != nil {
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = err
 		r.btcMutex.Unlock()
 		rpcHealthLogger.Warnf(
@@ -231,8 +233,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	// Second check: Verify block height is reasonable
 	if latestHeight == 0 {
 		heightErr := fmt.Errorf("block height is 0, node may not be synced")
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = heightErr
 		r.btcMutex.Unlock()
 		rpcHealthLogger.Warnf(
@@ -249,8 +252,9 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	if err != nil {
 		headerErr := fmt.Errorf("failed to get block header for height %d: %w", latestHeight, err)
 		benign := isKnownBenignBtcHeaderError(err)
+		completedAt := time.Now()
 		r.btcMutex.Lock()
-		r.btcLastCheck = startTime
+		r.btcLastCheck = completedAt
 		r.btcLastError = headerErr
 		if benign {
 			r.btcBenignHeaderErrors++
@@ -274,11 +278,12 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 		return
 	}
 
-	duration := time.Since(startTime)
+	completedAt := time.Now()
+	duration := completedAt.Sub(startTime)
 
 	r.btcMutex.Lock()
-	r.btcLastCheck = startTime
-	r.btcLastSuccess = time.Now()
+	r.btcLastCheck = completedAt
+	r.btcLastSuccess = completedAt
 	r.btcLastError = nil
 	r.btcLastDuration = duration
 	r.btcMutex.Unlock()
@@ -319,6 +324,7 @@ func (r *RPCHealthChecker) GetBitcoinBenignHeaderErrorCount() float64 {
 
 // registerMetrics registers metrics observers for RPC health status.
 func (r *RPCHealthChecker) registerMetrics() {
+	r.registry.ObserveApplicationSource("performance", r.healthSources())
 	// Ethereum RPC response time
 	r.registry.ObserveApplicationSource(
 		"performance",
@@ -351,4 +357,33 @@ func (r *RPCHealthChecker) registerMetrics() {
 			},
 		},
 	)
+}
+
+// healthSources distinguishes a failed RPC from a probe that stopped completing.
+func (r *RPCHealthChecker) healthSources() map[string]Source {
+	health := func(getStatus func() (bool, time.Time, time.Time, error, time.Duration)) Source {
+		return func() float64 {
+			ok, _, _, _, _ := getStatus()
+			if ok {
+				return 1
+			}
+			return 0
+		}
+	}
+	lastCheck := func(getStatus func() (bool, time.Time, time.Time, error, time.Duration)) Source {
+		return func() float64 {
+			_, checked, _, _, _ := getStatus()
+			if checked.IsZero() {
+				return 0
+			}
+			return float64(checked.Unix())
+		}
+	}
+	return map[string]Source{
+		"rpc_eth_healthy":                      health(r.GetEthereumHealthStatus),
+		"rpc_btc_healthy":                      health(r.GetBitcoinHealthStatus),
+		"rpc_eth_last_check_timestamp_seconds": lastCheck(r.GetEthereumHealthStatus),
+		"rpc_btc_last_check_timestamp_seconds": lastCheck(r.GetBitcoinHealthStatus),
+		"rpc_health_check_interval_seconds":    func() float64 { return r.checkInterval.Seconds() },
+	}
 }

@@ -22,7 +22,7 @@
 
 pragma solidity 0.8.17;
 
-import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
+import "../legacy/sortition/SortitionPool.sol";
 import "@threshold-network/solidity-contracts/contracts/staking/IStaking.sol";
 
 /// @notice Library managing the state of stake authorizations for the operator
@@ -156,12 +156,10 @@ library BeaconAuthorization {
         uint64 _authorizationDecreaseChangePeriod
     ) external {
         self.parameters.minimumAuthorization = _minimumAuthorization;
-        self
-            .parameters
-            .authorizationDecreaseDelay = _authorizationDecreaseDelay;
-        self
-            .parameters
-            .authorizationDecreaseChangePeriod = _authorizationDecreaseChangePeriod;
+        self.parameters.authorizationDecreaseDelay =
+            _authorizationDecreaseDelay;
+        self.parameters.authorizationDecreaseChangePeriod =
+            _authorizationDecreaseChangePeriod;
     }
 
     /// @notice Used by staking provider to set operator address that will
@@ -619,9 +617,8 @@ library BeaconAuthorization {
             address(this)
         );
 
-        uint96 _eligibleStake = authorizedStake > decreasingBy
-            ? authorizedStake - decreasingBy
-            : 0;
+        uint96 _eligibleStake =
+            authorizedStake > decreasingBy ? authorizedStake - decreasingBy : 0;
 
         if (_eligibleStake < self.parameters.minimumAuthorization) {
             return 0;

@@ -14,6 +14,10 @@ inputs:
     description: True if the image should be published
     required: true
     default: "false"
+  load:
+    description: True to load the built image into the local Docker daemon (for post-build verification steps); ignored when push is true
+    required: false
+    default: "false"
   gcrJsonKey:
     description: JSON key for Google Container Registry service account (required if push is true)
     required: false
@@ -69,6 +73,7 @@ runs:
         labels: |
           revision=${{ github.sha }}
         push: ${{ inputs.push == 'true' }}
+        load: ${{ inputs.push != 'true' && inputs.load == 'true' }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache-new
 

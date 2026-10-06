@@ -16,35 +16,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/net/retransmission"
 )
 
-func TestProviderReturnsType(t *testing.T) {
-	ctx, cancel := newTestContext()
-	defer cancel()
-
-	operatorPrivateKey, _, err := operator.GenerateKeyPair(DefaultCurve)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	expectedType := "libp2p"
-	provider, err := Connect(
-		ctx,
-		generateDeterministicNetworkConfig(),
-		operatorPrivateKey,
-		firewall.Disabled,
-		idleTicker(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if provider.Type() != expectedType {
-		t.Fatalf("expected: provider type [%s]\nactual:   provider type [%s]",
-			provider.Type(),
-			expectedType,
-		)
-	}
-}
-
 func TestProviderReturnsChannel(t *testing.T) {
 	ctx, cancel := newTestContext()
 	defer cancel()

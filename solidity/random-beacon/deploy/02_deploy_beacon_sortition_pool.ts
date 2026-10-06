@@ -1,3 +1,5 @@
+import waitForConfirmations from "../utils/wait-for-confirmations"
+
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
@@ -23,15 +25,18 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "BeaconSortitionPool",
     { from: deployer, log: true, waitConfirmations: 1 },
     "transferChaosnetOwnerRole",
-    chaosnetOwner
+    chaosnetOwner,
   )
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      BeaconSortitionPool.transactionHash,
-      2,
-      300000
-    )
+    if (BeaconSortitionPool.transactionHash) {
+      await waitForConfirmations(
+        hre.ethers.provider,
+        BeaconSortitionPool.transactionHash,
+        2,
+        300000,
+      )
+    }
     await helpers.etherscan.verify(BeaconSortitionPool)
   }
 

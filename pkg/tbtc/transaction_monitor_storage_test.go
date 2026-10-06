@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 func transactionMonitorDisk(t *testing.T) (persistence.BasicHandle, string) {
@@ -49,17 +49,32 @@ func saveTransactionMonitorFixture(
 	}
 }
 
+// newTestTransactionMonitor builds a monitor with the default configuration
+// on top of the given persistence handle.
+func newTestTransactionMonitor(
+	t *testing.T,
+	chain bitcoin.Chain,
+	handle persistence.BasicHandle,
+) *transactionMonitor {
+	t.Helper()
+	monitor, err := newTransactionMonitor(chain, handle, TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return monitor
+}
+
 func TestTransactionMonitor_PersistsRegistration(t *testing.T) {
 	handle, _ := transactionMonitorDisk(t)
 	chain := newLocalBitcoinChain()
-	monitor := newTransactionMonitor(chain, handle)
+	monitor := newTestTransactionMonitor(t, chain, handle)
 	hash := bitcoin.Hash{1, 2, 3}
 	wallet := [20]byte{4, 5, 6}
 	monitor.track(hash, wallet)
 	original := monitor.snapshotByAge()[0]
 
 	// Recovery is complete when construction returns; no check pass is needed.
-	restarted := newTransactionMonitor(chain, handle)
+	restarted := newTestTransactionMonitor(t, chain, handle)
 	restarted.track(hash, [20]byte{99})
 	if got := restarted.snapshotByAge(); len(got) != 1 ||
 		got[0].hash != hash || got[0].walletPublicKeyHash != wallet ||
@@ -100,7 +115,7 @@ func TestTransactionMonitor_RestartLifecycle(t *testing.T) {
 				}
 			}
 
-			monitor := newTransactionMonitor(chain, handle)
+			monitor := newTestTransactionMonitor(t, chain, handle)
 			got := monitor.snapshotByAge()
 			if len(got) != 1 || !got[0].broadcastAt.Equal(broadcastAt) ||
 				got[0].walletPublicKeyHash != [20]byte{1, 2, 3} ||
@@ -118,7 +133,7 @@ func TestTransactionMonitor_RestartLifecycle(t *testing.T) {
 			}
 
 			// Alert and removal decisions must survive another restart as well.
-			restarted := newTransactionMonitor(chain, handle)
+			restarted := newTestTransactionMonitor(t, chain, handle)
 			restarted.setMetricsRecorder(recorder)
 			restarted.check(context.Background())
 			if isTracked(restarted, hash) != test.wantTracked ||
@@ -163,7 +178,7 @@ func TestTransactionMonitor_RetriesFailedRegistration(t *testing.T) {
 	handle, _ := transactionMonitorDisk(t)
 	failing := &failingTransactionMonitorPersistence{BasicHandle: handle, failSave: true}
 	chain := newLocalBitcoinChain()
-	monitor := newTransactionMonitor(chain, failing)
+	monitor := newTestTransactionMonitor(t, chain, failing)
 	hash := bitcoin.Hash{1}
 	monitor.track(hash, [20]byte{2})
 	original := monitor.snapshotByAge()
@@ -172,7 +187,7 @@ func TestTransactionMonitor_RetriesFailedRegistration(t *testing.T) {
 	}
 	failing.failSave = false
 	monitor.check(context.Background())
-	restarted := newTransactionMonitor(chain, handle)
+	restarted := newTestTransactionMonitor(t, chain, handle)
 	got := restarted.snapshotByAge()
 	if len(got) != 1 || !got[0].broadcastAt.Equal(original[0].broadcastAt) ||
 		got[0].walletPublicKeyHash != original[0].walletPublicKeyHash {
@@ -188,7 +203,7 @@ func TestTransactionMonitor_RetriesPersistenceDespiteConfirmationTimeouts(t *tes
 			blockedHash := bitcoin.Hash{1}
 			chain := newBlockingTransactionConfirmationsChain(blockedHash)
 			defer close(chain.lookupRelease)
-			monitor := newTransactionMonitor(chain, failing)
+			monitor := newTestTransactionMonitor(t, chain, failing)
 			newerTx := &bitcoin.Transaction{}
 			newerHash := newerTx.Hash()
 
@@ -226,7 +241,7 @@ func TestTransactionMonitor_RetriesPersistenceDespiteConfirmationTimeouts(t *tes
 				t.Fatalf("expected three timed-out lookups for the older transaction; got %d", got)
 			}
 
-			restarted := newTransactionMonitor(chain, handle)
+			restarted := newTestTransactionMonitor(t, chain, handle)
 			if operation == "deletion" {
 				if isTracked(monitor, newerHash) || isTracked(restarted, newerHash) {
 					t.Fatal("confirmation timeouts starved deletion of the newer transaction")
@@ -250,13 +265,13 @@ func TestTransactionMonitor_PartialAlertWritePreservesRegistration(t *testing.T)
 	broadcastAt := time.Now().Add(-7 * time.Hour)
 	saveTransactionMonitorFixture(t, handle, hash, broadcastAt, false)
 	failing := &failingTransactionMonitorPersistence{BasicHandle: handle, failSave: true}
-	monitor := newTransactionMonitor(chain, failing)
+	monitor := newTestTransactionMonitor(t, chain, failing)
 	recorder := newCountingMetricsRecorder()
 	monitor.setMetricsRecorder(recorder)
 	monitor.check(context.Background())
 
 	// A crash during the alert write must not destroy the initial record.
-	restarted := newTransactionMonitor(chain, handle)
+	restarted := newTestTransactionMonitor(t, chain, handle)
 	got := restarted.snapshotByAge()
 	if len(got) != 1 || !got[0].broadcastAt.Equal(broadcastAt) || got[0].alerted {
 		t.Fatalf("partial alert write lost the original tracking state: %+v", got)
@@ -267,7 +282,7 @@ func TestTransactionMonitor_PartialAlertWritePreservesRegistration(t *testing.T)
 	if recorder.GetCounterValue(clientinfo.MetricStuckWalletTransactionsTotal) != 1 {
 		t.Fatal("retrying persistence must not repeat the alert")
 	}
-	if got := newTransactionMonitor(chain, handle).snapshotByAge(); len(got) != 1 || !got[0].alerted {
+	if got := newTestTransactionMonitor(t, chain, handle).snapshotByAge(); len(got) != 1 || !got[0].alerted {
 		t.Fatalf("alert state was not persisted after retry: %+v", got)
 	}
 }
@@ -284,7 +299,7 @@ func TestTransactionMonitor_RetriesFailedDeletion(t *testing.T) {
 				BasicHandle:    handle,
 				failDeleteName: transactionMonitorRecordName(hash, failAlertedRecord),
 			}
-			monitor := newTransactionMonitor(chain, failing)
+			monitor := newTestTransactionMonitor(t, chain, failing)
 			recorder := newCountingMetricsRecorder()
 			monitor.setMetricsRecorder(recorder)
 			monitor.check(context.Background())
@@ -296,12 +311,12 @@ func TestTransactionMonitor_RetriesFailedDeletion(t *testing.T) {
 			}
 
 			// Either deletion failure leaves a complete alerted record to recover.
-			if got := newTransactionMonitor(chain, handle).snapshotByAge(); len(got) != 1 || !got[0].alerted {
+			if got := newTestTransactionMonitor(t, chain, handle).snapshotByAge(); len(got) != 1 || !got[0].alerted {
 				t.Fatalf("interrupted removal lost alert state: %+v", got)
 			}
 			failing.failDeleteName = ""
 			monitor.check(context.Background())
-			if trackedCount(monitor) != 0 || trackedCount(newTransactionMonitor(chain, handle)) != 0 {
+			if trackedCount(monitor) != 0 || trackedCount(newTestTransactionMonitor(t, chain, handle)) != 0 {
 				t.Fatal("deleted transaction was resurrected")
 			}
 			files, err := os.ReadDir(filepath.Join(path, transactionMonitorDirectory))
@@ -372,7 +387,7 @@ func TestTransactionMonitor_RestoresDespiteReadFailures(t *testing.T) {
 			content: transactionMonitorFixture(time.Now(), false),
 		},
 	)
-	monitor := newTransactionMonitor(newLocalBitcoinChain(), handle)
+	monitor := newTestTransactionMonitor(t, newLocalBitcoinChain(), handle)
 	if !isTracked(monitor, hash) || trackedCount(monitor) != 1 || unrelated.read || !unreadable.read {
 		t.Fatal("valid monitor records were lost or unrelated work storage was read")
 	}
@@ -380,15 +395,15 @@ func TestTransactionMonitor_RestoresDespiteReadFailures(t *testing.T) {
 
 func TestTransactionMonitor_RestoredCapacityBound(t *testing.T) {
 	handle := &mockPersistenceHandle{}
-	for i := 0; i <= transactionMonitorMaxTracked; i++ {
+	for i := 0; i <= DefaultTransactionMonitorMaxTracked; i++ {
 		hash := bitcoin.Hash{byte(i), byte(i >> 8)}
 		saveTransactionMonitorFixture(t, handle, hash, time.Now(), false)
 	}
 	// An alert record encountered after reaching capacity must still update an
 	// existing entry. The disk lifecycle test covers the opposite read order.
 	saveTransactionMonitorFixture(t, handle, bitcoin.Hash{}, time.Now(), true)
-	monitor := newTransactionMonitor(newLocalBitcoinChain(), handle)
-	if trackedCount(monitor) != transactionMonitorMaxTracked || !monitor.tracked[bitcoin.Hash{}].alerted {
+	monitor := newTestTransactionMonitor(t, newLocalBitcoinChain(), handle)
+	if trackedCount(monitor) != DefaultTransactionMonitorMaxTracked || !monitor.tracked[bitcoin.Hash{}].alerted {
 		t.Fatal("restoration exceeded capacity or lost a duplicate's alert state")
 	}
 }
@@ -397,7 +412,7 @@ func TestTransactionMonitor_PersistsConcurrentTracking(t *testing.T) {
 	handle, _ := transactionMonitorDisk(t)
 	blockedHash := bitcoin.Hash{99}
 	chain := newBlockingTransactionConfirmationsChain(blockedHash)
-	monitor := newTransactionMonitor(chain, handle)
+	monitor := newTestTransactionMonitor(t, chain, handle)
 	monitor.track(blockedHash, [20]byte{})
 	defer close(chain.lookupRelease)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -429,7 +444,7 @@ func TestTransactionMonitor_PersistsConcurrentTracking(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("check did not stop")
 	}
-	if got := trackedCount(newTransactionMonitor(chain, handle)); got != 9 {
+	if got := trackedCount(newTestTransactionMonitor(t, chain, handle)); got != 9 {
 		t.Fatalf("concurrent registrations were lost or duplicated: got %d", got)
 	}
 }

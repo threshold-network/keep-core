@@ -8,7 +8,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   await helpers.ownable.transferOwnership(
     "RandomBeaconChaosnet",
     governance,
-    deployer
+    deployer,
   )
 }
 

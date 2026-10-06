@@ -68,9 +68,8 @@ contract ReimbursementPool is Ownable, ReentrancyGuard {
         );
         require(receiver != address(0), "Receiver's address cannot be zero");
 
-        uint256 gasPrice = tx.gasprice < maxGasPrice
-            ? tx.gasprice
-            : maxGasPrice;
+        uint256 gasPrice =
+            tx.gasprice < maxGasPrice ? tx.gasprice : maxGasPrice;
 
         uint256 refundAmount = (gasSpent + staticGas) * gasPrice;
 
