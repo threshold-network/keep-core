@@ -130,7 +130,11 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
-	transactionMonitor, err := newTransactionMonitor(btcChain, config.TransactionMonitor)
+	transactionMonitor, err := newTransactionMonitor(
+		btcChain,
+		workPersistence,
+		config.TransactionMonitor,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -115,7 +115,7 @@ func TestTransactionMonitor(t *testing.T) {
 	chain := newLocalBitcoinChain()
 	recorder := newCountingMetricsRecorder()
 
-	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(chain, nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestTransactionMonitor(t *testing.T) {
 // table.
 func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 func TestTransactionMonitor_CheckBudgetBoundsLookup(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1}
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
-	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(chain, nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1} // oldest; its lookup hangs until the budget expires
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
 	recorder := newCountingMetricsRecorder()
-	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(chain, nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 // past its bound.
 func TestTransactionMonitor_CapacityBound(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestTransactionMonitor_CapacityBound(t *testing.T) {
 // transactions oldest-first, so an old transaction near the stuck threshold is
 // never starved when a pass hits its time budget (Go map order is randomized).
 func TestTransactionMonitor_SnapshotByAge(t *testing.T) {
-	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

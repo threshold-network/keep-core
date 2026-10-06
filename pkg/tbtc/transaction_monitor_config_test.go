@@ -11,7 +11,7 @@ import (
 )
 
 func TestTransactionMonitorConfig_Defaults(t *testing.T) {
-	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), nil, TransactionMonitorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestTransactionMonitorConfig_Validation(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := newTransactionMonitor(newLocalBitcoinChain(), test.config)
+			_, err := newTransactionMonitor(newLocalBitcoinChain(), nil, test.config)
 			if test.errorField == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -58,7 +58,7 @@ func TestTransactionMonitorConfig_Validation(t *testing.T) {
 }
 
 func TestTransactionMonitor_CustomThresholdCapacityAndAge(t *testing.T) {
-	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), nil, TransactionMonitorConfig{
 		StuckThreshold: time.Hour,
 		MaxTracked:     2,
 		MaxTrackingAge: 2 * time.Hour,
@@ -101,7 +101,7 @@ func TestTransactionMonitor_CustomThresholdCapacityAndAge(t *testing.T) {
 func TestTransactionMonitor_CustomCheckBudget(t *testing.T) {
 	hash := bitcoin.Hash{1}
 	chain := newBlockingTransactionConfirmationsChain(hash)
-	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{CheckBudget: 20 * time.Millisecond})
+	monitor, err := newTransactionMonitor(chain, nil, TransactionMonitorConfig{CheckBudget: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestTransactionMonitor_CustomCheckBudget(t *testing.T) {
 func TestTransactionMonitor_CustomCheckInterval(t *testing.T) {
 	hash := bitcoin.Hash{1}
 	chain := newBlockingTransactionConfirmationsChain(hash)
-	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{CheckInterval: 5 * time.Millisecond})
+	monitor, err := newTransactionMonitor(chain, nil, TransactionMonitorConfig{CheckInterval: 5 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
