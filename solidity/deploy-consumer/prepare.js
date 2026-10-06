@@ -5,6 +5,28 @@ const os = require("os")
 const path = require("path")
 const { execFileSync } = require("child_process")
 
+// Every external command gets a time limit. A hung command must fail the job
+// with its output, not be cancelled by the workflow timeout, which loses the log.
+const MINUTE = 60 * 1000
+const exec = (label, minutes, command, args, options = {}) => {
+  console.log(`[prepare] ${label}`)
+  const started = Date.now()
+  try {
+    return execFileSync(command, args, {
+      timeout: minutes * MINUTE,
+      killSignal: "SIGKILL",
+      ...options,
+    })
+  } catch (error) {
+    if (error.code === "ETIMEDOUT") {
+      throw new Error(`${label} exceeded ${minutes} minutes`)
+    }
+    throw error
+  } finally {
+    console.log(`[prepare] ${label} took ${(Date.now() - started) / 1000}s`)
+  }
+}
+
 const major = process.argv[2]
 if (!["5", "6"].includes(major))
   throw new Error("Usage: node prepare.js 5|6 [directory]")
@@ -62,7 +84,9 @@ const dependencies = {
 }
 for (const name of ["random-beacon", "ecdsa"]) {
   const output = JSON.parse(
-    execFileSync(
+    exec(
+      `npm pack ${name}`,
+      3,
       "npm",
       ["pack", "--ignore-scripts", "--json", "--pack-destination", directory],
       {
@@ -94,7 +118,9 @@ fs.writeFileSync(
 // Both hardhat-deploy lines use their own ethers v5. Helpers 0.7's peer range
 // predates hardhat-deploy 1.0.4, so --legacy-peer-deps is required; the v6 lane
 // deliberately tests that consumer combination.
-execFileSync(
+exec(
+  "npm install",
+  10,
   "npm",
   [
     "install",
@@ -102,13 +128,20 @@ execFileSync(
     "--legacy-peer-deps",
     "--no-audit",
     "--no-fund",
+    "--loglevel=http",
   ],
   { cwd: directory, stdio: "inherit", env: environment }
 )
 for (const file of ["smoke.js", "edge.js"]) {
-  execFileSync("npx", ["--no-install", "hardhat", "run", file], {
-    cwd: directory,
-    stdio: "inherit",
-    env: environment,
-  })
+  exec(
+    `hardhat run ${file}`,
+    12,
+    "npx",
+    ["--no-install", "hardhat", "run", file],
+    {
+      cwd: directory,
+      stdio: "inherit",
+      env: environment,
+    }
+  )
 }
