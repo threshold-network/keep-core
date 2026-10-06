@@ -1,0 +1,4 @@
+external/random-beacon-export/artifacts/** linguist-generated=true
+tasks/legacy-random-beacon/** linguist-generated=true
+# Preserve the upstream generated task's bytes, including its trailing space.
+tasks/legacy-random-beacon/initialize.js whitespace=-blank-at-eol

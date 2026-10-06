@@ -20,7 +20,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       args: [WalletRegistry.address, GOVERNANCE_DELAY],
       log: true,
       waitConfirmations: 1,
-    }
+    },
   )
 
   if (
@@ -28,7 +28,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     process.env.DISABLE_HARDHAT_VERIFY !== "true"
   ) {
     await verifyOnEtherscanOrContinue(hre, () =>
-      helpers.etherscan.verify(WalletRegistryGovernance)
+      helpers.etherscan.verify(WalletRegistryGovernance),
     )
   }
 
@@ -37,7 +37,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       hre.tenderly.verify({
         name: "WalletRegistryGovernance",
         address: WalletRegistryGovernance.address,
-      })
+      }),
     )
   }
 }

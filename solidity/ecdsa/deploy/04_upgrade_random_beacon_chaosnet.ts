@@ -16,7 +16,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "WalletRegistry",
     { from: deployer, log: true, waitConfirmations: 1 },
     "upgradeRandomBeacon",
-    RandomBeaconChaosnet.address
+    RandomBeaconChaosnet.address,
   )
 }
 

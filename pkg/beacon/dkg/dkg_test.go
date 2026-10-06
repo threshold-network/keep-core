@@ -160,6 +160,28 @@ func TestDecideMemberFate_Timeout(t *testing.T) {
 	}
 }
 
+func TestWaitForDkgResultEvent_InvalidGroupSize(t *testing.T) {
+	setup()
+
+	localChain := local_v1.Connect(0, 3)
+
+	_, err := waitForDkgResultEvent(
+		dkgResultChannel,
+		startPublicationBlockHeight,
+		localChain,
+		blockCounter,
+	)
+
+	expectedError := fmt.Errorf("invalid group size: [%v]", 0)
+	if !reflect.DeepEqual(expectedError, err) {
+		t.Errorf(
+			"unexpected error\nexpected: %v\nactual:   %v\n",
+			expectedError,
+			err,
+		)
+	}
+}
+
 func TestResolveGroupOperators(t *testing.T) {
 	beaconConfig := &beaconchain.Config{
 		GroupSize:       5,

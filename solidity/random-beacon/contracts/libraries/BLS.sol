@@ -22,11 +22,10 @@ import "./AltBn128.sol";
 ///      using the AltBn128 curve.
 library BLS {
     /// @dev Creates a signature over message using the provided secret key.
-    function sign(bytes memory message, uint256 secretKey)
-        external
-        view
-        returns (bytes memory)
-    {
+    function sign(
+        bytes memory message,
+        uint256 secretKey
+    ) external view returns (bytes memory) {
         AltBn128.G1Point memory p_1 = AltBn128.g1HashToPoint(message);
         AltBn128.G1Point memory p_2 = AltBn128.scalarMultiply(p_1, secretKey);
 

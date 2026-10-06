@@ -14,13 +14,13 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/contract"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/rate"
 )
 
 // Definitions of contract names.
@@ -448,7 +448,7 @@ func (bc *baseChain) blockByNumber(number uint64) (*types.Header, error) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCtx()
 
-	return bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
+	return bc.client.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
 }
 
 // headerByNumber returns the header for the given block number. Times out
@@ -457,22 +457,22 @@ func (bc *baseChain) headerByNumber(number uint64) (*types.Header, error) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCtx()
 
-	return bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
+	return bc.client.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
 }
 
 // closerBlock check timestamps of block headers b1 and b2 and returns the one
 // whose timestamp lies closer to the requested timestamp. If the distance is
 // the same for both headers, the one with greater block number is returned.
 func closerBlock(timestamp uint64, b1, b2 *types.Header) *types.Header {
-	abs := func(x int64) int64 {
-		if x < 0 {
-			return -x
+	distance := func(blockTime uint64) uint64 {
+		if blockTime > timestamp {
+			return blockTime - timestamp
 		}
-		return x
+		return timestamp - blockTime
 	}
 
-	b1Diff := abs(int64(b1.Time - timestamp))
-	b2Diff := abs(int64(b2.Time - timestamp))
+	b1Diff := distance(b1.Time)
+	b2Diff := distance(b2.Time)
 
 	// If the differences are same, return the block with greater number.
 	if b1Diff == b2Diff {

@@ -43,10 +43,10 @@ library Wallets {
     ///         must be called first for a public key of a wallet added with
     ///         `addWallet` function.
     /// @param publicKey Uncompressed public key of a new wallet.
-    function validatePublicKey(Data storage self, bytes calldata publicKey)
-        internal
-        view
-    {
+    function validatePublicKey(
+        Data storage self,
+        bytes calldata publicKey
+    ) internal view {
         require(publicKey.length == 64, "Invalid length of the public key");
 
         bytes32 walletID = keccak256(publicKey);
@@ -74,11 +74,7 @@ library Wallets {
         bytes calldata publicKey
     )
         internal
-        returns (
-            bytes32 walletID,
-            bytes32 publicKeyX,
-            bytes32 publicKeyY
-        )
+        returns (bytes32 walletID, bytes32 publicKeyX, bytes32 publicKeyY)
     {
         walletID = keccak256(publicKey);
 
@@ -105,11 +101,10 @@ library Wallets {
     /// @notice Checks if a wallet with the given ID is registered.
     /// @param walletID Wallet's ID
     /// @return True if a wallet is registered, false otherwise
-    function isWalletRegistered(Data storage self, bytes32 walletID)
-        internal
-        view
-        returns (bool)
-    {
+    function isWalletRegistered(
+        Data storage self,
+        bytes32 walletID
+    ) internal view returns (bool) {
         return self.registry[walletID].publicKeyX != bytes32(0);
     }
 
@@ -119,11 +114,10 @@ library Wallets {
     ///         Reverts if wallet with the given ID is not registered.
     /// @param walletID ID of the wallet
     /// @return Wallet signing group members hash
-    function getWalletMembersIdsHash(Data storage self, bytes32 walletID)
-        internal
-        view
-        returns (bytes32)
-    {
+    function getWalletMembersIdsHash(
+        Data storage self,
+        bytes32 walletID
+    ) internal view returns (bytes32) {
         require(
             isWalletRegistered(self, walletID),
             "Wallet with the given ID has not been registered"
@@ -138,11 +132,10 @@ library Wallets {
     /// @param walletID ID of the wallet
     /// @return x Public key X coordinate
     /// @return y Public key Y coordinate
-    function getWalletPublicKeyCoordinates(Data storage self, bytes32 walletID)
-        internal
-        view
-        returns (bytes32 x, bytes32 y)
-    {
+    function getWalletPublicKeyCoordinates(
+        Data storage self,
+        bytes32 walletID
+    ) internal view returns (bytes32 x, bytes32 y) {
         require(
             isWalletRegistered(self, walletID),
             "Wallet with the given ID has not been registered"
@@ -159,11 +152,10 @@ library Wallets {
     ///         Reverts if wallet with the given ID is not registered.
     /// @param walletID ID of the wallet
     /// @return Uncompressed public key of the wallet
-    function getWalletPublicKey(Data storage self, bytes32 walletID)
-        internal
-        view
-        returns (bytes memory)
-    {
+    function getWalletPublicKey(
+        Data storage self,
+        bytes32 walletID
+    ) internal view returns (bytes memory) {
         (bytes32 x, bytes32 y) = getWalletPublicKeyCoordinates(self, walletID);
         return bytes.concat(x, y);
     }

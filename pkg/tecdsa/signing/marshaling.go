@@ -2,8 +2,6 @@
 package signing
 
 import (
-	"fmt"
-
 	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
@@ -29,10 +27,11 @@ func (epkm *ephemeralPublicKeyMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
-	epkm.senderID = group.MemberIndex(pbMsg.SenderID)
+	epkm.senderID = senderID
 
 	ephemeralPublicKeys, err := unmarshalPublicKeyMap(pbMsg.EphemeralPublicKeys)
 	if err != nil {
@@ -68,20 +67,22 @@ func (trom *tssRoundOneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
 	peersPayload := make(map[group.MemberIndex][]byte, len(pbMsg.PeersPayload))
 	for receiverID, payload := range pbMsg.PeersPayload {
-		if err := validateMemberIndex(receiverID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(receiverID)
+		if err != nil {
 			return err
 		}
 
-		peersPayload[group.MemberIndex(receiverID)] = payload
+		peersPayload[memberIndex] = payload
 	}
 
-	trom.senderID = group.MemberIndex(pbMsg.SenderID)
+	trom.senderID = senderID
 	trom.broadcastPayload = pbMsg.BroadcastPayload
 	trom.peersPayload = peersPayload
 	trom.sessionID = pbMsg.SessionID
@@ -111,20 +112,22 @@ func (trtm *tssRoundTwoMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
 	peersPayload := make(map[group.MemberIndex][]byte, len(pbMsg.PeersPayload))
 	for receiverID, payload := range pbMsg.PeersPayload {
-		if err := validateMemberIndex(receiverID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(receiverID)
+		if err != nil {
 			return err
 		}
 
-		peersPayload[group.MemberIndex(receiverID)] = payload
+		peersPayload[memberIndex] = payload
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.peersPayload = peersPayload
 	trtm.sessionID = pbMsg.SessionID
 
@@ -148,11 +151,12 @@ func (trtm *tssRoundThreeMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.broadcastPayload = pbMsg.BroadcastPayload
 	trtm.sessionID = pbMsg.SessionID
 
@@ -176,11 +180,12 @@ func (trfm *tssRoundFourMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trfm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trfm.senderID = senderID
 	trfm.broadcastPayload = pbMsg.BroadcastPayload
 	trfm.sessionID = pbMsg.SessionID
 
@@ -204,11 +209,12 @@ func (trfm *tssRoundFiveMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trfm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trfm.senderID = senderID
 	trfm.broadcastPayload = pbMsg.BroadcastPayload
 	trfm.sessionID = pbMsg.SessionID
 
@@ -232,11 +238,12 @@ func (trsm *tssRoundSixMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trsm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trsm.senderID = senderID
 	trsm.broadcastPayload = pbMsg.BroadcastPayload
 	trsm.sessionID = pbMsg.SessionID
 
@@ -260,11 +267,12 @@ func (trsm *tssRoundSevenMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trsm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trsm.senderID = senderID
 	trsm.broadcastPayload = pbMsg.BroadcastPayload
 	trsm.sessionID = pbMsg.SessionID
 
@@ -288,11 +296,12 @@ func (trem *tssRoundEightMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trem.senderID = group.MemberIndex(pbMsg.SenderID)
+	trem.senderID = senderID
 	trem.broadcastPayload = pbMsg.BroadcastPayload
 	trem.sessionID = pbMsg.SessionID
 
@@ -316,23 +325,15 @@ func (trnm *tssRoundNineMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trnm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trnm.senderID = senderID
 	trnm.broadcastPayload = pbMsg.BroadcastPayload
 	trnm.sessionID = pbMsg.SessionID
 
-	return nil
-}
-
-func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
-	}
 	return nil
 }
 
@@ -356,7 +357,8 @@ func unmarshalPublicKeyMap(
 ) (map[group.MemberIndex][]byte, error) {
 	unmarshalled := make(map[group.MemberIndex][]byte, len(publicKeys))
 	for memberID, publicKeyBytes := range publicKeys {
-		if err := validateMemberIndex(memberID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(memberID)
+		if err != nil {
 			return nil, err
 		}
 
@@ -377,7 +379,7 @@ func unmarshalPublicKeyMap(
 			)
 		}
 
-		unmarshalled[group.MemberIndex(memberID)] = publicKeyBytes
+		unmarshalled[memberIndex] = publicKeyBytes
 	}
 	return unmarshalled, nil
 }

@@ -1,24 +1,24 @@
-/* eslint-disable @typescript-eslint/no-extra-semi */
-
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import blsData from "./data/bls"
 import { constants, params, randomBeaconDeployment } from "./fixtures"
 import { createGroup } from "./utils/groups"
 import { registerOperators } from "./utils/operators"
 
-import type { RandomBeaconGovernance } from "../typechain/RandomBeaconGovernance"
 import type { DeployedContracts } from "./fixtures"
 import type {
   RandomBeaconStub,
   T,
   CallbackContractStub,
   RandomBeacon,
+  RandomBeaconGovernance,
 } from "../typechain"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 
-const ZERO_ADDRESS = ethers.constants.AddressZero
+const ZERO_ADDRESS = ethers.ZeroAddress
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 const fixture = async () => {
@@ -42,7 +42,7 @@ const fixture = async () => {
     contracts.randomBeacon as RandomBeacon,
     contracts.t as T,
     constants.groupSize,
-    2
+    2,
   )
 
   await createGroup(contracts.randomBeacon as RandomBeacon, signers)
@@ -65,7 +65,7 @@ describe("RandomBeacon - Callback", () => {
     ;[requester, submitter] = await helpers.signers.getUnnamedSigners()
     ;({ governance } = await helpers.signers.getNamedSigners())
 
-    const { contracts } = await waffle.loadFixture(fixture)
+    const { contracts } = await loadFixture(fixture)
 
     randomBeacon = contracts.randomBeacon as RandomBeaconStub
     randomBeaconGovernance =
@@ -94,10 +94,10 @@ describe("RandomBeacon - Callback", () => {
 
         await randomBeacon
           .connect(requester)
-          .requestRelayEntry(callbackContract.address)
+          .requestRelayEntry(await callbackContract.getAddress())
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          callbackContract.address
+          await callbackContract.getAddress(),
         )
 
         await restoreSnapshot()
@@ -108,7 +108,7 @@ describe("RandomBeacon - Callback", () => {
 
         await randomBeacon
           .connect(requester)
-          .requestRelayEntry(callbackContract.address)
+          .requestRelayEntry(await callbackContract.getAddress())
 
         await randomBeacon
           .connect(submitter)
@@ -117,7 +117,7 @@ describe("RandomBeacon - Callback", () => {
         await randomBeacon.connect(requester).requestRelayEntry(ZERO_ADDRESS)
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          ZERO_ADDRESS
+          ZERO_ADDRESS,
         )
 
         await restoreSnapshot()
@@ -128,7 +128,7 @@ describe("RandomBeacon - Callback", () => {
 
         await randomBeacon
           .connect(requester)
-          .requestRelayEntry(callbackContract.address)
+          .requestRelayEntry(await callbackContract.getAddress())
 
         await randomBeacon
           .connect(submitter)
@@ -136,10 +136,10 @@ describe("RandomBeacon - Callback", () => {
 
         await randomBeacon
           .connect(requester)
-          .requestRelayEntry(callbackContract1.address)
+          .requestRelayEntry(await callbackContract1.getAddress())
 
         await expect(await randomBeacon.getCallbackContract()).to.equal(
-          callbackContract1.address
+          await callbackContract1.getAddress(),
         )
 
         await restoreSnapshot()
@@ -163,7 +163,7 @@ describe("RandomBeacon - Callback", () => {
 
           await randomBeacon
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
 
           await randomBeacon
             .connect(submitter)
@@ -173,7 +173,9 @@ describe("RandomBeacon - Callback", () => {
           await expect(lastEntry).to.equal(blsData.groupSignatureUint256)
 
           const blockNumber = await callbackContract.blockNumber()
-          const latestBlock = await ethers.provider.getBlock("latest")
+          const latestBlock = requireResult(
+            await ethers.provider.getBlock("latest"),
+          )
 
           await expect(blockNumber).to.equal(latestBlock.number)
 
@@ -195,7 +197,7 @@ describe("RandomBeacon - Callback", () => {
 
           await randomBeacon
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
 
           const tx = await randomBeacon
             .connect(submitter)
@@ -203,7 +205,10 @@ describe("RandomBeacon - Callback", () => {
 
           await expect(tx)
             .to.emit(randomBeacon, "CallbackFailed")
-            .withArgs(blsData.groupSignatureUint256, tx.blockNumber)
+            .withArgs(
+              blsData.groupSignatureUint256,
+              requireResult(await tx.wait()).blockNumber,
+            )
 
           await restoreSnapshot()
         })
@@ -213,7 +218,7 @@ describe("RandomBeacon - Callback", () => {
 
           await randomBeacon
             .connect(requester)
-            .requestRelayEntry(callbackContract.address)
+            .requestRelayEntry(await callbackContract.getAddress())
 
           await callbackContract.setFailureFlag(true)
 
@@ -223,7 +228,10 @@ describe("RandomBeacon - Callback", () => {
 
           await expect(tx)
             .to.emit(randomBeacon, "CallbackFailed")
-            .withArgs(blsData.groupSignatureUint256, tx.blockNumber)
+            .withArgs(
+              blsData.groupSignatureUint256,
+              requireResult(await tx.wait()).blockNumber,
+            )
 
           await restoreSnapshot()
         })

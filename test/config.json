@@ -51,7 +51,8 @@
             "TransactionLimit": 80,
             "RestartBackoffTime": "2h",
             "IdleBackoffTime": "15m",
-            "ReservationProofsEnabled": true
+            "ReservationProofsEnabled": true,
+            "MaxProofHeaders": 144
         }
     },
     "Tbtc": {

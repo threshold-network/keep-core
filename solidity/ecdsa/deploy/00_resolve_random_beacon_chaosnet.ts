@@ -6,7 +6,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { log } = deployments
 
   const RandomBeaconChaosnet = await deployments.getOrNull(
-    "RandomBeaconChaosnet"
+    "RandomBeaconChaosnet",
   )
 
   if (
@@ -14,7 +14,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     helpers.address.isValid(RandomBeaconChaosnet.address)
   ) {
     log(
-      `using existing RandomBeaconChaosnet at ${RandomBeaconChaosnet.address}`
+      `using existing RandomBeaconChaosnet at ${RandomBeaconChaosnet.address}`,
     )
   } else {
     throw new Error("deployed RandomBeaconChaosnet contract not found")

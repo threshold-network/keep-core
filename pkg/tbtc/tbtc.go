@@ -10,12 +10,11 @@ import (
 
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/persistence"
-
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/sortition"
 )
 
@@ -186,14 +185,27 @@ type Config struct {
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
 // policy from Config to the package-level policy vars. Zero-valued Config
 // fields are skipped so a direct Config{} in tests retains the
-// DefaultWalletTx* constants.
-//
-// A non-zero WalletTxSatPerVByteFloor below ProtocolMinWalletTxSatPerVByteFee
-// is rejected with an error: an operator-tuned floor under the fixed protocol
-// minimum would let every follower co-sign underpriced wallet transactions on
-// all five wallet-tx paths, which the protocol minimum exists to prevent. The
-// caller (Initialize) must propagate the error so startup fails.
+// DefaultWalletTx* constants. A non-zero WalletTxSatPerVByteFloor below
+// ProtocolMinWalletTxSatPerVByteFee is rejected with an error: an
+// operator-tuned floor under the fixed protocol minimum would let every
+// follower co-sign underpriced wallet transactions on all five wallet-tx
+// paths, which the protocol minimum exists to prevent. Negative settings
+// also return an error. The caller (Initialize) must propagate the error
+// so startup fails.
 func applyWalletTxFeePolicy(config Config) error {
+	if config.WalletTxSatPerVByteFloor < 0 {
+		return fmt.Errorf(
+			"negative wallet tx sat/vByte floor: [%d]",
+			config.WalletTxSatPerVByteFloor,
+		)
+	}
+	if config.WalletTxFeeBufferPercent < 0 {
+		return fmt.Errorf(
+			"negative wallet tx fee buffer percent: [%d]",
+			config.WalletTxFeeBufferPercent,
+		)
+	}
+
 	if config.WalletTxSatPerVByteFloor > 0 {
 		floor := int64(config.WalletTxSatPerVByteFloor)
 		if floor < ProtocolMinWalletTxSatPerVByteFee {
@@ -211,6 +223,7 @@ func applyWalletTxFeePolicy(config Config) error {
 	if config.WalletTxFeeBufferPercent > 0 {
 		WalletTxFeeBufferPercent = int64(config.WalletTxFeeBufferPercent)
 	}
+
 	return nil
 }
 
@@ -242,8 +255,9 @@ func Initialize(
 	ethereumNetwork ethereum.Network,
 ) error {
 	if err := applyWalletTxFeePolicy(config); err != nil {
-		return err
+		return fmt.Errorf("cannot apply wallet tx fee policy: [%w]", err)
 	}
+
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
 	if ethChain, ok := chain.(interface {

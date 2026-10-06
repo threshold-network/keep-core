@@ -1,6 +1,10 @@
 package entry
 
-import "testing"
+import (
+	"fmt"
+	"reflect"
+	"testing"
+)
 
 func TestCalculateSubmissionQueueIndex(t *testing.T) {
 	groupSize := uint64(64)
@@ -43,5 +47,25 @@ func TestCalculateSubmissionQueueIndex(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestWaitForSubmissionEligibility_InvalidGroupSize(t *testing.T) {
+	res := &relayEntrySubmitter{}
+
+	_, err := res.waitForSubmissionEligibility(
+		[]byte{1, 2, 3},
+		0,
+		0,
+		1,
+	)
+
+	expectedError := fmt.Errorf("invalid group size: [%v]", 0)
+	if !reflect.DeepEqual(expectedError, err) {
+		t.Errorf(
+			"unexpected error\nexpected: %v\nactual:   %v\n",
+			expectedError,
+			err,
+		)
 	}
 }

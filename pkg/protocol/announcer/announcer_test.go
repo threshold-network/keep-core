@@ -58,12 +58,14 @@ func TestFuzzAnnouncementMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:  sessionID,
 		}
 
-		_ = pbutils.RoundTrip(msg, &announcementMessage{})
+		if err := pbutils.RoundTrip(msg, &announcementMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzAnnouncementMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&announcementMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&announcementMessage{})
 }
 
 func TestAnnouncer(t *testing.T) {

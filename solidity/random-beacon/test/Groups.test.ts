@@ -1,16 +1,18 @@
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers"
 import { expect } from "chai"
 
+import requireResult from "./helpers/chain"
 import blsData from "./data/bls"
 import { constants } from "./fixtures"
 import { noMisbehaved, hashDKGMembers } from "./utils/dkg"
 import { hashUint32Array } from "./utils/groups"
 
 import type { GroupsStub } from "../typechain"
-import type { ContractTransaction } from "ethers"
-import type { Groups } from "../typechain/GroupsStub"
+import type { ContractTransactionResponse } from "ethers"
+import type { Groups } from "../typechain/contracts/test/GroupsStub"
 
-const { keccak256 } = ethers.utils
+const { keccak256 } = ethers
 
 const fixture = async () => {
   const GroupsStub = await ethers.getContractFactory("GroupsStub")
@@ -20,7 +22,7 @@ const fixture = async () => {
 }
 
 describe("Groups", () => {
-  const groupPublicKey: string = ethers.utils.hexValue(blsData.groupPubKey)
+  const groupPublicKey: string = ethers.toQuantity(blsData.groupPubKey)
   const members: number[] = []
 
   let groups: GroupsStub
@@ -30,23 +32,23 @@ describe("Groups", () => {
   })
 
   beforeEach("load test fixture", async () => {
-    groups = await waffle.loadFixture(fixture)
+    groups = await loadFixture(fixture)
   })
 
   describe("validatePublicKey", async () => {
     beforeEach(async () => {
       await groups.addGroup(
         groupPublicKey,
-        hashDKGMembers(members, noMisbehaved)
+        hashDKGMembers(members, noMisbehaved),
       )
     })
 
     context("when group is already registered", async () => {
       it("should revert with 'Group with this public key was already registered' error", async () => {
         await expect(
-          groups.validatePublicKey(groupPublicKey)
+          groups.validatePublicKey(groupPublicKey),
         ).to.be.revertedWith(
-          "Group with this public key was already registered"
+          "Group with this public key was already registered",
         )
       })
     })
@@ -54,13 +56,13 @@ describe("Groups", () => {
 
   describe("addGroup", async () => {
     context("when no groups are registered", async () => {
-      let tx: ContractTransaction
+      let tx: ContractTransactionResponse
 
       context("with no misbehaved members", async () => {
         beforeEach(async () => {
           tx = await groups.addGroup(
             groupPublicKey,
-            hashDKGMembers(members, noMisbehaved)
+            hashDKGMembers(members, noMisbehaved),
           )
         })
 
@@ -82,7 +84,7 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(groupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            tx.blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(hashUint32Array(members))
         })
@@ -95,7 +97,7 @@ describe("Groups", () => {
 
             await groups.addGroup(
               groupPublicKey,
-              hashDKGMembers(members, misbehavedIndices)
+              hashDKGMembers(members, misbehavedIndices),
             )
 
             const expectedMembers = [...members]
@@ -103,7 +105,7 @@ describe("Groups", () => {
             const expectedMembersHash = hashUint32Array(expectedMembers)
 
             expect(
-              (await groups.getGroup(groupPublicKey)).membersHash
+              (await groups.getGroup(groupPublicKey)).membersHash,
             ).to.be.equal(expectedMembersHash)
           })
         })
@@ -113,14 +115,14 @@ describe("Groups", () => {
             const misbehavedIndices: number[] = [constants.groupSize]
             await groups.addGroup(
               groupPublicKey,
-              hashDKGMembers(members, misbehavedIndices)
+              hashDKGMembers(members, misbehavedIndices),
             )
             const expectedMembers = [...members]
             expectedMembers.pop()
             const expectedMembersHash = hashUint32Array(expectedMembers)
 
             expect(
-              (await groups.getGroup(groupPublicKey)).membersHash
+              (await groups.getGroup(groupPublicKey)).membersHash,
             ).to.be.equal(expectedMembersHash)
           })
         })
@@ -130,7 +132,7 @@ describe("Groups", () => {
             const misbehavedIndices: number[] = [24]
             await groups.addGroup(
               groupPublicKey,
-              hashDKGMembers(members, misbehavedIndices)
+              hashDKGMembers(members, misbehavedIndices),
             )
 
             const expectedMembers = [...members]
@@ -138,7 +140,7 @@ describe("Groups", () => {
             const expectedMembersHash = hashUint32Array(expectedMembers)
 
             expect(
-              (await groups.getGroup(groupPublicKey)).membersHash
+              (await groups.getGroup(groupPublicKey)).membersHash,
             ).to.be.equal(expectedMembersHash)
           })
         })
@@ -148,7 +150,7 @@ describe("Groups", () => {
             const misbehavedIndices: number[] = [1, 16, 35, constants.groupSize]
             await groups.addGroup(
               groupPublicKey,
-              hashDKGMembers(members, misbehavedIndices)
+              hashDKGMembers(members, misbehavedIndices),
             )
             const expectedMembers = [...members]
             expectedMembers.splice(0, 1) // index -1
@@ -159,7 +161,7 @@ describe("Groups", () => {
             const expectedMembersHash = hashUint32Array(expectedMembers)
 
             expect(
-              (await groups.getGroup(groupPublicKey)).membersHash
+              (await groups.getGroup(groupPublicKey)).membersHash,
             ).to.be.equal(expectedMembersHash)
           })
         })
@@ -179,7 +181,7 @@ describe("Groups", () => {
 
         await groups.addGroup(
           existingGroupPublicKey,
-          hashDKGMembers(existingGroupMembers, noMisbehaved)
+          hashDKGMembers(existingGroupMembers, noMisbehaved),
         )
 
         existingGroup = await groups.getGroup(existingGroupPublicKey)
@@ -188,12 +190,12 @@ describe("Groups", () => {
       context("with unique group public key", async () => {
         const newGroupPublicKey = groupPublicKey
 
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         beforeEach(async () => {
           tx = await groups.addGroup(
             newGroupPublicKey,
-            hashDKGMembers(newGroupMembers, noMisbehaved)
+            hashDKGMembers(newGroupMembers, noMisbehaved),
           )
         })
 
@@ -215,10 +217,10 @@ describe("Groups", () => {
 
           expect(storedGroup.groupPubKey).to.be.equal(newGroupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            tx.blockNumber
+            requireResult(await tx.wait()).blockNumber,
           )
           expect(storedGroup.membersHash).to.be.equal(
-            hashUint32Array(newGroupMembers)
+            hashUint32Array(newGroupMembers),
           )
         })
 
@@ -226,18 +228,18 @@ describe("Groups", () => {
           const groupsRegistry = await groups.getGroupsRegistry()
 
           expect(groupsRegistry[0]).to.deep.equal(
-            keccak256(existingGroupPublicKey)
+            keccak256(existingGroupPublicKey),
           )
 
           const storedGroup = await groups.getGroup(existingGroupPublicKey)
 
           expect(storedGroup.groupPubKey).to.be.equal(existingGroupPublicKey)
           expect(storedGroup.registrationBlockNumber).to.be.equal(
-            existingGroup.registrationBlockNumber
+            existingGroup.registrationBlockNumber,
           )
 
           expect(storedGroup.membersHash).to.be.equal(
-            hashUint32Array(existingGroupMembers)
+            hashUint32Array(existingGroupMembers),
           )
         })
       })

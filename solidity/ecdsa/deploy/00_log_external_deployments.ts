@@ -32,7 +32,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const names = Object.keys(all).sort()
 
   log(
-    `Deploy starting on network "${network.name}" with ${names.length} pre-resolved deployments:`
+    `Deploy starting on network "${network.name}" with ${names.length} pre-resolved deployments:`,
   )
   names.forEach((name) => {
     log(`  - ${name} @ ${all[name].address}`)
@@ -40,15 +40,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   if (network.name === "sepolia") {
     const missing = EXPECTED_EXTERNAL_ON_SEPOLIA.filter(
-      (name) => !(name in all)
+      (name) => !(name in all),
     )
     if (missing.length > 0) {
       throw new Error(
         `Sepolia deploy: expected upstream contracts missing from deployments/sepolia/: ${missing.join(
-          ", "
+          ", ",
         )}. ` +
           "external.deployments.sepolia is empty by design; the committed snapshot under " +
-          "deployments/sepolia/ is the sole source. Regenerate or copy the missing artifacts."
+          "deployments/sepolia/ is the sole source. Regenerate or copy the missing artifacts.",
       )
     }
   }
@@ -65,15 +65,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       (role) => {
         const addr = (named[role] || "").toLowerCase()
         return Boolean(deployer && addr && deployer === addr)
-      }
+      },
     )
     if (collisions.length > 0) {
       throw new Error(
         `Mainnet deploy refused: deployer address (${named.deployer}) collides with ` +
           `role(s) ${collisions.join(
-            ", "
+            ", ",
           )}. Each of these must be a distinct address ` +
-          "to preserve the separation between the deploy key and governance."
+          "to preserve the separation between the deploy key and governance.",
       )
     }
   }

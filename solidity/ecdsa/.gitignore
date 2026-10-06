@@ -6,15 +6,23 @@ external/npm
 hardhat-dependency-compiler/
 export.json
 gasReporterOutput.json
+.yarn/install-state.gz
 
 # Contract artifacts
 artifacts/
+!external/random-beacon-export/artifacts/
+!external/random-beacon-export/artifacts/**
 deployments/*
 !deployments/mainnet
 !deployments/sepolia
 
 # OpenZeppelin
 .openzeppelin/unknown-*.json
+
+# Yarn Berry runtime state
+.yarn/install-state.gz
+.yarn/cache/
+.yarn/build-state.yml
 
 # Environment variables (NEVER commit private keys!)
 .env
@@ -25,3 +33,6 @@ deployments/*
 
 # Migration results (may contain sensitive info)
 migration-results.json
+
+# Yarn
+.yarn/install-state.gz

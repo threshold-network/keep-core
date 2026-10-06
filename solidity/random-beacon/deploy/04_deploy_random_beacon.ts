@@ -1,3 +1,5 @@
+import waitForConfirmations from "../utils/wait-for-confirmations"
+
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction, DeployOptions } from "hardhat-deploy/types"
 
@@ -21,14 +23,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const BeaconAuthorization = await deployments.deploy(
     "BeaconAuthorization",
-    deployOptions
+    deployOptions,
   )
 
   const BeaconDkg = await deployments.deploy("BeaconDkg", deployOptions)
 
   const BeaconInactivity = await deployments.deploy(
     "BeaconInactivity",
-    deployOptions
+    deployOptions,
   )
 
   const RandomBeacon = await deployments.deploy("RandomBeacon", {
@@ -55,15 +57,18 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   await helpers.ownable.transferOwnership(
     "BeaconSortitionPool",
     RandomBeacon.address,
-    deployer
+    deployer,
   )
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      RandomBeacon.transactionHash,
-      2,
-      300000
-    )
+    if (RandomBeacon.transactionHash) {
+      await waitForConfirmations(
+        hre.ethers.provider,
+        RandomBeacon.transactionHash,
+        2,
+        300000,
+      )
+    }
     await helpers.etherscan.verify(BLS)
     await helpers.etherscan.verify(BeaconAuthorization)
     await helpers.etherscan.verify(BeaconDkg)

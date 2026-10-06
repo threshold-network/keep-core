@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
 )
 
 // TestConcurrentCounterIncrement tests that concurrent counter increments
@@ -18,7 +16,7 @@ func TestConcurrentCounterIncrement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
@@ -52,7 +50,7 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
@@ -116,7 +114,7 @@ func TestConcurrentDurationRecording(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
@@ -170,7 +168,7 @@ func TestConcurrentGaugeSet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
@@ -206,7 +204,7 @@ func TestConcurrentDifferentOperations(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
@@ -265,7 +263,7 @@ func TestHistogramBucketPlacement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	metricName := "test_duration_seconds"
@@ -325,7 +323,7 @@ func TestMetricsInitialization(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	// Test counters
@@ -359,20 +357,32 @@ func TestMetricsInitialization(t *testing.T) {
 	}
 }
 
-// TestContextCancelation tests that goroutines stop when context is cancelled.
+// TestContextCancelation tests that observeSystemMetrics terminates when its
+// context is cancelled, and that subsequent metric operations do not panic
+// after shutdown.
 func TestContextCancelation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
-	// Cancel context immediately
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pm.observeSystemMetrics(ctx)
+	}()
+
+	// Cancel context to signal the observation loop to stop.
 	cancel()
 
-	// Give goroutines time to stop
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+		// observeSystemMetrics observed context cancellation and returned.
+	case <-time.After(2 * time.Second):
+		t.Fatal("observeSystemMetrics did not return after context cancellation")
+	}
 
-	// This should not panic or cause issues
+	// Operations after shutdown must not panic or cause issues.
 	pm.IncrementCounter(MetricSigningOperationsTotal, 1)
 	pm.SetGauge(MetricIncomingMessageQueueSize, 5)
 	pm.RecordDuration("signing_duration_seconds", 100*time.Millisecond)
@@ -431,7 +441,7 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	expectedCounters := []string{MetricFirewallOnChainChecksTotal}
@@ -468,7 +478,7 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	expectedCounters := []string{
@@ -512,7 +522,7 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	expectedCounters := []string{
@@ -553,7 +563,7 @@ func TestDepositSweepMetricsRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	counters := []string{
@@ -601,7 +611,7 @@ func TestWalletActionMetricsRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	expectedActionTypes := []string{
@@ -657,7 +667,7 @@ func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	nonReservationActionTypes := []string{
@@ -726,7 +736,7 @@ func TestReservationGaugesRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	reservationGauges := []string{
@@ -773,7 +783,7 @@ func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	registry := newRegistry(ctx)
 	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	reservationGauges := []string{

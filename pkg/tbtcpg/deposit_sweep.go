@@ -575,7 +575,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 			FundingTxHash:      deposit.FundingTxHash,
 			FundingOutputIndex: deposit.FundingOutputIndex,
 		}
-		depositsRevealBlocks[i] = big.NewInt(int64(deposit.RevealBlock))
+		depositsRevealBlocks[i] = new(big.Int).SetUint64(deposit.RevealBlock)
 	}
 
 	proposal := &tbtc.DepositSweepProposal{
@@ -689,6 +689,13 @@ func estimateDepositsSweepFee(
 	depositsCount int,
 	perDepositMaxFee uint64,
 ) (int64, int64, error) {
+	if depositsCount <= 0 {
+		return 0, 0, fmt.Errorf("invalid deposits count: [%v]", depositsCount)
+	}
+	if perDepositMaxFee > math.MaxUint64/uint64(depositsCount) {
+		return 0, 0, fmt.Errorf("maximum sweep fee exceeds uint64 range")
+	}
+
 	transactionSize, err := bitcoin.NewTransactionSizeEstimator().
 		// 1 P2WPKH main UTXO input.
 		AddPublicKeyHashInputs(1, true).
@@ -713,7 +720,7 @@ func estimateDepositsSweepFee(
 
 	// A raw estimate already above the Bridge maximum means the sweep is
 	// uneconomical to perform; return an error.
-	if uint64(totalFee) > totalMaxFee {
+	if totalFee < 0 || uint64(totalFee) > totalMaxFee {
 		return 0, 0, fmt.Errorf("estimated fee exceeds the maximum fee")
 	}
 

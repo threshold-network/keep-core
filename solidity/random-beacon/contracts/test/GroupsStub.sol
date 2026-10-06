@@ -14,9 +14,10 @@ contract GroupsStub {
         groups.validatePublicKey(groupPubKey);
     }
 
-    function addGroup(bytes calldata groupPubKey, bytes32 membersHash)
-        external
-    {
+    function addGroup(
+        bytes calldata groupPubKey,
+        bytes32 membersHash
+    ) external {
         groups.addGroup(groupPubKey, membersHash);
     }
 
@@ -40,20 +41,16 @@ contract GroupsStub {
         return groups.numberOfActiveGroups();
     }
 
-    function getGroup(bytes memory groupPubKey)
-        external
-        view
-        returns (Groups.Group memory)
-    {
+    function getGroup(
+        bytes memory groupPubKey
+    ) external view returns (Groups.Group memory) {
         return groups.getGroup(groupPubKey);
     }
 
     // group id is an index in the groups.groupsRegistry array
-    function getGroupById(uint64 groupId)
-        external
-        view
-        returns (Groups.Group memory)
-    {
+    function getGroupById(
+        uint64 groupId
+    ) external view returns (Groups.Group memory) {
         return groups.getGroup(groupId);
     }
 

@@ -6,20 +6,20 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { deployer, governance } = await getNamedAccounts()
 
   const WalletRegistryGovernance = await deployments.get(
-    "WalletRegistryGovernance"
+    "WalletRegistryGovernance",
   )
 
   await helpers.ownable.transferOwnership(
     "WalletRegistryGovernance",
     governance,
-    deployer
+    deployer,
   )
 
   await deployments.execute(
     "WalletRegistry",
     { from: deployer, log: true, waitConfirmations: 1 },
     "transferGovernance",
-    WalletRegistryGovernance.address
+    WalletRegistryGovernance.address,
   )
 }
 

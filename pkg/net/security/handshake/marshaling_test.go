@@ -43,12 +43,14 @@ func TestFuzzAct1MessageRoundtrip(t *testing.T) {
 			protocol1: protocol,
 		}
 
-		_ = pbutils.RoundTrip(message, &Act1Message{})
+		if err := pbutils.RoundTrip(message, &Act1Message{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzAct1MessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&Act1Message{})
+	pbutils.AssertUnmarshalDoesNotPanic(&Act1Message{})
 }
 
 func TestAct2MessageRoundTrip(t *testing.T) {
@@ -96,12 +98,14 @@ func TestFuzzAct2MessageRoundtrip(t *testing.T) {
 			protocol2: protocol,
 		}
 
-		_ = pbutils.RoundTrip(message, &Act2Message{})
+		if err := pbutils.RoundTrip(message, &Act2Message{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzAct2MessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&Act2Message{})
+	pbutils.AssertUnmarshalDoesNotPanic(&Act2Message{})
 }
 
 func TestAct3MessageRoundTrip(t *testing.T) {
@@ -139,10 +143,12 @@ func TestFuzzAct3MessageRoundtrip(t *testing.T) {
 			challenge: challenge,
 		}
 
-		_ = pbutils.RoundTrip(message, &Act3Message{})
+		if err := pbutils.RoundTrip(message, &Act3Message{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzAct3MessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&Act3Message{})
+	pbutils.AssertUnmarshalDoesNotPanic(&Act3Message{})
 }

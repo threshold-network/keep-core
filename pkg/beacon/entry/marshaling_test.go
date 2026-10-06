@@ -51,10 +51,12 @@ func TestFuzzSignatureShareMessageRoundtrip(t *testing.T) {
 			sessionID:  sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &SignatureShareMessage{})
+		if err := pbutils.RoundTrip(message, &SignatureShareMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzSignatureShareMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&SignatureShareMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&SignatureShareMessage{})
 }

@@ -10,8 +10,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 func TestWalletRegistry_RegisterSigner(t *testing.T) {
@@ -182,7 +182,6 @@ func TestWalletRegistry_getWalletByID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
 	walletID, err := chain.CalculateWalletID(signer.wallet.publicKey)
 	if err != nil {
 		t.Fatal(err)

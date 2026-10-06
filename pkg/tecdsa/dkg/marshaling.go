@@ -33,10 +33,11 @@ func (epkm *ephemeralPublicKeyMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
-	epkm.senderID = group.MemberIndex(pbMsg.SenderID)
+	epkm.senderID = senderID
 
 	ephemeralPublicKeys, err := unmarshalPublicKeyMap(pbMsg.EphemeralPublicKeys)
 	if err != nil {
@@ -66,11 +67,12 @@ func (trom *tssRoundOneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trom.senderID = group.MemberIndex(pbMsg.SenderID)
+	trom.senderID = senderID
 	trom.broadcastPayload = pbMsg.BroadcastPayload
 	trom.sessionID = pbMsg.SessionID
 
@@ -100,20 +102,22 @@ func (trtm *tssRoundTwoMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
 	peersPayload := make(map[group.MemberIndex][]byte, len(pbMsg.PeersPayload))
 	for receiverID, payload := range pbMsg.PeersPayload {
-		if err := validateMemberIndex(receiverID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(receiverID)
+		if err != nil {
 			return err
 		}
 
-		peersPayload[group.MemberIndex(receiverID)] = payload
+		peersPayload[memberIndex] = payload
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.broadcastPayload = pbMsg.BroadcastPayload
 	trtm.peersPayload = peersPayload
 	trtm.sessionID = pbMsg.SessionID
@@ -138,11 +142,12 @@ func (trtm *tssRoundThreeMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.broadcastPayload = pbMsg.BroadcastPayload
 	trtm.sessionID = pbMsg.SessionID
 
@@ -166,22 +171,14 @@ func (tfm *tssFinalizationMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	tfm.senderID = group.MemberIndex(pbMsg.SenderID)
+	tfm.senderID = senderID
 	tfm.sessionID = pbMsg.SessionID
 
-	return nil
-}
-
-func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
-	}
 	return nil
 }
 
@@ -205,7 +202,8 @@ func unmarshalPublicKeyMap(
 ) (map[group.MemberIndex][]byte, error) {
 	unmarshalled := make(map[group.MemberIndex][]byte, len(publicKeys))
 	for memberID, publicKeyBytes := range publicKeys {
-		if err := validateMemberIndex(memberID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(memberID)
+		if err != nil {
 			return nil, err
 		}
 
@@ -226,7 +224,7 @@ func unmarshalPublicKeyMap(
 			)
 		}
 
-		unmarshalled[group.MemberIndex(memberID)] = publicKeyBytes
+		unmarshalled[memberIndex] = publicKeyBytes
 	}
 	return unmarshalled, nil
 }
@@ -251,10 +249,11 @@ func (rsm *resultSignatureMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
-	rsm.senderID = group.MemberIndex(pbMsg.SenderID)
+	rsm.senderID = senderID
 
 	resultHash, err := ResultSignatureHashFromBytes(pbMsg.ResultHash)
 	if err != nil {

@@ -272,20 +272,18 @@ contract MockContract {
     /// @notice Marks selectors that must never be recorded. The helper calls
     ///         this once with every `view` and `pure` function of the mocked
     ///         ABI.
-    function __mock__setNonRecordingSelectors(bytes4[] calldata selectors)
-        external
-    {
+    function __mock__setNonRecordingSelectors(
+        bytes4[] calldata selectors
+    ) external {
         for (uint256 i = 0; i < selectors.length; i++) {
             _state().nonRecording[selectors[i]] = true;
         }
     }
 
     /// @notice Whether a selector is excluded from recording.
-    function __mock__isNonRecording(bytes4 selector)
-        external
-        view
-        returns (bool)
-    {
+    function __mock__isNonRecording(
+        bytes4 selector
+    ) external view returns (bool) {
         return _state().nonRecording[selector];
     }
 
@@ -324,20 +322,16 @@ contract MockContract {
     }
 
     /// @notice Raw calldata of the i-th call recorded, across all selectors.
-    function __mock__callAt(uint256 index)
-        external
-        view
-        returns (bytes memory)
-    {
+    function __mock__callAt(
+        uint256 index
+    ) external view returns (bytes memory) {
         return _state().receivedCalls[index];
     }
 
     /// @notice Number of calls recorded for one selector.
-    function __mock__callCountForSelector(bytes4 selector)
-        external
-        view
-        returns (uint256 count)
-    {
+    function __mock__callCountForSelector(
+        bytes4 selector
+    ) external view returns (uint256 count) {
         uint256 total = _state().receivedCalls.length;
         for (uint256 i = 0; i < total; i++) {
             if (__mock__selectorOf(_state().receivedCalls[i]) == selector) {
@@ -348,11 +342,10 @@ contract MockContract {
 
     /// @notice Raw calldata of the i-th call recorded for one selector.
     /// @notice msg.value of the i-th call recorded for one selector.
-    function __mock__callValueForSelectorAt(bytes4 selector, uint256 index)
-        external
-        view
-        returns (uint256)
-    {
+    function __mock__callValueForSelectorAt(
+        bytes4 selector,
+        uint256 index
+    ) external view returns (uint256) {
         uint256 seen = 0;
         uint256 total = _state().receivedCalls.length;
 
@@ -368,11 +361,10 @@ contract MockContract {
         revert("MockContract: call index out of range");
     }
 
-    function __mock__callForSelectorAt(bytes4 selector, uint256 index)
-        external
-        view
-        returns (bytes memory)
-    {
+    function __mock__callForSelectorAt(
+        bytes4 selector,
+        uint256 index
+    ) external view returns (bytes memory) {
         uint256 seen = 0;
         uint256 total = _state().receivedCalls.length;
 
@@ -389,11 +381,9 @@ contract MockContract {
     }
 
     /// @dev Leading four bytes of `callData`, or zero if it is shorter.
-    function __mock__selectorOf(bytes memory callData)
-        public
-        pure
-        returns (bytes4 selector)
-    {
+    function __mock__selectorOf(
+        bytes memory callData
+    ) public pure returns (bytes4 selector) {
         if (callData.length < 4) {
             return bytes4(0);
         }
@@ -445,11 +435,9 @@ contract MockContract {
 
     /// @dev Resolves an incoming call against the three layers, most specific
     ///      first. Reverts here if the matched response is a configured revert.
-    function __mock__responseFor(bytes memory callData)
-        private
-        view
-        returns (bytes memory)
-    {
+    function __mock__responseFor(
+        bytes memory callData
+    ) private view returns (bytes memory) {
         Response storage exact = _state().responseByCalldata[
             keccak256(callData)
         ];
@@ -499,11 +487,9 @@ contract MockContract {
         }
     }
 
-    function __mock__respond(Response storage response)
-        private
-        view
-        returns (bytes memory)
-    {
+    function __mock__respond(
+        Response storage response
+    ) private view returns (bytes memory) {
         if (response.behaviour == Behaviour.Revert) {
             bytes memory revertData = response.data;
 

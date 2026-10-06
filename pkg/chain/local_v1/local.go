@@ -188,7 +188,8 @@ func ConnectWithKey(
 			GroupSize:                  groupSize,
 			HonestThreshold:            honestThreshold,
 			ResultPublicationBlockStep: resultPublicationBlockStep,
-			RelayEntryTimeout:          resultPublicationBlockStep * uint64(groupSize),
+			// #nosec G115 -- Local test-chain callers supply a nonnegative protocol group size.
+			RelayEntryTimeout: resultPublicationBlockStep * uint64(groupSize),
 		},
 		relayEntryHandlers:       make(map[int]func(request *event.RelayEntrySubmitted)),
 		relayRequestHandlers:     make(map[int]func(request *event.RelayEntryRequested)),

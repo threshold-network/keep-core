@@ -1,0 +1,101 @@
+{
+  "package": "@keep-network/sortition-pools",
+  "version": "2.0.0",
+  "upstreamCommit": "8048806a05826785075a926485e0320a7bb75745",
+  "upstreamPackageManifest": {
+    "name": "@keep-network/sortition-pools",
+    "version": "2.0.0",
+    "description": "",
+    "main": "truffle-config.js",
+    "directories": {
+      "test": "test"
+    },
+    "files": [
+      "contracts/**/*.sol",
+      "migrations/scripts"
+    ],
+    "scripts": {
+      "build": "hardhat compile",
+      "ganache": "echo 'GANACHE IS NO LONGER USED; use buidler-vm script instead'",
+      "test": "hardhat test",
+      "lint": "npm run lint:js && npm run lint:sol",
+      "lint:fix": "npm run lint:fix:js && npm run lint:fix:sol",
+      "lint:js": "eslint ${npm_package_config_eslintPaths}",
+      "lint:fix:js": "eslint --fix ${npm_package_config_eslintPaths}",
+      "lint:sol": "solhint 'contracts/**/*.sol' && prettier --list-different **/*.sol",
+      "lint:fix:sol": "solhint 'contracts/**/*.sol' --fix && prettier --write **/*.sol"
+    },
+    "config": {
+      "eslintPaths": "test/ migrations/"
+    },
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/keep-network/sortition-pools.git"
+    },
+    "author": "",
+    "license": "ISC",
+    "bugs": {
+      "url": "https://github.com/keep-network/sortition-pools/issues"
+    },
+    "homepage": "https://github.com/keep-network/sortition-pools#readme",
+    "dependencies": {
+      "@openzeppelin/contracts": "^4.3.2",
+      "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf"
+    },
+    "devDependencies": {
+      "@keep-network/hardhat-helpers": "^0.2.0-pre",
+      "@keep-network/hardhat-local-networks-config": "0.1.0-pre.0",
+      "@keep-network/prettier-config-keep": "github:keep-network/prettier-config-keep#d6ec02e",
+      "@nomiclabs/hardhat-ethers": "^2.0.2",
+      "@nomiclabs/hardhat-etherscan": "^2.1.6",
+      "@nomiclabs/hardhat-waffle": "^2.0.1",
+      "@nomiclabs/buidler": "^1.4.5",
+      "@openzeppelin/test-helpers": "^0.5.4",
+      "@types/chai": "^4.2.20",
+      "@types/mocha": "^8.2.3",
+      "@types/node": "^16.0.1",
+      "bn-chai": "^1.0.1",
+      "chai": "^4.2.0",
+      "eslint": "^6.8.0",
+      "eslint-config-keep": "github:keep-network/eslint-config-keep#0.3.0",
+      "ethereum-waffle": "^3.4.0",
+      "ethers": "^5.0.32",
+      "ethlint": "^1.2.5",
+      "hardhat": "^2.6.4",
+      "hardhat-deploy": "^0.9.1",
+      "hardhat-gas-reporter": "^1.0.8",
+      "prettier": "^2.3.2",
+      "prettier-plugin-solidity": "^1.0.0-beta.14",
+      "solc": "0.8.6",
+      "solhint": "^3.3.6",
+      "solhint-config-keep": "github:keep-network/solhint-config-keep",
+      "truffle": "^5.4.14",
+      "ts-node": "^10.0.0",
+      "typescript": "^4.3.5"
+    }
+  },
+  "sourceSha256": {
+    "package/contracts/Branch.sol": "0aec2214f3ff1f8c4494baa95eba565644ab1eb6b6688ac20c55ca5da0ef1363",
+    "package/contracts/Chaosnet.sol": "5400c070de2b775d222ebf0a8633a05d237509b050399ad3468d853f7de2c750",
+    "package/contracts/Constants.sol": "1e7897b3beaff2b6ae99a214c363d6844e90aff6ef6fdf752b5ed3f6f294e9d1",
+    "package/contracts/Leaf.sol": "362f02f24d0a4429bea86051b881fe34ae75d6fbb7af29322cc87e324397a659",
+    "package/contracts/Position.sol": "8bb4ad218deb3a3faafeddc63e4186a27cc550c1c527a3b62751685fd0b97cf6",
+    "package/contracts/Rewards.sol": "6068ce09b1831411a47b3c25a0ac91725d44057b7c3cb3c5689b6627c191a6d8",
+    "package/contracts/RNG.sol": "005d1a3beab5b49083ad8dfad1f85baea08cd7119512977d91187bc42b9b22f5",
+    "package/contracts/SortitionPool.sol": "d81d8cad798e53745bec0b71c0bfd0b2a32c0f8678165048eb9142d9c8114221",
+    "package/contracts/SortitionTree.sol": "ca43b3e7c8ee362d787f0d12262d397fe916973d9015d738e534751fb1025521"
+  },
+  "interfaceSha256": {
+    "IApproveAndCall.sol": "211e50c2984546d5ad4ff78991beb2ce344c0573d203fb505132903715991597",
+    "IERC20WithPermit.sol": "8fa746c4fa1820230c91eec5689c1026bb6369e0ec9ed01976be1b8cdf09bb47",
+    "IReceiveApproval.sol": "158a8fe35674f1edf2e58223ae9dc7da58b317cc2be3f4cf8e7996ccfcafad6e"
+  },
+  "changes": [
+    "Only the two Thesis interface import paths were made local."
+  ],
+  "interfaces": {
+    "repository": "https://github.com/thesis/solidity-contracts",
+    "revision": "4985bcf"
+  },
+  "compatibility": "Runtime Solidity sources are identical in 2.0.0 and 2.0.0-pre.16."
+}

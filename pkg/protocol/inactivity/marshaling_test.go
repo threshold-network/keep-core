@@ -56,10 +56,12 @@ func TestFuzzClaimSignatureMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID: sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &claimSignatureMessage{})
+		if err := pbutils.RoundTrip(message, &claimSignatureMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzClaimSignatureMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&claimSignatureMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&claimSignatureMessage{})
 }

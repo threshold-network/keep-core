@@ -1,6 +1,7 @@
 package local_v1
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -17,9 +18,19 @@ import (
 func TestLocalSubmitRelayEntry(t *testing.T) {
 	chainHandle := Connect(10, 4)
 
-	err := chainHandle.SubmitRelayEntry(big.NewInt(19).Bytes())
+	expectedEntry := big.NewInt(19).Bytes()
+	err := chainHandle.SubmitRelayEntry(expectedEntry)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	actualEntry := chainHandle.GetLastRelayEntry()
+	if !bytes.Equal(expectedEntry, actualEntry) {
+		t.Fatalf(
+			"unexpected last relay entry\nexpected: [%x]\nactual:   [%x]",
+			expectedEntry,
+			actualEntry,
+		)
 	}
 }
 

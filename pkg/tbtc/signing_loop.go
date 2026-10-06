@@ -113,6 +113,7 @@ func newSigningRetryLoop(
 	// not care in this piece of the code about the length of the message and
 	// how this message is proposed.
 	messageSha256 := sha256.Sum256(message.Bytes())
+	// #nosec G115 -- Preserve all 64 seed bits, including the sign bit, for deterministic retries.
 	attemptSeed := int64(binary.BigEndian.Uint64(messageSha256[:8]))
 
 	return &signingRetryLoop{
@@ -532,11 +533,10 @@ func (srl *signingRetryLoop) excludedMembersIndexes(
 	// Make sure we always use just the smallest required count of
 	// signing members for performance reasons
 	if len(includedMembersIndexes) > srl.groupParameters.HonestThreshold {
-		// #nosec G404 (insecure random number source (rand))
-		// Shuffling does not require secure randomness.
-		rng := rand.New(rand.NewSource(
-			srl.attemptSeed + int64(srl.attemptCounter),
-		))
+		// #nosec G115 -- Retry seed arithmetic intentionally wraps modulo 2^64 for compatibility.
+		seed := srl.attemptSeed + int64(srl.attemptCounter)
+		// #nosec G404 -- Shuffling does not require secure randomness.
+		rng := rand.New(rand.NewSource(seed))
 		// Sort in ascending order just in case.
 		sort.Slice(includedMembersIndexes, func(i, j int) bool {
 			return includedMembersIndexes[i] < includedMembersIndexes[j]

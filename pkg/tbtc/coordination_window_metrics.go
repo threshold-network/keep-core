@@ -320,8 +320,8 @@ func (cwm *coordinationWindowMetrics) cleanupOldWindows() {
 	})
 
 	// Remove oldest windows
-	windowsToRemove := len(cwm.windows) - int(cwm.maxWindowsToTrack)
-	for i := 0; i < windowsToRemove; i++ {
+	windowsToRemove := uint64(len(cwm.windows)) - cwm.maxWindowsToTrack
+	for i := uint64(0); i < windowsToRemove; i++ {
 		delete(cwm.windows, indices[i])
 	}
 }

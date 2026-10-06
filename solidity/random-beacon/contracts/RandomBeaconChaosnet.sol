@@ -36,9 +36,9 @@ contract RandomBeaconChaosnet is IRandomBeacon, Ownable {
     /// @notice Executes the callback with an arbitrary relay entry number.
     /// @param callbackContract Beacon consumer callback contract - Wallet Registry
     /// @dev The caller must be an authorized requester.
-    function requestRelayEntry(IRandomBeaconConsumer callbackContract)
-        external
-    {
+    function requestRelayEntry(
+        IRandomBeaconConsumer callbackContract
+    ) external {
         require(
             authorizedRequesters[msg.sender],
             "Requester must be authorized"
@@ -51,10 +51,10 @@ contract RandomBeaconChaosnet is IRandomBeacon, Ownable {
     }
 
     /// @notice Authorizes a requester of the relay entry.
-    function setRequesterAuthorization(address requester, bool isAuthorized)
-        external
-        onlyOwner
-    {
+    function setRequesterAuthorization(
+        address requester,
+        bool isAuthorized
+    ) external onlyOwner {
         authorizedRequesters[requester] = isAuthorized;
 
         emit RequesterAuthorizationUpdated(requester, isAuthorized);

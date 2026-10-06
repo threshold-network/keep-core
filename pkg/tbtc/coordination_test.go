@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-test/deep"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"

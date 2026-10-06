@@ -57,10 +57,12 @@ func TestFuzzDKGResultHashSignatureMessageRoundtrip(t *testing.T) {
 			sessionID:   sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &DKGResultHashSignatureMessage{})
+		if err := pbutils.RoundTrip(message, &DKGResultHashSignatureMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzDKGResultHashSignatureMessageUnmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&DKGResultHashSignatureMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&DKGResultHashSignatureMessage{})
 }

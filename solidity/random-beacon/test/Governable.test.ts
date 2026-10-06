@@ -2,8 +2,8 @@
 import { expect } from "chai"
 import { ethers, helpers } from "hardhat"
 
-import type { ContractTransaction } from "ethers"
-import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
+import type { ContractTransactionResponse } from "ethers"
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import type { GovernableImpl, GovernableImpl__factory } from "../typechain"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
@@ -15,7 +15,6 @@ describe("Governable", () => {
   let thirdParty: SignerWithAddress
 
   before(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ deployer, governance } = await helpers.signers.getNamedSigners())
     ;[thirdParty] = await helpers.signers.getUnnamedSigners()
 
@@ -24,11 +23,11 @@ describe("Governable", () => {
     governable = await GovernableFactory.deploy()
   })
 
+  // Initializer wiring: governance is unset until transferGovernance runs; the behavioural
+  // arms live in the groups below.
   describe("constructor", () => {
     it("should set governance to default zero address", async () => {
-      expect(await governable.governance()).to.be.equal(
-        ethers.constants.AddressZero
-      )
+      expect(await governable.governance()).to.be.equal(ethers.ZeroAddress)
     })
   })
 
@@ -39,7 +38,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(deployer)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -49,7 +48,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(governance)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -59,7 +58,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(thirdParty)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -75,14 +74,14 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(deployer)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
 
       describe("when called by the governance", () => {
         const newGovernance: string = ethers.Wallet.createRandom().address
-        let tx: ContractTransaction
+        let tx: ContractTransactionResponse
 
         before(async () => {
           await createSnapshot()
@@ -112,7 +111,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(thirdParty)
-              .transferGovernance(ethers.Wallet.createRandom().address)
+              .transferGovernance(ethers.Wallet.createRandom().address),
           ).to.be.revertedWith("Caller is not the governance")
         })
       })
@@ -122,7 +121,7 @@ describe("Governable", () => {
           await expect(
             governable
               .connect(governance)
-              .transferGovernance(ethers.constants.AddressZero)
+              .transferGovernance(ethers.ZeroAddress),
           ).to.be.revertedWith("New governance is the zero address")
         })
       })
@@ -148,9 +147,9 @@ describe("Governable", () => {
 
     it("should not be exposed directly", async () => {
       expect(
-        governable.functions,
-        "_transferGovernance function is exposed on the contract"
-      ).to.not.haveOwnProperty("_transferGovernance")
+        governable.interface.hasFunction("_transferGovernance"),
+        "_transferGovernance function is exposed on the contract",
+      ).to.equal(false)
     })
   })
 })

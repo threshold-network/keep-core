@@ -1,8 +1,10 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["./test", "./typechain"],
+  "exclude": ["./test", "./typechain", "./scripts"],
   "compilerOptions": {
-    "target": "es5",
+    "target": "ES2020",
+    // hardhat-deploy v1 requires the published deployment scripts.
+    "module": "CommonJS",
     "outDir": "export"
   }
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 
-	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/persistence"
 )
 
 // CalculateWalletIDFunc calculates the ECDSA wallet ID based on the provided

@@ -2,6 +2,7 @@ package maintainer
 
 import (
 	"context"
+
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -18,9 +19,10 @@ func Initialize(
 	btcDiffChain btcdiff.Chain,
 	spvChain spv.Chain,
 	metricsRecorder spv.MetricsRecorder,
-) {
-	// If none of the maintainers was specified in the config (i.e. no option was
-	// provided to the `maintainer` command), all maintainers should be launched.
+) error {
+	// Configuration is validated at config-load time and again inside
+	// spv.Initialize (the only module that requires pre-launch validation),
+	// so we don't re-validate here to avoid a redundant pass.
 	launchAll := !config.BitcoinDifficulty.Enabled &&
 		!config.Spv.Enabled
 
@@ -38,7 +40,7 @@ func Initialize(
 	}
 
 	if config.Spv.Enabled || launchAll {
-		spv.Initialize(
+		err := spv.Initialize(
 			ctx,
 			config.Spv,
 			spvChain,
@@ -46,11 +48,10 @@ func Initialize(
 			btcChain,
 			metricsRecorder,
 		)
+		if err != nil {
+			return err
+		}
 	}
 
-	// TODO: Allow for launching multiple maintainers here. Every flag
-	//       indicating a maintainer task should launch a separate maintainer.
-	//       Notice that panic on one maintainer goroutine will crush the whole
-	//       program. Consider cancelling all maintainers if one maintainer
-	//       cannot ba launched due to a configuration error.
+	return nil
 }

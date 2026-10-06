@@ -1,5 +1,5 @@
 {
   "detectors_to_exclude": "assembly,timestamp,solc-version,naming-convention",
   "hardhat_artifacts_directory": "./build",
-  "filter_paths": "test|node_modules|BytesLib.sol|ModUtils.sol|AltBn128.sol"
+  "filter_paths": "test|node_modules|BytesLib.sol|ModUtils.sol|AltBn128.sol|contracts/legacy/"
 }
