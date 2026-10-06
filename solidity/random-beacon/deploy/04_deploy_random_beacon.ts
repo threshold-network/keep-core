@@ -73,10 +73,19 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   if (hre.network.tags.etherscan) {
     // Deployment records survive verification failures. Verify them on every
     // run, including when the beacon already owns its sortition pool.
-    await helpers.etherscan.verify(await deployments.get("BLS"))
-    await helpers.etherscan.verify(await deployments.get("BeaconAuthorization"))
-    await helpers.etherscan.verify(await deployments.get("BeaconDkg"))
-    await helpers.etherscan.verify(await deployments.get("BeaconInactivity"))
+    // A consumer may hold only the RandomBeacon record.
+    const verifyRecorded = async (name: string) => {
+      const record = await deployments.getOrNull(name)
+      if (record) {
+        await helpers.etherscan.verify(record)
+      } else {
+        deployments.log(`no ${name} deployment record; skipping verification`)
+      }
+    }
+    await verifyRecorded("BLS")
+    await verifyRecorded("BeaconAuthorization")
+    await verifyRecorded("BeaconDkg")
+    await verifyRecorded("BeaconInactivity")
     await helpers.etherscan.verify(RandomBeacon)
   }
 

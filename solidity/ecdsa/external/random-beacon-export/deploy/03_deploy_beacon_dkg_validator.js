@@ -52,28 +52,25 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                         from: deployer,
                         args: [BeaconSortitionPool.address],
                         log: true,
-                        waitConfirmations: 1,
+                        waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
                     })];
             case 3:
                 BeaconDkgValidator = _a.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 6];
-                return [4 /*yield*/, hre.ethers.provider.waitForTransaction(BeaconDkgValidator.transactionHash, 2, 300000)];
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 5];
+                return [4 /*yield*/, helpers.etherscan.verify(BeaconDkgValidator)];
             case 4:
                 _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconDkgValidator)];
+                _a.label = 5;
             case 5:
-                _a.sent();
-                _a.label = 6;
-            case 6:
-                if (!hre.network.tags.tenderly) return [3 /*break*/, 8];
+                if (!hre.network.tags.tenderly) return [3 /*break*/, 7];
                 return [4 /*yield*/, hre.tenderly.verify({
                         name: "BeaconDkgValidator",
                         address: BeaconDkgValidator.address,
                     })];
-            case 7:
+            case 6:
                 _a.sent();
-                _a.label = 8;
-            case 8: return [2 /*return*/];
+                _a.label = 7;
+            case 7: return [2 /*return*/];
         }
     });
 }); };

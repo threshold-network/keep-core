@@ -3,12 +3,13 @@ const fs = require("fs")
 const path = require("path")
 const hre = require("hardhat")
 
-const packageRoot = (name) =>
-  path.dirname(require.resolve(`@keep-network/${name}/package.json`))
-const script = (name, file) =>
-  require(path.join(packageRoot(name), "export/deploy", file)).default
-const equalAddress = (actual, expected) =>
-  assert.equal(actual.toLowerCase(), expected.toLowerCase())
+const {
+  packageRoot,
+  script,
+  equalAddress,
+  nonces: allNonces,
+  run,
+} = require("./lib")
 
 async function main() {
   const { deployments, getNamedAccounts, network } = hre
@@ -16,51 +17,39 @@ async function main() {
   const address = async (name) => (await deployments.get(name)).address
   const read = (name, method, ...args) =>
     deployments.read(name, method, ...args)
-  const nonces = () =>
-    Promise.all(
-      Object.values(named).map((account) =>
-        network.provider.send("eth_getTransactionCount", [account, "latest"])
-      )
-    )
+  const nonces = () => allNonces(network)
 
-  // Verification services are external; retain real deployment waits and check
-  // confirmation depth at the verification boundary instead of calling explorers.
+  // Explorer requests are external, so the verify hook only counts calls. The
+  // helper is stubbed because it never throws; throwing stubs below prove that
+  // every retry runs the hooks again, not how the real helper fails.
   let verifications = 0
   hre.helpers.etherscan.verify = async (deployment) => {
     assert(deployment.address)
-    if (deployment.transactionHash) {
-      const receipt = await network.provider.send("eth_getTransactionReceipt", [
-        deployment.transactionHash,
-      ])
-      const latest = await network.provider.send("eth_blockNumber")
-      const beaconNames = [
-        "ReimbursementPool",
-        "BeaconSortitionPool",
-        "BeaconDkgValidator",
-        "BLS",
-        "BeaconAuthorization",
-        "BeaconDkg",
-        "BeaconInactivity",
-        "RandomBeacon",
-        "RandomBeaconGovernance",
-        "RandomBeaconChaosnet",
-      ]
-      const beaconDeployments = await Promise.all(
-        beaconNames.map((name) => deployments.getOrNull(name))
-      )
-      const isBeaconDeployment = beaconDeployments.some(
-        (record) => record && record.address === deployment.address
-      )
-      assert(
-        Number(latest) - Number(receipt.blockNumber) + 1 >=
-          (isBeaconDeployment ? 2 : 1)
-      )
-    }
     verifications += 1
   }
-  const run = hre.run.bind(hre)
+  // Record the confirmation depth each script asks for. Beacon contracts on a
+  // verification-tagged network must wait for 2 confirmations before verify.
+  const beaconNames = [
+    "ReimbursementPool",
+    "BeaconSortitionPool",
+    "BeaconDkgValidator",
+    "BLS",
+    "BeaconAuthorization",
+    "BeaconDkg",
+    "BeaconInactivity",
+    "RandomBeacon",
+    "RandomBeaconGovernance",
+    "RandomBeaconChaosnet",
+  ]
+  const confirmations = {}
+  const deploy = deployments.deploy
+  deployments.deploy = (name, options) => {
+    confirmations[name] = options.waitConfirmations
+    return deploy.call(deployments, name, options)
+  }
+  const runTask = hre.run.bind(hre)
   hre.run = (task, args) =>
-    task === "verify" ? Promise.resolve() : run(task, args)
+    task === "verify" ? Promise.resolve() : runTask(task, args)
 
   // Exercise the package's shipped data and both opt-in deploy paths, including
   // nonzero weights and the pending Ownable2Step ownership transfer on replay.
@@ -172,7 +161,7 @@ async function main() {
   // Governance verification failures are tolerated off mainnet, so the loader
   // can transfer governance before an operator retries the failed verification.
   const verifyGovernance = async (action, fail = false) => {
-    const attempts = { etherscan: [], tenderly: [] }
+    const attempts = { etherscan: [], tenderly: [], tenderlyAll: [] }
     const previousVerify = hre.helpers.etherscan.verify
     const previousTenderly = hre.tenderly
     const previousTag = network.tags.tenderly
@@ -187,6 +176,7 @@ async function main() {
     network.tags.tenderly = true
     hre.tenderly = {
       verify: async (deployment) => {
+        attempts.tenderlyAll.push(deployment)
         if (deployment.name === "WalletRegistryGovernance") {
           attempts.tenderly.push(deployment)
           if (fail) throw new Error("injected governance Tenderly failure")
@@ -218,6 +208,13 @@ async function main() {
   )
   const governanceRecord = await deployments.get("WalletRegistryGovernance")
   assertGovernanceVerification(initialGovernanceVerification, governanceRecord)
+  // Tenderly must be given the registry proxy, not its implementation.
+  const registryProxy = await address("WalletRegistry")
+  const tenderlyRegistry = initialGovernanceVerification.tenderlyAll.filter(
+    (deployment) => deployment.name === "WalletRegistry"
+  )
+  assert.equal(tenderlyRegistry.length, 1)
+  equalAddress(tenderlyRegistry[0].address, registryProxy)
   equalAddress(
     await read("WalletRegistry", "governance"),
     governanceRecord.address
@@ -268,6 +265,16 @@ async function main() {
   equalAddress(await read("WalletRegistry", "allowlist"), allowlist)
   equalAddress(await read("Allowlist", "pendingOwner"), named.governance)
   equalAddress(await read("ReimbursementPool", "owner"), named.governance)
+  // No deployer-held role may survive the run.
+  for (const pool of ["BeaconSortitionPool", "EcdsaSortitionPool"]) {
+    equalAddress(await read(pool, "chaosnetOwner"), named.chaosnetOwner)
+  }
+  equalAddress(await read("RandomBeaconChaosnet", "owner"), named.governance)
+  const proxyAdmin = await hre.ethers.getContractAt(
+    ["function owner() view returns (address)"],
+    await hre.upgrades.erc1967.getAdminAddress(registry)
+  )
+  equalAddress(await proxyAdmin.owner(), named.esdm)
   assert(await read("ReimbursementPool", "isAuthorized", beacon))
   assert(await read("ReimbursementPool", "isAuthorized", registry))
   assert(await read("RandomBeacon", "authorizedRequesters", registry))
@@ -297,6 +304,12 @@ async function main() {
     )
   }
   assert(verifications > 0, "verification-tagged paths were not exercised")
+  for (const name of beaconNames) {
+    assert(
+      confirmations[name] >= 2,
+      `${name} waited for ${confirmations[name]}`
+    )
+  }
   const before = await nonces()
   const beforeAddresses = Object.fromEntries(
     Object.entries(await deployments.all()).map(([name, deployment]) => [
@@ -324,6 +337,28 @@ async function main() {
     ),
     beforeAddresses
   )
+
+  // Without the override, script 16 falls back to the packaged weights named for
+  // the network. Mainnet refuses the override and must always use that file.
+  const initializeWeights = script(
+    "ecdsa",
+    "16_initialize_allowlist_weights.js"
+  )
+  const override = process.env.ALLOWLIST_WEIGHTS_FILE
+  await assert.rejects(
+    initializeWeights({ ...hre, network: { ...network, name: "mainnet" } }),
+    /not allowed on mainnet/
+  )
+  delete process.env.ALLOWLIST_WEIGHTS_FILE
+  try {
+    await initializeWeights({
+      ...hre,
+      network: { ...network, name: "sepolia" },
+    })
+  } finally {
+    process.env.ALLOWLIST_WEIGHTS_FILE = override
+  }
+  assert.deepEqual(await nonces(), before, "packaged weights sent transactions")
 
   // Recover and verify governance when the consumer copied only the registry
   // record or also copied an obsolete governance deployment.
@@ -364,12 +399,18 @@ async function main() {
   ]) {
     const approve = script(name, file)
     let calls = 0
+    const reads = []
+    const executions = []
     const tokenStaking = await deployments.get("TokenStaking")
+    const application = await address(
+      name === "ecdsa" ? "WalletRegistry" : "RandomBeacon"
+    )
     const context = (
       abi,
       result,
-      execute = async () => {
+      execute = async (...args) => {
         calls += 1
+        executions.push(args)
       }
     ) => ({
       ...hre,
@@ -379,7 +420,8 @@ async function main() {
           contract === "TokenStaking"
             ? { ...tokenStaking, abi }
             : deployments.get(contract),
-        read: async () => {
+        read: async (...args) => {
+          reads.push(args)
           if (result instanceof Error) throw result
           return result
         },
@@ -396,6 +438,9 @@ async function main() {
         { status: 1n },
         [1],
         [{ toString: () => "1" }],
+        // Paused and disabled applications cannot be approved again.
+        { status: 2 },
+        { status: 3 },
       ]) {
         await approve(context(abi, info))
       }
@@ -426,6 +471,19 @@ async function main() {
       ),
       /Can't approve application/
     )
+    // The scripts must ask about, and approve, the application they deploy.
+    assert(reads.length > 0)
+    for (const args of reads) {
+      assert.equal(args[0], "TokenStaking")
+      assert.equal(args[1], "applicationInfo")
+      equalAddress(args[2], application)
+    }
+    assert.equal(executions.length, 6)
+    for (const args of executions) {
+      assert.equal(args[0], "TokenStaking")
+      assert.equal(args[2], "approveApplication")
+      equalAddress(args[3], application)
+    }
   }
   console.log(
     `PASS: published exports, ethers ${
@@ -433,16 +491,4 @@ async function main() {
     }, fresh deploy + verification retries + replay + governance recovery + approval variants`
   )
 }
-main().then(
-  () => process.exit(0),
-  (error) => {
-    console.error(
-      (error.stack || String(error))
-        .split("\n")
-        .slice(0, 12)
-        .map((line) => line.slice(0, 400))
-        .join("\n")
-    )
-    process.exit(1)
-  }
-)
+run(main)

@@ -37,35 +37,42 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var func = function (hre) { return __awaiter(void 0, void 0, void 0, function () {
-    var getNamedAccounts, deployments, helpers, deployer, RandomBeacon, GOVERNANCE_DELAY, RandomBeaconGovernance;
-    return __generator(this, function (_a) {
-        switch (_a.label) {
+    var getNamedAccounts, deployments, helpers, deployer, RandomBeacon, GOVERNANCE_DELAY, args, previous, sameArgs, RandomBeaconGovernance;
+    var _a;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
             case 0:
                 getNamedAccounts = hre.getNamedAccounts, deployments = hre.deployments, helpers = hre.helpers;
                 return [4 /*yield*/, getNamedAccounts()];
             case 1:
-                deployer = (_a.sent()).deployer;
+                deployer = (_b.sent()).deployer;
                 return [4 /*yield*/, deployments.get("RandomBeacon")];
             case 2:
-                RandomBeacon = _a.sent();
+                RandomBeacon = _b.sent();
                 GOVERNANCE_DELAY = 604800 // 1 week
                 ;
+                args = [RandomBeacon.address, GOVERNANCE_DELAY];
+                return [4 /*yield*/, deployments.getOrNull("RandomBeaconGovernance")];
+            case 3:
+                previous = _b.sent();
+                sameArgs = ((_a = previous === null || previous === void 0 ? void 0 : previous.args) === null || _a === void 0 ? void 0 : _a.length) === args.length &&
+                    previous.args.every(function (arg, index) {
+                        return String(arg).toLowerCase() === String(args[index]).toLowerCase();
+                    });
                 return [4 /*yield*/, deployments.deploy("RandomBeaconGovernance", {
                         from: deployer,
-                        args: [RandomBeacon.address, GOVERNANCE_DELAY],
+                        skipIfAlreadyDeployed: sameArgs,
+                        args: args,
                         log: true,
-                        waitConfirmations: 1,
+                        waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
                     })];
-            case 3:
-                RandomBeaconGovernance = _a.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 6];
-                return [4 /*yield*/, hre.ethers.provider.waitForTransaction(RandomBeaconGovernance.transactionHash, 2, 300000)];
             case 4:
-                _a.sent();
+                RandomBeaconGovernance = _b.sent();
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 6];
                 return [4 /*yield*/, helpers.etherscan.verify(RandomBeaconGovernance)];
             case 5:
-                _a.sent();
-                _a.label = 6;
+                _b.sent();
+                _b.label = 6;
             case 6:
                 if (!hre.network.tags.tenderly) return [3 /*break*/, 8];
                 return [4 /*yield*/, hre.tenderly.verify({
@@ -73,8 +80,8 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                         address: RandomBeaconGovernance.address,
                     })];
             case 7:
-                _a.sent();
-                _a.label = 8;
+                _b.sent();
+                _b.label = 8;
             case 8: return [2 /*return*/];
         }
     });

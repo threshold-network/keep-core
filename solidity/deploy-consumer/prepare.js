@@ -12,8 +12,28 @@ const directory = path.resolve(
   process.argv[3] ||
     fs.mkdtempSync(path.join(os.tmpdir(), `keep-deploy-v${major}-`))
 )
+if (fs.existsSync(directory) && fs.readdirSync(directory).length > 0) {
+  throw new Error(`${directory} is not empty; use a new directory`)
+}
 fs.mkdirSync(directory, { recursive: true })
-for (const name of ["hardhat.config.js", "smoke.js", "contracts", "deploy"]) {
+// The consumer runs unreviewed transitive code. Keep the developer's keys,
+// RPC URLs and explorer tokens out of its environment.
+const environment = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([name]) =>
+      !/^(ETHERSCAN|TENDERLY|CHAIN_API|ACCOUNTS_PRIVATE)|PRIVATE_KEY|API_KEY/i.test(
+        name
+      )
+  )
+)
+for (const name of [
+  "hardhat.config.js",
+  "lib.js",
+  "smoke.js",
+  "edge.js",
+  "contracts",
+  "deploy",
+]) {
   fs.cpSync(path.join(__dirname, name), path.join(directory, name), {
     recursive: true,
   })
@@ -60,8 +80,8 @@ fs.writeFileSync(
       name: `keep-deploy-consumer-v${major}`,
       private: true,
       dependencies,
-      // Both hardhat-deploy lines use their own ethers v5. Helpers 0.7's peer range
-      // predates 1.0.4; the v6 lane deliberately tests that consumer combination.
+      // Make the ecdsa package's own random-beacon dependency resolve to the
+      // local tarball instead of the published version.
       overrides: {
         "@keep-network/random-beacon":
           dependencies["@keep-network/random-beacon"],
@@ -71,6 +91,9 @@ fs.writeFileSync(
     2
   )
 )
+// Both hardhat-deploy lines use their own ethers v5. Helpers 0.7's peer range
+// predates hardhat-deploy 1.0.4, so --legacy-peer-deps is required; the v6 lane
+// deliberately tests that consumer combination.
 execFileSync(
   "npm",
   [
@@ -80,9 +103,12 @@ execFileSync(
     "--no-audit",
     "--no-fund",
   ],
-  { cwd: directory, stdio: "inherit" }
+  { cwd: directory, stdio: "inherit", env: environment }
 )
-execFileSync("npx", ["--no-install", "hardhat", "run", "smoke.js"], {
-  cwd: directory,
-  stdio: "inherit",
-})
+for (const file of ["smoke.js", "edge.js"]) {
+  execFileSync("npx", ["--no-install", "hardhat", "run", file], {
+    cwd: directory,
+    stdio: "inherit",
+    env: environment,
+  })
+}

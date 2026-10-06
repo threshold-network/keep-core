@@ -56,14 +56,20 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     __dirname,
     "../deploy-data/allowlist-weights.json"
   )
+  // ALLOWLIST_WEIGHTS_FILE lets a consumer supply its own weights. Mainnet
+  // always uses the reviewed packaged file.
+  if (process.env.ALLOWLIST_WEIGHTS_FILE && hre.network.name === "mainnet") {
+    throw new Error("ALLOWLIST_WEIGHTS_FILE is not allowed on mainnet")
+  }
   const weightsPath =
     process.env.ALLOWLIST_WEIGHTS_FILE ||
     (fs.existsSync(networkSpecificPath) ? networkSpecificPath : defaultPath)
+  console.log(`Weights file: ${weightsPath}`)
 
   if (!fs.existsSync(weightsPath)) {
     throw new Error(
-      `Weights file not found at ${weightsPath}. ` +
-        "Please ensure allowlist-weights.json exists in deploy-data/"
+      `Weights file not found at ${weightsPath}. Packaged weights exist only ` +
+        "for mainnet and sepolia; set ALLOWLIST_WEIGHTS_FILE for other networks"
     )
   }
 

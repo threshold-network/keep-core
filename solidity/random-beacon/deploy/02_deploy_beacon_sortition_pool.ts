@@ -10,11 +10,22 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const T = await deployments.get("T")
 
+  // Reuse a saved record only if it was deployed for this token, so a
+  // redeployed T never ends up with a pool bound to the old one.
+  const args = [T.address, POOL_WEIGHT_DIVISOR]
+  const previous = await deployments.getOrNull("BeaconSortitionPool")
+  const sameArgs =
+    previous?.args?.length === args.length &&
+    previous.args.every(
+      (arg, index) =>
+        String(arg).toLowerCase() === String(args[index]).toLowerCase()
+    )
+
   const BeaconSortitionPool = await deployments.deploy("BeaconSortitionPool", {
     contract: "SortitionPool",
-    skipIfAlreadyDeployed: true,
+    skipIfAlreadyDeployed: sameArgs,
     from: deployer,
-    args: [T.address, POOL_WEIGHT_DIVISOR],
+    args,
     log: true,
     waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   })

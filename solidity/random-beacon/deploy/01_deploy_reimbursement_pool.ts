@@ -12,6 +12,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     from: deployer,
     args: [staticGas, maxGasPrice],
     log: true,
+    // Explorer-verified networks wait for a second confirmation so the
+    // explorer has indexed the bytecode before the verify call.
     waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   })
 

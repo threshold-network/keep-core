@@ -16,7 +16,7 @@ import type { DeployFunction } from "hardhat-deploy/types"
  * - Outputs calldata for governance to schedule via Timelock
  * - Does NOT execute the upgrade (must go through 24h Timelock)
  *
- * The atomic upgradeToAndCall pattern prevents front-running attacks
+ * The atomic upgradeAndCall pattern prevents front-running attacks
  * by ensuring the upgrade and initialization happen in a single transaction.
  */
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
@@ -56,6 +56,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Check if already upgraded (allowlist is set)
   // Note: V1 doesn't have allowlist() function, so we need to handle that case
+  // Literals instead of ethers.constants / BigNumber helpers: these scripts run
+  // under the consumer's ethers, which may be v5 or v6.
   let currentAllowlist = "0x0000000000000000000000000000000000000000"
   try {
     currentAllowlist = await walletRegistryBefore.allowlist()
@@ -73,8 +75,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       console.error(`  Expected: ${Allowlist.address}`)
       return false
     }
-  } catch (error) {
-    // V1 doesn't have allowlist() function - upgrade is needed
+  } catch (error: any) {
+    // V1 doesn't have allowlist() function, so the call reverts. Any other
+    // failure (RPC error, wrong address) must not be read as "V1".
+    if (error?.code !== "CALL_EXCEPTION") throw error
     console.log("  Allowlist: not found (V1 detected - upgrade needed)")
   }
 
@@ -204,9 +208,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       },
     }
 
+    // Relative to the consumer project, not to this file: in a published
+    // package this file lives in node_modules.
     const proposalPath = path.join(
-      __dirname,
-      "../upgrade-proposal-mainnet.json"
+      hre.config.paths.root,
+      "upgrade-proposal-mainnet.json"
     )
     fs.writeFileSync(proposalPath, JSON.stringify(proposalData, null, 2))
     console.log(`Proposal data saved to: ${proposalPath}`)

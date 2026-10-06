@@ -49,8 +49,13 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                 return [4 /*yield*/, deployments.get("RandomBeacon")];
             case 2:
                 RandomBeacon = _a.sent();
-                return [4 /*yield*/, execute("ReimbursementPool", { from: deployer, log: true, waitConfirmations: 1 }, "authorize", RandomBeacon.address)];
+                return [4 /*yield*/, deployments.read("ReimbursementPool", "isAuthorized", RandomBeacon.address)];
             case 3:
+                if (_a.sent()) {
+                    return [2 /*return*/];
+                }
+                return [4 /*yield*/, execute("ReimbursementPool", { from: deployer, log: true, waitConfirmations: 1 }, "authorize", RandomBeacon.address)];
+            case 4:
                 _a.sent();
                 return [2 /*return*/];
         }

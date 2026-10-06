@@ -23,10 +23,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     currentGovernance.toLowerCase() !==
     RandomBeaconGovernance.address.toLowerCase()
   ) {
-    deployments.log(
-      `RandomBeacon governance is ${currentGovernance}; skipping requester authorization through inactive RandomBeaconGovernance ${RandomBeaconGovernance.address}`
+    // Authorizing through another governance contract would revert. Stop with
+    // a clear reason instead of leaving the registry unable to request.
+    throw new Error(
+      `RandomBeacon governance is ${currentGovernance}, not RandomBeaconGovernance ${RandomBeaconGovernance.address}; cannot authorize WalletRegistry as a requester`
     )
-    return
   }
 
   // For mainnet we expect the scripts to be executed one by one. It's assumed that

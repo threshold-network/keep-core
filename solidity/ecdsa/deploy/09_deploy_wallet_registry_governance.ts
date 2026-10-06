@@ -29,7 +29,14 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       artifact.abi,
       currentGovernance
     )
-    const linkedRegistry = await liveGovernance.walletRegistry()
+    let linkedRegistry: string
+    try {
+      linkedRegistry = await liveGovernance.walletRegistry()
+    } catch {
+      throw new Error(
+        `WalletRegistry governance is ${currentGovernance}, which is not a WalletRegistryGovernance contract`
+      )
+    }
     if (!helpers.address.equal(linkedRegistry, WalletRegistry.address)) {
       throw new Error(
         `WalletRegistryGovernance at ${currentGovernance} points to ${linkedRegistry}, expected ${WalletRegistry.address}`
@@ -42,6 +49,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         currentGovernance
       )
     ) {
+      // The constructor delay is not readable on chain (governance can change
+      // the live delay), so the args are the deploy-time delay for this network.
       WalletRegistryGovernance = {
         address: currentGovernance,
         abi: artifact.abi,
@@ -56,11 +65,19 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       `using live WalletRegistryGovernance at ${currentGovernance}`
     )
   } else {
+    // Reuse a saved record only if it was deployed for this registry. A record
+    // left over from an earlier registry must not receive its governance.
+    const sameArgs =
+      WalletRegistryGovernance?.args?.length === args.length &&
+      WalletRegistryGovernance.args.every(
+        (arg, index) =>
+          String(arg).toLowerCase() === String(args[index]).toLowerCase()
+      )
     WalletRegistryGovernance = await deployments.deploy(
       "WalletRegistryGovernance",
       {
         from: deployer,
-        skipIfAlreadyDeployed: true,
+        skipIfAlreadyDeployed: sameArgs,
         args,
         log: true,
         waitConfirmations: 1,
@@ -68,8 +85,9 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     )
   }
 
-  // Verification failures can be tolerated before ownership is transferred.
-  // Retry the hooks even when reusing the live governance deployment.
+  // Verify on every run, including when reusing a live governance deployment:
+  // the deployment record survives a failed attempt, so a later run retries it.
+  // Failures are tolerated off mainnet only.
   if (
     hre.network.tags.etherscan &&
     process.env.DISABLE_HARDHAT_VERIFY !== "true"

@@ -53,28 +53,27 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                         from: deployer,
                         args: [staticGas, maxGasPrice],
                         log: true,
-                        waitConfirmations: 1,
+                        // Explorer-verified networks wait for a second confirmation so the
+                        // explorer has indexed the bytecode before the verify call.
+                        waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
                     })];
             case 2:
                 ReimbursementPool = _a.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 5];
-                return [4 /*yield*/, hre.ethers.provider.waitForTransaction(ReimbursementPool.transactionHash, 2, 300000)];
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 4];
+                return [4 /*yield*/, helpers.etherscan.verify(ReimbursementPool)];
             case 3:
                 _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(ReimbursementPool)];
+                _a.label = 4;
             case 4:
-                _a.sent();
-                _a.label = 5;
-            case 5:
-                if (!hre.network.tags.tenderly) return [3 /*break*/, 7];
+                if (!hre.network.tags.tenderly) return [3 /*break*/, 6];
                 return [4 /*yield*/, hre.tenderly.verify({
                         name: "ReimbursementPool",
                         address: ReimbursementPool.address,
                     })];
-            case 6:
+            case 5:
                 _a.sent();
-                _a.label = 7;
-            case 7: return [2 /*return*/];
+                _a.label = 6;
+            case 6: return [2 /*return*/];
         }
     });
 }); };

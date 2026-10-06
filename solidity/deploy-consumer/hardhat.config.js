@@ -15,6 +15,7 @@ module.exports = {
   networks: {
     hardhat: {
       tags: ["etherscan", "useRandomBeaconChaosnet"],
+      // Interval mining lets waitConfirmations: 2 finish on an otherwise idle chain.
       mining: { auto: true, interval: 100 },
     },
   },

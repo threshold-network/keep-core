@@ -1,3 +1,5 @@
+// Lives outside deploy/ because hardhat-deploy runs every file in deploy/ as a
+// deploy script, and this module is a helper.
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 
 /**
