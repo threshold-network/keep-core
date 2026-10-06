@@ -114,7 +114,7 @@ func newG2L11Watcher(
 		1,
 	)
 
-	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, 0)
+	ratw := NewReservationActionTimeoutWatcher(spvChain, time.Minute, common.Address{}, nil, 0, nil)
 	ratw.nowFn = func() uint32 { return *nodeNow }
 
 	return spvChain, ratw

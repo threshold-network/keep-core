@@ -137,6 +137,15 @@ func reservationOperatorStaggerOffset(
 // disables the increment; the death log line at each call site stays
 // the authoritative signal.
 func recordReservationWatcherDeath(recorder MetricsRecorder) {
+	incrementReservationCounter(
+		recorder,
+		clientinfo.MetricSpvReservationWatcherDeathsTotal,
+	)
+}
+
+// incrementReservationCounter adds one to the named counter through the
+// recorder, treating a nil recorder as "metrics off".
+func incrementReservationCounter(recorder MetricsRecorder, name string) {
 	if recorder == nil {
 		return
 	}
@@ -154,7 +163,7 @@ func recordReservationWatcherDeath(recorder MetricsRecorder) {
 	if pm, ok := recorder.(*clientinfo.PerformanceMetrics); ok && pm == nil {
 		return
 	}
-	recorder.IncrementCounter(clientinfo.MetricSpvReservationWatcherDeathsTotal, 1)
+	recorder.IncrementCounter(name, 1)
 }
 
 // WireReservationWatchers is the reservation watcher integration entry
@@ -204,11 +213,13 @@ func recordReservationWatcherDeath(recorder MetricsRecorder) {
 // simply idle.
 //
 // `metricsRecorder` receives the watcher-death counter increments
-// (clientinfo.MetricSpvReservationWatcherDeathsTotal) on top of the
-// death log lines; it is typically the process's
+// (clientinfo.MetricSpvReservationWatcherDeathsTotal) and the overdue
+// action counter increments
+// (clientinfo.MetricSpvReservationActionOverdueTotal) on top of the
+// matching log lines; it is typically the process's
 // *clientinfo.PerformanceMetrics instance and may be nil when the
 // process has no metrics pipeline, which disables the counter
-// increment. recordReservationWatcherDeath treats a typed-nil
+// increments. incrementReservationCounter treats a typed-nil
 // *clientinfo.PerformanceMetrics as if it were nil, so the guard also
 // holds when callers pass the concrete nil pointer wrapped in this
 // interface.
@@ -238,10 +249,11 @@ func WireReservationWatchers(
 		return fmt.Errorf("spv chain must not be nil")
 	}
 
-	// A nil metricsRecorder is valid and disables the watcher-death counter
-	// increment (process without a metrics pipeline); the death log lines at
-	// each call site stay the authoritative signal. See the spv package's
-	// nil-able MetricsRecorder convention (spv.go's MetricsRecorder doc).
+	// A nil metricsRecorder is valid and disables the watcher-death and
+	// overdue-action counter increments (process without a metrics
+	// pipeline); the log lines at each call site stay the authoritative
+	// signal. See the spv package's nil-able MetricsRecorder convention
+	// (spv.go's MetricsRecorder doc).
 
 	// operatorAddress identifies this process for
 	// reservationOperatorStaggerOffset (see WalletClosedChain.Signing's
@@ -380,6 +392,7 @@ func WireReservationWatchers(
 		operatorAddress,
 		strandingWatcher,
 		activationBlock,
+		metricsRecorder,
 	)
 
 	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)

@@ -377,7 +377,7 @@ func TestG2F22_SingleReservationReadFailureFlagsWalletForRecheck(t *testing.T) {
 		failing := newChain()
 		strandingWatcher := newReservationStrandingWatcher(failing)
 		strandingWatcher.retryDelay = 0
-		ratw := NewReservationActionTimeoutWatcher(failing, 0, common.Address{}, strandingWatcher, 0)
+		ratw := NewReservationActionTimeoutWatcher(failing, 0, common.Address{}, strandingWatcher, 0, nil)
 		ratw.strandingRecheckWallets[wallet] = struct{}{}
 
 		ratw.drainStrandingRechecks()
@@ -622,13 +622,7 @@ func TestG2L10_StuckNotifiedPendingActionIsEvicted(t *testing.T) {
 		)
 
 		counting := &actionReadCountingChain{localChain: spvChain}
-		watcher := NewReservationActionTimeoutWatcher(
-			counting,
-			0,
-			common.Address{},
-			nil,
-			0,
-		)
+		watcher := NewReservationActionTimeoutWatcher(counting, 0, common.Address{}, nil, 0, nil)
 		// Before the deadline: nothing is notified, so the only question
 		// is whether the entry is kept.
 		watcher.nowFn = func() uint32 { return 100 }
