@@ -430,7 +430,13 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidates(
 		return nil, nil, err
 	}
 
-	now := time.Now()
+	now, err := rat.chain.GetLatestBlockTimestamp()
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"failed to get the chain head timestamp: [%w]",
+			err,
+		)
+	}
 
 	rat.revealCacheMutex.Lock()
 	previousReveals := rat.revealCache[walletPublicKeyHash]

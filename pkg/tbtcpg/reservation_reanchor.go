@@ -303,7 +303,7 @@ reservationLoop:
 			// that boundary is skipped rather than proposed and rejected;
 			// a fresh request may be issued instead once the generation
 			// times out and the resulting re-anchor cooldown ends.
-			if uint64(time.Now().Unix())+
+			if uint64(headTime.Unix())+
 				uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 				uint64(action.TimeoutAt) {
 				taskLogger.Infof(
@@ -435,7 +435,7 @@ reservationLoop:
 			// request after a target search: no request before
 			// reanchorCooldownUntil, and the anchor must stay above
 			// txMaxFee + minAmount.
-			if uint64(time.Now().Unix()) < uint64(reservation.ReanchorCooldownUntil) {
+			if uint64(headTime.Unix()) < uint64(reservation.ReanchorCooldownUntil) {
 				taskLogger.Infof(
 					"reservation [0x%x] is in its re-anchor cooldown until "+
 						"[%d], skipping",

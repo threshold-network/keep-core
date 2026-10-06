@@ -261,6 +261,125 @@ func TestReanchorCustodyGate_ChainHeadReadFailureFailsClosed(t *testing.T) {
 	})
 }
 
+// TestReservationReanchorTask_CooldownGateUsesChainTime verifies that the
+// cooldown gate uses the chain head timestamp instead of the host wall clock.
+// A host clock running ahead of the chain can no longer cause early action
+// that the on-chain validator would revert. Dually, a host clock behind the
+// chain can no longer cause late action that the validator would accept.
+//
+// G1-L28/G1-S1.
+func TestReservationReanchorTask_CooldownGateUsesChainTime(t *testing.T) {
+	_, _, _, task, sourceWalletPublicKeyHash, _, reservationKey :=
+		newInFlightReanchorFixture(t)
+
+	wall := time.Now()
+
+	t.Run("fast host clock: no early action (old code attempts, chain rejects)", func(t *testing.T) {
+		// Chain head is 2 hours behind the host wall clock.
+		// A cooldown set to expire 1 hour after the head would be past on
+		// the host clock but not yet passed on the chain.
+		chainHead := wall.Add(-2 * time.Hour)
+		tbtcChain, ok := task.chain.(*LocalChain)
+		if !ok {
+			t.Fatalf("expected *LocalChain, got %T", task.chain)
+		}
+		tbtcChain.SetLatestBlockTimestamp(chainHead)
+
+		// Cooldown until = chainHead + 3600s (1h after chain head).
+		// Host wall clock (wall = chainHead + 2h) > cooldown → old gate passes.
+		// Chain time (chainHead) < cooldown → on-chain check would reject.
+		reservation, _ := tbtcChain.GetReservation(reservationKey)
+		reservation.ReanchorCooldownUntil = uint32(chainHead.Add(time.Hour).Unix())
+		tbtcChain.SetReservation(reservationKey, reservation)
+
+		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		// New code: chainHead < cooldownUntil → skip → no proposal.
+		if shouldExecute || proposal != nil {
+			t.Fatalf("expected no proposal with fast host clock, got shouldExecute=%v proposal=%v",
+				shouldExecute, proposal)
+		}
+
+		// Old code (pre-fix): wall clock > cooldownUntil → gate passes →
+		// RequestReservationReanchor is called → fake's cooldown check
+		// (chain time chainHead < cooldownUntil) rejects → attempts = 1,
+		// no proposal. New code attempts = 0. Asserting attempts == 0
+		// fails on old code.
+		if len(tbtcChain.GetReservationReanchorRequestAttempts()) != 0 {
+			t.Fatalf("expected no request attempts, got %d",
+				len(tbtcChain.GetReservationReanchorRequestAttempts()))
+		}
+	})
+
+	t.Run("slow host clock: no late action (old code skips, chain accepts)", func(t *testing.T) {
+		// Chain head is 2 hours ahead of host wall clock.
+		// A cooldown that has expired on the chain (chain past it) but not
+		// yet on the host should be actioned by the new code, not skipped.
+		chainHead := wall.Add(2 * time.Hour)
+		tbtcChain, ok := task.chain.(*LocalChain)
+		if !ok {
+			t.Fatalf("expected *LocalChain, got %T", task.chain)
+		}
+		tbtcChain.SetLatestBlockTimestamp(chainHead)
+
+		// Cooldown until = chainHead - 1h (expired 1 hour ago on chain).
+		// Host wall clock (wall = chainHead - 2h) < cooldown → old gate skips.
+		// Chain time (chainHead) > cooldown → on-chain check accepts.
+		reservation, _ := tbtcChain.GetReservation(reservationKey)
+		reservation.ReanchorCooldownUntil = uint32(chainHead.Add(-time.Hour).Unix())
+		tbtcChain.SetReservation(reservationKey, reservation)
+
+		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		// Both old and new code should propose (cooldown expired on chain).
+		if !shouldExecute || proposal == nil {
+			t.Fatalf("expected a proposal, got shouldExecute=%v proposal=%v",
+				shouldExecute, proposal)
+		}
+	})
+}
+
+// TestReservationReanchorTask_ChainTimeReadFailureSkipsPass verifies that
+// a failure to read the chain head timestamp causes the entire pass to fail
+// closed, giving the coordinator a chance to retry.
+func TestReservationReanchorTask_ChainTimeReadFailureSkipsPass(t *testing.T) {
+	tbtcChain, _, _, _, sourceWalletPublicKeyHash, _, reservationKey :=
+		newInFlightReanchorFixture(t)
+
+	failingChain := &failingTimestampChain{LocalChain: tbtcChain}
+	failingTask := NewReservationReanchorTask(failingChain, NewLocalBitcoinChain())
+
+	// Seed a timed-out generation so the Active path is taken.
+	wall := time.Now()
+	timeoutAt := wall.Add(100 * time.Second)
+	seedResumableReanchorGeneration(
+		t, tbtcChain,
+		[20]byte{5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5},
+		reservationKey, 4, timeoutAt,
+	)
+
+	proposal, shouldExecute, err := failingTask.Run(
+		&tbtc.CoordinationProposalRequest{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+		},
+	)
+	if err == nil {
+		t.Fatalf("expected an error on chain head read failure, got nil")
+	}
+	if shouldExecute || proposal != nil {
+		t.Fatalf("expected no proposal, got shouldExecute=%v proposal=%v",
+			shouldExecute, proposal)
+	}
+}
+
 // TestReservationReanchorTask_WaitingOnAgedTargetGauge verifies the
 // operator-visible signal for the liveness cost of the custody gate: the
 // gauge is 1 while the only target is younger than the creation period and

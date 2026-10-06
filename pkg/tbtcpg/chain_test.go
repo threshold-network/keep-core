@@ -1479,7 +1479,7 @@ func (lc *LocalChain) ValidateReservationAnchorProposal(
 	if action.State != tbtc.ReservationActionStatePending {
 		return fmt.Errorf("acceptance action is not pending")
 	}
-	if uint64(time.Now().Unix())+
+	if uint64(lc.latestBlockTimestamp.Unix())+
 		reservationRequestTimeoutSafetyMarginSeconds >=
 		uint64(action.TimeoutAt) {
 		return fmt.Errorf("acceptance action has timed out")
@@ -1499,7 +1499,7 @@ func (lc *LocalChain) ValidateReservationAnchorProposal(
 		return fmt.Errorf("deposit not revealed")
 	}
 	if minAgeSeconds, err := lc.GetDepositMinAge(); err == nil &&
-		!time.Now().After(
+		!lc.latestBlockTimestamp.After(
 			depositRequest.RevealedAt.Add(
 				time.Duration(minAgeSeconds)*time.Second,
 			),
@@ -1601,7 +1601,7 @@ func (lc *LocalChain) ValidateReservationAnchorProposal(
 			uint32(deposit.RefundLocktime[2])<<16 |
 			uint32(deposit.RefundLocktime[3])<<24,
 	)
-	if uint64(time.Now().Unix())+
+	if uint64(lc.latestBlockTimestamp.Unix())+
 		reservationDepositRefundSafetyMarginSeconds >=
 		refundableTimestamp {
 		return fmt.Errorf("deposit refund safety margin is not preserved")
@@ -1659,7 +1659,7 @@ func (lc *LocalChain) ValidateReservationReanchorProposal(
 	if action.State != tbtc.ReservationActionStatePending {
 		return fmt.Errorf("re-anchor action is not pending")
 	}
-	if uint64(time.Now().Unix())+
+	if uint64(lc.latestBlockTimestamp.Unix())+
 		reservationRequestTimeoutSafetyMarginSeconds >=
 		uint64(action.TimeoutAt) {
 		return fmt.Errorf("re-anchor action has timed out")
@@ -1821,7 +1821,7 @@ func (lc *LocalChain) RequestReservationReanchor(
 		return fmt.Errorf("Reservation is not active")
 	}
 
-	now := uint32(time.Now().Unix())
+	now := uint32(lc.latestBlockTimestamp.Unix())
 	if now < existing.ReanchorCooldownUntil {
 		return fmt.Errorf("Reanchor cooldown in effect")
 	}
@@ -1938,7 +1938,7 @@ func (lc *LocalChain) TimeOutReservationReanchor(reservationKey *big.Int) error 
 
 	updated := *reservation
 	updated.State = tbtc.ReservationStateActive
-	updated.ReanchorCooldownUntil = uint32(time.Now().Unix()) +
+	updated.ReanchorCooldownUntil = uint32(lc.latestBlockTimestamp.Unix()) +
 		(action.TimeoutAt - action.RequestedAt)
 	lc.reservations[reservationKey.Text(16)] = &updated
 
