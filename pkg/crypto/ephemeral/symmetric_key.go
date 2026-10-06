@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/keep-network/keep-common/pkg/encryption"
+	"github.com/keep-network/keep-core/pkg/encryption"
 )
 
 // SymmetricEcdhKey is an ephemeral Elliptic Curve key created with

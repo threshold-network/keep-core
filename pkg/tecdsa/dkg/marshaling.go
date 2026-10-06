@@ -1,3 +1,4 @@
+// marshaling.go: protobuf (un)marshaling for the public types in this package.
 package dkg
 
 import (
@@ -9,7 +10,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg/gen/pb"
 )
@@ -17,14 +17,9 @@ import (
 // Marshal converts this ephemeralPublicKeyMessage to a byte array suitable for
 // network communication.
 func (epkm *ephemeralPublicKeyMessage) Marshal() ([]byte, error) {
-	ephemeralPublicKeys, err := marshalPublicKeyMap(epkm.ephemeralPublicKeys)
-	if err != nil {
-		return nil, err
-	}
-
 	return proto.Marshal(&pb.EphemeralPublicKeyMessage{
 		SenderID:            uint32(epkm.senderID),
-		EphemeralPublicKeys: ephemeralPublicKeys,
+		EphemeralPublicKeys: marshalPublicKeyMap(epkm.ephemeralPublicKeys),
 		SessionID:           epkm.sessionID,
 	})
 }
@@ -37,10 +32,11 @@ func (epkm *ephemeralPublicKeyMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
-	epkm.senderID = group.MemberIndex(pbMsg.SenderID)
+	epkm.senderID = senderID
 
 	ephemeralPublicKeys, err := unmarshalPublicKeyMap(pbMsg.EphemeralPublicKeys)
 	if err != nil {
@@ -70,11 +66,12 @@ func (trom *tssRoundOneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trom.senderID = group.MemberIndex(pbMsg.SenderID)
+	trom.senderID = senderID
 	trom.broadcastPayload = pbMsg.BroadcastPayload
 	trom.sessionID = pbMsg.SessionID
 
@@ -104,20 +101,22 @@ func (trtm *tssRoundTwoMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
 	peersPayload := make(map[group.MemberIndex][]byte, len(pbMsg.PeersPayload))
 	for receiverID, payload := range pbMsg.PeersPayload {
-		if err := validateMemberIndex(receiverID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(receiverID)
+		if err != nil {
 			return err
 		}
 
-		peersPayload[group.MemberIndex(receiverID)] = payload
+		peersPayload[memberIndex] = payload
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.broadcastPayload = pbMsg.BroadcastPayload
 	trtm.peersPayload = peersPayload
 	trtm.sessionID = pbMsg.SessionID
@@ -142,11 +141,12 @@ func (trtm *tssRoundThreeMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	trtm.senderID = group.MemberIndex(pbMsg.SenderID)
+	trtm.senderID = senderID
 	trtm.broadcastPayload = pbMsg.BroadcastPayload
 	trtm.sessionID = pbMsg.SessionID
 
@@ -170,57 +170,41 @@ func (tfm *tssFinalizationMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
 
-	tfm.senderID = group.MemberIndex(pbMsg.SenderID)
+	tfm.senderID = senderID
 	tfm.sessionID = pbMsg.SessionID
 
 	return nil
 }
 
-func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
-	}
-	return nil
-}
-
 func marshalPublicKeyMap(
-	publicKeys map[group.MemberIndex]*ephemeral.PublicKey,
-) (map[uint32][]byte, error) {
+	publicKeys map[group.MemberIndex][]byte,
+) map[uint32][]byte {
 	marshalled := make(map[uint32][]byte, len(publicKeys))
-	for id, publicKey := range publicKeys {
-		if publicKey == nil {
-			return nil, fmt.Errorf("nil public key for member [%v]", id)
-		}
-
-		marshalled[uint32(id)] = publicKey.Marshal()
+	for id, keyBytes := range publicKeys {
+		marshalled[uint32(id)] = keyBytes
 	}
-	return marshalled, nil
+	return marshalled
 }
 
+// unmarshalPublicKeyMap converts the wire-format map to an internal byte map,
+// validating member indices but deferring EC point parsing to use-time so that
+// only the one key per message actually needed for ECDH is ever parsed.
 func unmarshalPublicKeyMap(
 	publicKeys map[uint32][]byte,
-) (map[group.MemberIndex]*ephemeral.PublicKey, error) {
-	var unmarshalled = make(map[group.MemberIndex]*ephemeral.PublicKey, len(publicKeys))
+) (map[group.MemberIndex][]byte, error) {
+	unmarshalled := make(map[group.MemberIndex][]byte, len(publicKeys))
 	for memberID, publicKeyBytes := range publicKeys {
-		if err := validateMemberIndex(memberID); err != nil {
+		memberIndex, err := group.MemberIndexFromUint32(memberID)
+		if err != nil {
 			return nil, err
 		}
-
-		publicKey, err := ephemeral.UnmarshalPublicKey(publicKeyBytes)
-		if err != nil {
-			return nil, fmt.Errorf("could not unmarshal public key [%v]", err)
-		}
-
-		unmarshalled[group.MemberIndex(memberID)] = publicKey
-
+		unmarshalled[memberIndex] = publicKeyBytes
 	}
-
 	return unmarshalled, nil
 }
 
@@ -244,10 +228,11 @@ func (rsm *resultSignatureMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	if err := validateMemberIndex(pbMsg.SenderID); err != nil {
+	senderID, err := group.MemberIndexFromUint32(pbMsg.SenderID)
+	if err != nil {
 		return err
 	}
-	rsm.senderID = group.MemberIndex(pbMsg.SenderID)
+	rsm.senderID = senderID
 
 	resultHash, err := ResultSignatureHashFromBytes(pbMsg.ResultHash)
 	if err != nil {

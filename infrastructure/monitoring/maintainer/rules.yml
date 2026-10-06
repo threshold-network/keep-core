@@ -1,0 +1,110 @@
+groups:
+  - name: keep-maintainer
+    rules:
+      - alert: KeepMaintainerDown
+        expr: up{job="keep-maintainer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Maintainer {{ $labels.instance }} cannot be scraped"
+      - alert: KeepMaintainerTelemetryMissing
+        expr: |
+          up{job="keep-maintainer"} == 1 unless on(job, instance)
+          (performance_spv_maintainer_active
+            and performance_rpc_eth_healthy
+            and performance_rpc_btc_healthy
+            and performance_rpc_eth_last_check_timestamp_seconds
+            and performance_rpc_btc_last_check_timestamp_seconds
+            and performance_rpc_health_check_interval_seconds
+            and performance_spv_maintainer_last_activity_timestamp_seconds
+            and performance_spv_maintainer_last_success_timestamp_seconds
+            and performance_spv_maintainer_last_failure_timestamp_seconds
+            and performance_spv_maintainer_max_backoff_seconds)
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Maintainer {{ $labels.instance }} is missing required telemetry"
+      - alert: KeepMaintainerSPVInactive
+        expr: performance_spv_maintainer_active{job="keep-maintainer"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "SPV processing is inactive on {{ $labels.instance }}"
+      - alert: KeepMaintainerEthereumRPCUnhealthy
+        expr: performance_rpc_eth_healthy{job="keep-maintainer"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Ethereum RPC is unhealthy on {{ $labels.instance }}"
+      - alert: KeepMaintainerBitcoinRPCUnhealthy
+        expr: performance_rpc_btc_healthy{job="keep-maintainer"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Bitcoin RPC is unhealthy on {{ $labels.instance }}"
+      - alert: KeepMaintainerEthereumProbeStalled
+        expr: |
+          time() - performance_rpc_eth_last_check_timestamp_seconds{job="keep-maintainer"}
+            > 3 * performance_rpc_health_check_interval_seconds + 60
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Ethereum RPC probes stopped completing on {{ $labels.instance }}"
+      - alert: KeepMaintainerBitcoinProbeStalled
+        expr: |
+          time() - performance_rpc_btc_last_check_timestamp_seconds{job="keep-maintainer"}
+            > 3 * performance_rpc_health_check_interval_seconds + 60
+        for: 5m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "Bitcoin RPC probes stopped completing on {{ $labels.instance }}"
+      - alert: KeepMaintainerSPVStalled
+        expr: |
+          (time() - performance_spv_maintainer_last_activity_timestamp_seconds{job="keep-maintainer"}
+            > performance_spv_maintainer_max_backoff_seconds + 1800)
+          and (performance_spv_maintainer_active == 1)
+        for: 10m
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "SPV processing stopped making progress on {{ $labels.instance }}"
+      - alert: KeepMaintainerProofTaskFailed
+        expr: |
+          (performance_spv_maintainer_last_failure_timestamp_seconds{job="keep-maintainer"} > 0)
+          and (performance_spv_maintainer_last_failure_timestamp_seconds
+            >= performance_spv_maintainer_last_success_timestamp_seconds)
+        for: 2m
+        labels:
+          severity: warning
+          component: keep-maintainer
+        annotations:
+          summary: "SPV processing has not recovered from a task failure on {{ $labels.instance }}"
+      - alert: KeepMaintainerProofOutsideRelayRange
+        expr: increase(performance_spv_proof_skipped_outside_relay_range_total{job="keep-maintainer"}[1h]) > 0
+        labels:
+          severity: warning
+          component: keep-maintainer
+        annotations:
+          summary: "SPV proofs exceed the relay difficulty range on {{ $labels.instance }}"
+      - alert: KeepMaintainerProofExceedsHeaderLimit
+        expr: increase(performance_spv_proof_skipped_exceeded_max_headers_total{job="keep-maintainer"}[1h]) > 0
+        labels:
+          severity: critical
+          component: keep-maintainer
+        annotations:
+          summary: "SPV proofs exceed the supported header count on {{ $labels.instance }}"

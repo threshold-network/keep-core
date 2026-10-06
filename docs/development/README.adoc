@@ -254,3 +254,61 @@ Development
 ```
 make
 ```
+
+== Electrum server pool and failover
+
+The Bitcoin Electrum client connects through a pool of server URLs: an
+optional explicit `bitcoin.electrum.url` (or, if omitted, a URL chosen
+randomly from the embedded list under `config/_electrum_urls/<network>`),
+plus any `bitcoin.electrum.fallbackURLs` an operator supplies alongside it.
+
+Failover is active once the effective pool holds two or more URLs, whether
+the second URL comes from operator-supplied fallbacks or from a second
+vetted entry in the embedded list.
+
+NOTE: Each network's embedded list currently holds a single entry, so
+failover across embedded servers becomes active only once a second server
+is added to that network's list.
+
+When the pool holds a single URL, the client stays pinned to it: on a
+transport failure it retires and re-dials that same server rather than
+switching, so it never wedges on a half-open socket. An explicit
+`bitcoin.electrum.url` also stays pinned as the pool's primary -- the
+client keeps preferring it and only falls back to `fallbackURLs` on
+failure.
+
+=== What triggers a switch
+
+Only transport-level failures move the client to the next candidate in the
+pool:
+
+* dial failures and connection resets
+* server-initiated shutdowns
+* request timeouts
+* a failed server-version or server-features verification
+
+Authoritative JSON-RPC responses from a server -- a rejected or not-found
+transaction, a height out of range, a fee-oracle error such as `-32603` --
+are treated as valid answers from a healthy server and never trigger a
+switch. Missing fee estimates retry against the other confirmation targets
+on the current server using a single retry budget shared across all
+targets, rather than a separate budget per target; caller cancellation
+never marks a server unhealthy.
+
+=== Keepalive and healing back to the primary
+
+Keepalive is a single-shot ping bounded by
+`bitcoin.electrum.requestTimeout`: a failed ping fails over to the next
+candidate immediately rather than retrying for minutes. Once the client has
+failed over to a non-primary server, it keeps probing the primary in the
+background. After two consecutive successful keepalive ticks on the
+current server, it dials and verifies the primary and, if healthy, swaps
+the live connection back to it -- so the client migrates back to its
+preferred server without operator intervention.
+
+=== Chain identity
+
+The first successfully verified server that reports a non-empty features.genesis_hash establishes the pool's chain identity. Every later candidate must
+report a matching genesis hash or it is rejected as unsuitable for the
+pool; a candidate that omits the field is still accepted, but the client
+logs a warning since its chain identity cannot be confirmed.

@@ -133,7 +133,8 @@ type Chain interface {
 		proposal *tbtc.MovingFundsProposal,
 	) error
 
-	// Submits the moving funds target wallets commitment.
+	// SubmitMovingFundsCommitment submits the moving funds target wallets
+	// commitment.
 	SubmitMovingFundsCommitment(
 		walletPublicKeyHash [20]byte,
 		walletMainUTXO bitcoin.UnspentTransactionOutput,
@@ -150,8 +151,8 @@ type Chain interface {
 		proposal *tbtc.MovedFundsSweepProposal,
 	) error
 
-	// Computes the moving funds commitment hash from the provided public key
-	// hashes of target wallets.
+	// ComputeMovingFundsCommitmentHash computes the moving funds commitment hash
+	// from the provided public key hashes of target wallets.
 	ComputeMovingFundsCommitmentHash(targetWallets [][20]byte) [32]byte
 
 	// GetRedemptionDelay returns the processing delay for the given redemption.

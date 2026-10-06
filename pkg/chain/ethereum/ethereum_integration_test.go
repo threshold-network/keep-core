@@ -20,11 +20,11 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/internal/testutils"
 	beaconabi "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen/abi"
 	ecdsaabi "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	thresholdabi "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/abi"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/operator"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -45,7 +45,7 @@ import (
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
 	if ethereumURL == "" {
-		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping mainnet integration test")
 	}
 
 	client, err := ethclient.Dial(ethereumURL)

@@ -1,7 +1,27 @@
 {
   "files": ["./hardhat.config.ts"],
-  "include": ["./deploy", "./tasks", "./test", "./typechain", "./types"],
+  "include": [
+    "./deploy",
+    "./tasks",
+    "./test",
+    "./typechain",
+    "./types",
+    "./utils",
+    "./scripts"
+  ],
   "compilerOptions": {
-    "esModuleInterop": true
+    "strict": true,
+    // ts-node also needs an explicit target; its fallback is ES5.
+    "target": "ES2020",
+    // TypeScript 6 stopped including every `node_modules/@types` package
+    // automatically, which silently drops the mocha and chai globals. These
+    // are the four that contribute globals here.
+    "types": ["mocha", "chai", "chai-as-promised", "node"],
+    // Required by TypeScript 6 once a project spans several top-level
+    // directories. `--noEmit` does not need it, but ts-node's emit path does,
+    // so hardhat will not start without it.
+    "rootDir": ".",
+    "esModuleInterop": true,
+    "skipLibCheck": true
   }
 }

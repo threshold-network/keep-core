@@ -1,12 +1,13 @@
 package signing
 
 import (
+	"reflect"
+	"testing"
+
 	fuzz "github.com/google/gofuzz"
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"reflect"
-	"testing"
 )
 
 func TestEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
@@ -20,9 +21,10 @@ func TestEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publicKeys := make(map[group.MemberIndex]*ephemeral.PublicKey)
-	publicKeys[group.MemberIndex(211)] = keyPair1.PublicKey
-	publicKeys[group.MemberIndex(19)] = keyPair2.PublicKey
+	publicKeys := map[group.MemberIndex][]byte{
+		group.MemberIndex(211): keyPair1.PublicKey.Marshal(),
+		group.MemberIndex(19):  keyPair2.PublicKey.Marshal(),
+	}
 
 	msg := &ephemeralPublicKeyMessage{
 		senderID:            group.MemberIndex(38),
@@ -45,7 +47,7 @@ func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var (
 			senderID            group.MemberIndex
-			ephemeralPublicKeys map[group.MemberIndex]*ephemeral.PublicKey
+			ephemeralPublicKeys map[group.MemberIndex][]byte
 			sessionID           string
 		)
 
@@ -63,12 +65,14 @@ func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:           sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &ephemeralPublicKeyMessage{})
+		if err := pbutils.RoundTrip(message, &ephemeralPublicKeyMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzEphemeralPublicKeyMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&ephemeralPublicKeyMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&ephemeralPublicKeyMessage{})
 }
 
 func TestTssRoundOneMessage_MarshalingRoundtrip(t *testing.T) {
@@ -118,12 +122,14 @@ func TestFuzzTssRoundOneMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundOneMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundOneMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundOneMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundOneMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundOneMessage{})
 }
 
 func TestTssRoundTwoMessage_MarshalingRoundtrip(t *testing.T) {
@@ -169,12 +175,14 @@ func TestFuzzTssRoundTwoMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:    sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundTwoMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundTwoMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundTwoMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundTwoMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundTwoMessage{})
 }
 
 func TestTssRoundThreeMessage_MarshalingRoundtrip(t *testing.T) {
@@ -217,12 +225,14 @@ func TestFuzzTssRoundThreeMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundThreeMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundThreeMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundThreeMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundThreeMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundThreeMessage{})
 }
 
 func TestTssRoundFourMessage_MarshalingRoundtrip(t *testing.T) {
@@ -265,12 +275,14 @@ func TestFuzzTssRoundFourMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundFourMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundFourMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundFourMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundFourMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundFourMessage{})
 }
 
 func TestTssRoundFiveMessage_MarshalingRoundtrip(t *testing.T) {
@@ -313,12 +325,14 @@ func TestFuzzTssRoundFiveMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundFiveMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundFiveMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundFiveMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundFiveMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundFiveMessage{})
 }
 
 func TestTssRoundSixMessage_MarshalingRoundtrip(t *testing.T) {
@@ -361,12 +375,14 @@ func TestFuzzTssRoundSixMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundSixMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundSixMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundSixMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundSixMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundSixMessage{})
 }
 
 func TestTssRoundSevenMessage_MarshalingRoundtrip(t *testing.T) {
@@ -409,12 +425,14 @@ func TestFuzzTssRoundSevenMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundSevenMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundSevenMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundSevenMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundSevenMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundSevenMessage{})
 }
 
 func TestTssRoundEightMessage_MarshalingRoundtrip(t *testing.T) {
@@ -457,12 +475,14 @@ func TestFuzzTssRoundEightMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundEightMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundEightMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundEightMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundEightMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundEightMessage{})
 }
 
 func TestTssRoundNineMessage_MarshalingRoundtrip(t *testing.T) {
@@ -505,10 +525,174 @@ func TestFuzzTssRoundNineMessage_MarshalingRoundtrip(t *testing.T) {
 			sessionID:        sessionID,
 		}
 
-		_ = pbutils.RoundTrip(message, &tssRoundNineMessage{})
+		if err := pbutils.RoundTrip(message, &tssRoundNineMessage{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFuzzTssRoundNineMessage_Unmarshaler(t *testing.T) {
-	pbutils.FuzzUnmarshaler(&tssRoundNineMessage{})
+	pbutils.AssertUnmarshalDoesNotPanic(&tssRoundNineMessage{})
+}
+
+// --- Benchmarks ---
+
+func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// buildEphemeralKeyMap generates n key pairs and returns the serialized public
+// key map as it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex][]byte {
+	b.Helper()
+	m := make(map[group.MemberIndex][]byte, n)
+	for i := 0; i < n; i++ {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			b.Fatal(err)
+		}
+		m[group.MemberIndex(i+1)] = kp.PublicKey.Marshal()
+	}
+	return m
+}
+
+// BenchmarkMarshalEphemeralPublicKeyMessage_100Keys benchmarks marshaling with
+// a realistic group size (100 members = 99 peer keys per message).
+func BenchmarkMarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+// Benchmarks unmarshaling the wire-format bytes. EC point parsing is
+// deferred to use-time in generateSymmetricKeys (protocol.go).
+func BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// BenchmarkMarshalSigningShareMessage benchmarks the heaviest per-member
+// message in a signing round: round-one carries both broadcast and peer
+// payloads.
+func BenchmarkMarshalSigningShareMessage(b *testing.B) {
+	msg := &tssRoundOneMessage{
+		senderID:         group.MemberIndex(50),
+		broadcastPayload: []byte{1, 2, 3, 4, 5},
+		peersPayload: map[group.MemberIndex][]byte{
+			1: {6, 7, 8, 9, 10},
+			2: {11, 12, 13, 14, 15},
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalSigningShareMessage(b *testing.B) {
+	msg := &tssRoundOneMessage{
+		senderID:         group.MemberIndex(50),
+		broadcastPayload: []byte{1, 2, 3, 4, 5},
+		peersPayload: map[group.MemberIndex][]byte{
+			1: {6, 7, 8, 9, 10},
+			2: {11, 12, 13, 14, 15},
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(tssRoundOneMessage).Unmarshal(data)
+	}
+}
+
+func BenchmarkRoundTripEphemeralKey(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		data, _ := msg.Marshal()
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
 }

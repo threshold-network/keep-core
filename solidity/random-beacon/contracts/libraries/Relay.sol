@@ -168,11 +168,9 @@ library Relay {
     /// @dev Must be used when a soft timeout was hit.
     /// @return Amount by which group members should be slashed
     ///         in case the relay entry was submitted after the soft timeout.
-    function calculateSlashingAmount(Data storage self)
-        internal
-        view
-        returns (uint96)
-    {
+    function calculateSlashingAmount(
+        Data storage self
+    ) internal view returns (uint96) {
         uint256 softTimeout = softTimeoutBlock(self);
 
         if (block.number > softTimeout) {
@@ -222,16 +220,17 @@ library Relay {
     ) internal {
         require(!isRequestInProgress(self), "Relay request in progress");
 
-        self
-            .relayEntrySubmissionFailureSlashingAmount = newRelayEntrySubmissionFailureSlashingAmount;
+        self.relayEntrySubmissionFailureSlashingAmount =
+            newRelayEntrySubmissionFailureSlashingAmount;
     }
 
     /// @notice Retries the current relay request in case a relay entry
     ///         timeout was reported.
     /// @param newGroupId ID of the group chosen to retry the current request.
-    function retryOnEntryTimeout(Data storage self, uint64 newGroupId)
-        internal
-    {
+    function retryOnEntryTimeout(
+        Data storage self,
+        uint64 newGroupId
+    ) internal {
         require(hasRequestTimedOut(self), "Relay request did not time out");
 
         uint64 currentRequestId = self.currentRequestID;
@@ -266,23 +265,19 @@ library Relay {
 
     /// @notice Returns whether a relay entry request is currently in progress.
     /// @return True if there is a request in progress. False otherwise.
-    function isRequestInProgress(Data storage self)
-        internal
-        view
-        returns (bool)
-    {
+    function isRequestInProgress(
+        Data storage self
+    ) internal view returns (bool) {
         return self.currentRequestID != 0;
     }
 
     /// @notice Returns whether the current relay request has timed out.
     /// @return True if the request timed out. False otherwise.
-    function hasRequestTimedOut(Data storage self)
-        internal
-        view
-        returns (bool)
-    {
-        uint256 _relayEntryTimeout = self.relayEntrySoftTimeout +
-            self.relayEntryHardTimeout;
+    function hasRequestTimedOut(
+        Data storage self
+    ) internal view returns (bool) {
+        uint256 _relayEntryTimeout =
+            self.relayEntrySoftTimeout + self.relayEntryHardTimeout;
 
         return
             isRequestInProgress(self) &&
@@ -291,11 +286,9 @@ library Relay {
 
     /// @notice Calculates soft timeout block for the pending relay request.
     /// @return The soft timeout block
-    function softTimeoutBlock(Data storage self)
-        internal
-        view
-        returns (uint256)
-    {
+    function softTimeoutBlock(
+        Data storage self
+    ) internal view returns (uint256) {
         return self.currentRequestStartBlock + self.relayEntrySoftTimeout;
     }
 }

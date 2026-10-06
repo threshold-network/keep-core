@@ -1,8 +1,0 @@
-apiVersion: snapshot.storage.k8s.io/v1
-kind: VolumeSnapshot
-metadata:
-  name: bitcoind-snapshot
-spec:
-  volumeSnapshotClassName: bitcoind
-  source:
-    persistentVolumeClaimName: bitcoind-data-bitcoind-0

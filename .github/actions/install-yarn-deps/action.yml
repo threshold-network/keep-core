@@ -41,6 +41,10 @@ runs:
         # Note: lockfile checksums remain enforced (YARN_CHECKSUM_BEHAVIOR
         # is left at its default), so per-package integrity is still checked.
         export YARN_ENABLE_HARDENED_MODE=0
+        # Git dependencies may run Corepack outside this workspace's pinned
+        # packageManager context. Use its known default there instead of
+        # querying yarn/latest, which can be rate-limited by the npm registry.
+        export COREPACK_DEFAULT_TO_LATEST=0
         corepack enable
         yarn --version
         unset_args=()

@@ -189,8 +189,8 @@ func TestOperatingMembers(t *testing.T) {
 		"all but one inactive": {
 			initialMembers: []MemberIndex{28, 19, 29},
 			updateFunc: func(g *Group) {
-				g.MarkMemberAsDisqualified(19)
-				g.MarkMemberAsDisqualified(29)
+				g.MarkMemberAsInactive(19)
+				g.MarkMemberAsInactive(29)
 			},
 			expectedOperatingMembers: []MemberIndex{28},
 		},

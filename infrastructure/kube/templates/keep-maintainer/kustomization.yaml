@@ -1,5 +1,6 @@
 resources:
   - maintainer-statefulset.yaml
+  - maintainer-service.yaml
 
 commonLabels:
   app: keep-maintainer

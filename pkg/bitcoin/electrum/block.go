@@ -29,9 +29,10 @@ func convertBlockHeader(electrumResult *electrum.GetBlockHeaderResult) (*bitcoin
 		Version:                 b.Version,
 		PreviousBlockHeaderHash: bitcoin.Hash(b.PrevBlock),
 		MerkleRootHash:          bitcoin.Hash(b.MerkleRoot),
-		Time:                    uint32(b.Timestamp.Unix()),
-		Bits:                    b.Bits,
-		Nonce:                   b.Nonce,
+		// #nosec G115 -- wire.BlockHeader.Deserialize reads the timestamp from a uint32 field.
+		Time:  uint32(b.Timestamp.Unix()),
+		Bits:  b.Bits,
+		Nonce: b.Nonce,
 	}
 
 	return result, nil

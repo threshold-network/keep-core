@@ -179,21 +179,28 @@ func TestGenerateSymmetricKeys(t *testing.T) {
 
 		// Assert all symmetric keys stored by this member are correct.
 		for otherMemberID, actualKey := range member.symmetricKeys {
-			var otherMemberEphemeralPublicKey *ephemeral.PublicKey
+			var otherMemberEphemeralPublicKeyBytes []byte
 			for _, message := range messages {
 				if message.senderID == otherMemberID {
-					if ephemeralPublicKey, ok := message.ephemeralPublicKeys[member.id]; ok {
-						otherMemberEphemeralPublicKey = ephemeralPublicKey
+					if keyBytes, ok := message.ephemeralPublicKeys[member.id]; ok {
+						otherMemberEphemeralPublicKeyBytes = keyBytes
 					}
 				}
 			}
 
-			if otherMemberEphemeralPublicKey == nil {
+			if otherMemberEphemeralPublicKeyBytes == nil {
 				t.Errorf(
 					"[member:%v] no ephemeral public key from member [%v]",
 					member.id,
 					otherMemberID,
 				)
+			}
+
+			otherMemberEphemeralPublicKey, err := ephemeral.UnmarshalPublicKey(
+				otherMemberEphemeralPublicKeyBytes,
+			)
+			if err != nil {
+				t.Fatalf("could not unmarshal ephemeral public key: %v", err)
 			}
 
 			expectedKey := ephemeral.SymmetricKey(
@@ -258,6 +265,78 @@ func TestGenerateSymmetricKeys_InvalidEphemeralPublicKeyMessage(t *testing.T) {
 				err,
 			)
 		}
+	}
+}
+
+func TestGenerateSymmetricKeys_CorruptEphemeralPublicKeyBytes(t *testing.T) {
+	members, messages, err := initializeSymmetricKeyGeneratingMembersGroup(
+		dishonestThreshold,
+		groupSize,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace member 2's ephemeral public key for member 1 with garbage.
+	// The key is still present so isValidEphemeralPublicKeyMessage passes;
+	// only member 1 encounters the parse error during ECDH.
+	misbehavingMemberID := group.MemberIndex(2)
+	victimMemberID := group.MemberIndex(1)
+	messages[misbehavingMemberID-1].ephemeralPublicKeys[victimMemberID] = []byte{0x00, 0x01, 0x02}
+
+	for _, member := range members {
+		var receivedMessages []*ephemeralPublicKeyMessage
+		for _, message := range messages {
+			if message.senderID != member.id {
+				receivedMessages = append(receivedMessages, message)
+			}
+		}
+
+		err := member.generateSymmetricKeys(receivedMessages)
+
+		// A corrupt key from one member must never abort another member's
+		// entire round: the sender is skipped instead.
+		if err != nil {
+			t.Errorf("[member:%v] unexpected error: %v", member.id, err)
+		}
+
+		expectedKeysCount := groupSize - 1
+		if member.id == victimMemberID {
+			// The victim skips the misbehaving sender, so it stores one
+			// fewer symmetric key than everyone else.
+			expectedKeysCount--
+
+			if _, ok := member.symmetricKeys[misbehavingMemberID]; ok {
+				t.Errorf(
+					"[member:%v] expected no symmetric key stored for "+
+						"misbehaving member [%v]",
+					member.id,
+					misbehavingMemberID,
+				)
+			}
+		}
+
+		testutils.AssertIntsEqual(
+			t,
+			fmt.Sprintf("number of stored symmetric keys for member [%v]", member.id),
+			expectedKeysCount,
+			len(member.symmetricKeys),
+		)
+	}
+
+	// All members in this test share a single *group.Group instance (see
+	// initializeEphemeralKeyPairGeneratingMembersGroup), so the effect of
+	// the victim marking the misbehaving member inactive is visible from
+	// any member's reference to it.
+	if !reflect.DeepEqual(
+		[]group.MemberIndex{misbehavingMemberID},
+		members[0].group.InactiveMemberIndexes(),
+	) {
+		t.Errorf(
+			"expected member [%v] to be marked inactive, got inactive members: %v",
+			misbehavingMemberID,
+			members[0].group.InactiveMemberIndexes(),
+		)
 	}
 }
 

@@ -338,13 +338,13 @@ func (mft *MovingFundsTask) findNewTargetWallets(
 		if wallet.State == tbtc.StateLive {
 			targetWallets = append(targetWallets, walletPubKeyHash)
 		}
-		if len(targetWallets) == int(targetWalletsCount) {
+		if uint64(len(targetWallets)) == targetWalletsCount {
 			// Stop the iteration if enough live wallets have been gathered.
 			break
 		}
 	}
 
-	if len(targetWallets) != int(targetWalletsCount) {
+	if uint64(len(targetWallets)) != targetWalletsCount {
 		return nil, fmt.Errorf(
 			"%w: required [%v] target wallets; gathered [%v]",
 			ErrNotEnoughTargetWallets,
@@ -639,32 +639,5 @@ func EstimateMovingFundsFee(
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(targetWalletsCount, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > txMaxTotalFee {
-		return 0, ErrFeeTooHigh
-	}
-
-	// Enforce the safe minimum fee rate and buffer so a non-RBF moving funds
-	// transaction is never broadcast below the floor where it could get stuck
-	// and jam the wallet.
-	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxTotalFee)
-	if err != nil {
-		return 0, err
-	}
-
-	return totalFee, nil
+	return estimateCappedFee(btcChain, sizeEstimator, txMaxTotalFee, ErrFeeTooHigh)
 }

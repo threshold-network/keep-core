@@ -46,6 +46,15 @@ type MetricsRecorder interface {
 	RecordDuration(name string, duration time.Duration)
 }
 
+// fullMetricsRecorder is a MetricsRecorder that also supports gauge metrics.
+// It is the contract for components that record counters, durations, and
+// gauges (e.g. message queue sizes), unlike the transport which records only
+// counters and durations.
+type fullMetricsRecorder interface {
+	MetricsRecorder
+	SetGauge(name string, value float64)
+}
+
 // transport constructs an encrypted and authenticated connection for a peer.
 type transport struct {
 	protocolID     protocol.ID

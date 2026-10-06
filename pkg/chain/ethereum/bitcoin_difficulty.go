@@ -10,11 +10,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 )
 
@@ -295,9 +295,7 @@ func (bdc *BitcoinDifficultyChain) RetargetWithRefund(headers []*bitcoin.BlockHe
 		)
 	}
 
-	// Add 20% to the gas estimate as the transaction tends to fail with the
-	// original gas estimate.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	// Update Bitcoin difficulty via LightRelayMaintainerProxy.
 	tx, err := bdc.lightRelayMaintainerProxy.Retarget(

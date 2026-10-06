@@ -45,8 +45,8 @@ func NewTimeTicker(ctx context.Context, duration time.Duration) *Ticker {
 	go func() {
 		for {
 			select {
-			case tick := <-timeTicker.C:
-				ticks <- uint64(tick.Unix())
+			case <-timeTicker.C:
+				ticks <- 0
 
 			case <-ctx.Done():
 				timeTicker.Stop()

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/tbtcpg"
+	"math"
 	"math/big"
 	"time"
+
+	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-core/internal/hexutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -91,8 +93,19 @@ func (dsts *FindDepositsToSweepTestScenario) UnmarshalJSON(data []byte) error {
 	for i, deposit := range unmarshaled.Deposits {
 		d := new(Deposit)
 
+		if deposit.Age < 0 || deposit.Age > math.MaxInt64/int64(time.Second) || averageBlockTime.Milliseconds() <= 0 {
+			return fmt.Errorf("invalid age or average block time")
+		}
 		age := time.Duration(deposit.Age) * time.Second
-		ageBlocks := uint64(age.Milliseconds() / averageBlockTime.Milliseconds())
+		blockCount := age.Milliseconds() / averageBlockTime.Milliseconds()
+		if blockCount < 0 {
+			return fmt.Errorf("invalid block age")
+		}
+		ageBlocks := uint64(blockCount)
+
+		if ageBlocks > currentBlock {
+			return fmt.Errorf("invalid block age: age exceeds current block")
+		}
 
 		revealedAt := now.Add(-age)
 		revealBlockNumber := currentBlock - ageBlocks
@@ -170,10 +183,7 @@ func (dsp *depositSweepProposal) convert() (
 		copy(walletPublicKeyHash[:], hexToSlice(dsp.WalletPublicKeyHash))
 	}
 
-	result.DepositsKeys = make([]struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}, len(dsp.DepositsKeys))
+	result.DepositsKeys = make([]tbtc.DepositKey, len(dsp.DepositsKeys))
 	for i, depositKey := range dsp.DepositsKeys {
 		fundingTxHash, err := bitcoin.NewHashFromString(depositKey.FundingTxHash, bitcoin.ReversedByteOrder)
 		if err != nil {
@@ -274,6 +284,8 @@ func (psts *ProposeSweepTestScenario) UnmarshalJSON(data []byte) error {
 
 	// Unmarshal expected error
 	if len(unmarshaled.ExpectedErr) > 0 {
+		// fmt.Errorf requires a constant format string; ExpectedErr is a
+		// plain string so use errors.New to avoid formatting interpretation.
 		psts.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
 	}
 
@@ -333,8 +345,19 @@ func (fprts *FindPendingRedemptionsTestScenario) UnmarshalJSON(data []byte) erro
 		var wpkh [20]byte
 		copy(wpkh[:], hexToSlice(pr.WalletPublicKeyHash))
 
+		if pr.Age < 0 || pr.Age > math.MaxInt64/int64(time.Second) || averageBlockTime.Milliseconds() <= 0 {
+			return fmt.Errorf("invalid age or average block time")
+		}
 		age := time.Duration(pr.Age) * time.Second
-		ageBlocks := uint64(age.Milliseconds() / averageBlockTime.Milliseconds())
+		blockCount := age.Milliseconds() / averageBlockTime.Milliseconds()
+		if blockCount < 0 {
+			return fmt.Errorf("invalid block age")
+		}
+		ageBlocks := uint64(blockCount)
+
+		if ageBlocks > currentBlock {
+			return fmt.Errorf("invalid block age: age exceeds current block")
+		}
 
 		requestedAt := now.Add(-age)
 		requestBlock := currentBlock - ageBlocks

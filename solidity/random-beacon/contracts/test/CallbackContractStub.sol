@@ -10,10 +10,10 @@ contract CallbackContractStub is IRandomBeaconConsumer {
     uint256 public blockNumber;
     bool public shouldFail;
 
-    function __beaconCallback(uint256 _lastEntry, uint256 _blockNumber)
-        external
-        override
-    {
+    function __beaconCallback(
+        uint256 _lastEntry,
+        uint256 _blockNumber
+    ) external override {
         if (shouldFail) {
             revert("error");
         }

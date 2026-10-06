@@ -20,7 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	chainethereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	chainethereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 // Contract names the fixture serves reads for. They double as the keys the

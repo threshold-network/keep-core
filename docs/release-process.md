@@ -9,6 +9,29 @@ Keep Core now supports fully automated releases through GitHub Actions. When you
 3. Creates a GitHub release with artifacts
 4. Generates release notes
 
+## Release Tracking PR (dev → main)
+
+When a release cycle accumulates a large or interconnected set of
+changes, the project uses a long-lived aggregation PR instead of
+landing everything via normal `feature → main` PRs:
+
+- **Base:** `main`
+- **Head:** a moving `dev` branch that accumulates the cycle's work by
+  merging each sub-PR into `dev` before the sub-PR closes. Sub-PRs are
+  not merged into `main` — `main` advances only when the aggregation
+  PR itself merges at the end of the cycle.
+- **State:** the PR stays open across the whole cycle. Its diff
+  against `main` is the live view of "what is still queued for the
+  next release."
+
+Sub-PRs are still reviewed and CI'd independently — the aggregation
+PR is just the place to watch the cumulative state. Sub-PRs target `dev`
+as their base branch; maintainers merge them into `dev` after review.
+When the cycle is ready to ship, fast-forward `dev` to the latest `main`,
+resolve any final conflicts, and merge the aggregation PR into `main`
+as a single merge commit. The version tag is then cut from `main` per
+"Creating a Release" below.
+
 ## Creating a Release
 
 ### 1. Prepare the Release

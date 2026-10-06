@@ -2,8 +2,11 @@ package bls
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
+	"sort"
 	"testing"
+	"time"
 
 	bn256 "github.com/ethereum/go-ethereum/crypto/bn256/cloudflare"
 
@@ -184,4 +187,120 @@ func TestThresholdBLS(t *testing.T) {
 		})
 	}
 
+}
+
+// --- Benchmarks ---
+
+func BenchmarkSign(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := pi.Bytes()
+	secretKey := big.NewInt(123)
+	b.ResetTimer()
+	for range b.N {
+		Sign(secretKey, message)
+	}
+}
+
+func BenchmarkVerify(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := pi.Bytes()
+	secretKey := big.NewInt(123)
+	publicKey := new(bn256.G2).ScalarBaseMult(secretKey)
+	signature := Sign(secretKey, message)
+	b.ResetTimer()
+	for range b.N {
+		Verify(publicKey, message, signature)
+	}
+}
+
+// BenchmarkAggregateBLS benchmarks aggregate signature verification for group
+// sizes representative of small committees (10), medium (50), and production
+// random beacon groups (100).
+func BenchmarkAggregateBLS(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := new(bn256.G1).ScalarBaseMult(pi)
+
+	for _, n := range []int{10, 50, 100} {
+		n := n
+		var signatures []*bn256.G1
+		var publicKeys []*bn256.G2
+		for i := 0; i < n; i++ {
+			k, _, err := bn256.RandomG1(rand.Reader)
+			if err != nil {
+				b.Fatal(err)
+			}
+			pub := new(bn256.G2).ScalarBaseMult(k)
+			publicKeys = append(publicKeys, pub)
+			signatures = append(signatures, SignG1(k, message))
+		}
+		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
+			b.ResetTimer()
+			for range b.N {
+				aggSig := AggregateG1Points(signatures)
+				aggPub := AggregateG2Points(publicKeys)
+				VerifyG1(aggPub, message, aggSig)
+			}
+		})
+	}
+}
+
+// BenchmarkThresholdVerify benchmarks threshold signature recovery with the
+// 33-of-64 configuration used by the production random beacon.
+func BenchmarkThresholdVerify(b *testing.B) {
+	pi, _ := new(big.Int).SetString(
+		"31415926535897932384626433832795028841971693993751058209749445923078164062862", 10)
+	message := new(bn256.G1).ScalarBaseMult(pi)
+
+	const numPlayers = 64
+	const threshold = 33
+
+	var masterSecretKey []*big.Int
+	var signatureShares []*SignatureShare
+
+	for i := 0; i < threshold; i++ {
+		sk, _, err := bn256.RandomG2(rand.Reader)
+		if err != nil {
+			b.Fatal(err)
+		}
+		masterSecretKey = append(masterSecretKey, sk)
+	}
+	for i := 1; i <= numPlayers; i++ {
+		share := GetSecretKeyShare(masterSecretKey, i)
+		signatureShares = append(signatureShares, &SignatureShare{
+			I: i,
+			V: SignG1(share.V, message),
+		})
+	}
+
+	const minimumLatencySamples = 100
+	latencies := make([]time.Duration, 0, max(b.N, minimumLatencySamples))
+	b.ResetTimer()
+	for range b.N {
+		start := time.Now()
+		_, _ = RecoverSignature(signatureShares[:threshold], threshold)
+		latencies = append(latencies, time.Since(start))
+	}
+	b.StopTimer()
+
+	// Keep p99 meaningful even when Go calibrates a short benchmark run to
+	// fewer than 100 timed iterations.
+	for len(latencies) < minimumLatencySamples {
+		start := time.Now()
+		_, _ = RecoverSignature(signatureShares[:threshold], threshold)
+		latencies = append(latencies, time.Since(start))
+	}
+
+	sort.Slice(latencies, func(i, j int) bool {
+		return latencies[i] < latencies[j]
+	})
+	reportPercentile := func(percentile int, unit string) {
+		index := (percentile*len(latencies)+99)/100 - 1
+		b.ReportMetric(float64(latencies[index].Nanoseconds()), unit)
+	}
+	reportPercentile(50, "p50-ns/op")
+	reportPercentile(95, "p95-ns/op")
+	reportPercentile(99, "p99-ns/op")
 }

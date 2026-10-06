@@ -3,7 +3,6 @@
 package pbutils
 
 import (
-	"crypto/ecdsa"
 	"math/big"
 
 	"github.com/btcsuite/btcd/btcec"
@@ -38,8 +37,15 @@ func RoundTrip(
 	return nil
 }
 
-// FuzzUnmarshaler tests given unmarshaler with random bytes.
-func FuzzUnmarshaler(unmarshaler pb.Unmarshaler) {
+// AssertUnmarshalDoesNotPanic feeds the given unmarshaler 100 random byte
+// slices and fails the test only if one of them panics.
+//
+// It deliberately discards the unmarshal error: random bytes are almost never a
+// valid message, so requiring a nil error would fail constantly. That makes
+// this a crash check, not a correctness check. It cannot detect an unmarshaler
+// that silently accepts a malformed message, so a caller needing that guarantee
+// must assert it separately.
+func AssertUnmarshalDoesNotPanic(unmarshaler pb.Unmarshaler) {
 	for i := 0; i < 100; i++ {
 		var messageBytes []byte
 
@@ -73,30 +79,49 @@ func fuzzBigInt() func(*big.Int, fuzz.Continue) {
 
 func fuzzEphemeralPublicKey() func(*ephemeral.PublicKey, fuzz.Continue) {
 	return func(key *ephemeral.PublicKey, c fuzz.Continue) {
-		var x, y big.Int
+		var scalar big.Int
 
-		c.Fuzz(&x)
-		c.Fuzz(&y)
+		c.Fuzz(&scalar)
 
-		key.Curve = btcec.S256()
-		key.X = &x
-		key.Y = &y
+		// Derive the point from a scalar instead of fuzzing X and Y directly.
+		// Arbitrary X and Y are almost never a point on the curve, and their
+		// compressed form is not 33 bytes, so ParsePubKey rejects it and no
+		// round-trip through Marshal/Unmarshal can succeed.
+		curve := btcec.S256()
+		x, y := curve.ScalarBaseMult(normalizeScalar(&scalar).Bytes())
+
+		key.Curve = curve
+		key.X = x
+		key.Y = y
 	}
 }
 
 func fuzzEphemeralPrivateKey() func(*ephemeral.PrivateKey, fuzz.Continue) {
 	return func(key *ephemeral.PrivateKey, c fuzz.Continue) {
-		var (
-			publicKey ephemeral.PublicKey
-			d         big.Int
-		)
+		var scalar big.Int
 
-		c.Fuzz(&publicKey)
-		c.Fuzz(&d)
+		c.Fuzz(&scalar)
 
-		key.PublicKey = ecdsa.PublicKey(publicKey)
-		key.D = &d
+		// Derive both halves from one scalar so the key pair is internally
+		// consistent. Fuzzing the public key and D independently produces a
+		// private key whose D does not generate its own public point, which
+		// IsKeyMatching rejects and which makes any ECDH round trip meaningless.
+		curve := btcec.S256()
+		priv, _ := btcec.PrivKeyFromBytes(curve, normalizeScalar(&scalar).Bytes())
+
+		*key = ephemeral.PrivateKey(*priv)
 	}
+}
+
+// normalizeScalar reduces a fuzzed value into [1, N-1], the range of valid
+// secp256k1 private scalars, excluding zero so the derived point is never the
+// point at infinity.
+func normalizeScalar(scalar *big.Int) *big.Int {
+	curve := btcec.S256()
+
+	normalized := new(big.Int).Mod(scalar, new(big.Int).Sub(curve.N, big.NewInt(1)))
+
+	return normalized.Add(normalized, big.NewInt(1))
 }
 
 func fuzzG1() func(*bn256.G1, fuzz.Continue) {

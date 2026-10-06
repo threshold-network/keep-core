@@ -115,7 +115,10 @@ func TestTransactionMonitor(t *testing.T) {
 	chain := newLocalBitcoinChain()
 	recorder := newCountingMetricsRecorder()
 
-	monitor := newTransactionMonitor(chain)
+	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	monitor.setMetricsRecorder(recorder)
 
 	tx := &bitcoin.Transaction{}
@@ -137,7 +140,7 @@ func TestTransactionMonitor(t *testing.T) {
 	// deliberately: with a real clock the check-time drift always nudges the
 	// elapsed time a hair past any exact backdated value, so it cannot be pinned
 	// deterministically without an injectable clock.
-	ageTransaction(monitor, txHash, defaultStuckTransactionThreshold-time.Minute)
+	ageTransaction(monitor, txHash, DefaultTransactionMonitorStuckThreshold-time.Minute)
 	monitor.check(context.Background())
 	if got := stuckCount(); got != 0 {
 		t.Fatalf("expected no alert at the threshold boundary; got counter [%v]", got)
@@ -166,7 +169,10 @@ func TestTransactionMonitor(t *testing.T) {
 // table.
 func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	monitor.setMetricsRecorder(recorder)
 
 	tx := &bitcoin.Transaction{}
@@ -177,7 +183,7 @@ func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 	// the stuck threshold and the give-up age. It must still fire exactly one
 	// stuck alert (the alert runs before eviction) and then be evicted rather
 	// than tracked forever.
-	ageTransaction(monitor, txHash, transactionMonitorMaxTrackingAge+time.Minute)
+	ageTransaction(monitor, txHash, DefaultTransactionMonitorMaxTrackingAge+time.Minute)
 	monitor.check(context.Background())
 
 	if got := recorder.GetCounterValue(
@@ -196,7 +202,10 @@ func TestTransactionMonitor_GivesUpOnNeverConfirming(t *testing.T) {
 func TestTransactionMonitor_CheckBudgetBoundsLookup(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1}
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
-	monitor := newTransactionMonitor(chain)
+	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	monitor.track(blockedTxHash, [20]byte{})
 
@@ -255,7 +264,10 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 	blockedTxHash := bitcoin.Hash{1} // oldest; its lookup hangs until the budget expires
 	chain := newBlockingTransactionConfirmationsChain(blockedTxHash)
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(chain)
+	monitor, err := newTransactionMonitor(chain, TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	monitor.setMetricsRecorder(recorder)
 
 	newerTxHash := bitcoin.Hash{2}
@@ -264,8 +276,8 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 
 	// Both transactions are past the stuck threshold; the blocked one is older so
 	// oldest-first ordering checks it first and its lookup consumes the budget.
-	ageTransaction(monitor, blockedTxHash, defaultStuckTransactionThreshold+2*time.Hour)
-	ageTransaction(monitor, newerTxHash, defaultStuckTransactionThreshold+time.Hour)
+	ageTransaction(monitor, blockedTxHash, DefaultTransactionMonitorStuckThreshold+2*time.Hour)
+	ageTransaction(monitor, newerTxHash, DefaultTransactionMonitorStuckThreshold+time.Hour)
 
 	// Release the intentionally blocked backend on exit so its lookup goroutine
 	// is never left parked.
@@ -319,21 +331,24 @@ func TestTransactionMonitor_BudgetExpiryStillAlertsOldest(t *testing.T) {
 // past its bound.
 func TestTransactionMonitor_CapacityBound(t *testing.T) {
 	recorder := newCountingMetricsRecorder()
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	monitor.setMetricsRecorder(recorder)
 
 	const excess = 10
-	for i := 0; i < transactionMonitorMaxTracked+excess; i++ {
+	for i := 0; i < DefaultTransactionMonitorMaxTracked+excess; i++ {
 		var h bitcoin.Hash
 		h[0] = byte(i)
 		h[1] = byte(i >> 8)
 		monitor.track(h, [20]byte{})
 	}
 
-	if got := trackedCount(monitor); got != transactionMonitorMaxTracked {
+	if got := trackedCount(monitor); got != DefaultTransactionMonitorMaxTracked {
 		t.Fatalf(
 			"expected tracking table bounded to [%d]; got [%d]",
-			transactionMonitorMaxTracked,
+			DefaultTransactionMonitorMaxTracked,
 			got,
 		)
 	}
@@ -355,7 +370,10 @@ func TestTransactionMonitor_CapacityBound(t *testing.T) {
 // transactions oldest-first, so an old transaction near the stuck threshold is
 // never starved when a pass hits its time budget (Go map order is randomized).
 func TestTransactionMonitor_SnapshotByAge(t *testing.T) {
-	monitor := newTransactionMonitor(newLocalBitcoinChain())
+	monitor, err := newTransactionMonitor(newLocalBitcoinChain(), TransactionMonitorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var h1, h2, h3 bitcoin.Hash
 	h1[0], h2[0], h3[0] = 1, 2, 3

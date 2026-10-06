@@ -354,6 +354,7 @@ var submitDepositSweepProofCommand = cobra.Command{
 			requiredConfirmations,
 			btcChain,
 			tbtcChain,
+			nil,
 		); err != nil {
 			return fmt.Errorf("failed to submit deposit sweep proof [%v]", err)
 		}
@@ -444,6 +445,7 @@ var submitRedemptionProofCommand = cobra.Command{
 			requiredConfirmations,
 			btcChain,
 			tbtcChain,
+			nil,
 		); err != nil {
 			return fmt.Errorf("failed to submit redemption proof [%v]", err)
 		}

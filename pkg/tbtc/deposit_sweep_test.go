@@ -42,10 +42,7 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 			}
 
 			// depositsKeys will be needed to build the proposal instance.
-			depositsKeys := make([]struct {
-				FundingTxHash      bitcoin.Hash
-				FundingOutputIndex uint32
-			}, len(scenario.Deposits))
+			depositsKeys := make([]DepositKey, len(scenario.Deposits))
 
 			// depositsExtraInfo will be needed to perform on-chain proposal
 			// validation.
@@ -66,10 +63,7 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				depositsKeys[i] = struct {
-					FundingTxHash      bitcoin.Hash
-					FundingOutputIndex uint32
-				}{
+				depositsKeys[i] = DepositKey{
 					FundingTxHash:      fundingTxHash,
 					FundingOutputIndex: fundingOutputIndex,
 				}
@@ -316,6 +310,152 @@ func TestAssembleDepositSweepTransaction(t *testing.T) {
 				scenario.ExpectedSweepTransactionWitnessHash.Hex(bitcoin.InternalByteOrder),
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
+		})
+	}
+}
+
+// capturingLogger wraps testutils.MockLogger and records Warnf calls for
+// assertions.
+type capturingLogger struct {
+	testutils.MockLogger
+	warnings []string
+}
+
+func (cl *capturingLogger) Warnf(format string, args ...interface{}) {
+	cl.warnings = append(cl.warnings, fmt.Sprintf(format, args...))
+}
+
+// depositSweepFeeCheckChain is a minimal stub satisfying the chain interface
+// ValidateDepositSweepProposal requires. Its ValidateDepositSweepProposal
+// unconditionally reports the proposal as valid, and its other two methods
+// are never invoked for a proposal with no deposits. This isolates the
+// follower-side sweep-fee soft check (deposit_sweep.go, below the
+// "calling chain for proposal validation" log line) from on-chain proposal
+// validation and deposit-lookup concerns that the soft check does not
+// depend on.
+type depositSweepFeeCheckChain struct{}
+
+func (depositSweepFeeCheckChain) PastDepositRevealedEvents(
+	*DepositRevealedEventFilter,
+) ([]*DepositRevealedEvent, error) {
+	return nil, nil
+}
+
+func (depositSweepFeeCheckChain) ValidateDepositSweepProposal(
+	[20]byte,
+	*DepositSweepProposal,
+	[]struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return nil
+}
+
+func (depositSweepFeeCheckChain) GetDepositRequest(
+	bitcoin.Hash,
+	uint32,
+) (*DepositChainRequest, bool, error) {
+	return nil, false, nil
+}
+
+// TestValidateDepositSweepProposal_SweepFeeSoftCheck exercises the
+// follower-side soft check on the leader-proposed sweep fee. The check is
+// log-only by design (see threshold-network/keep-core#4171): it must warn
+// about an unsafe fee but must never fail proposal validation because of it.
+func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
+	var walletPublicKeyHash [20]byte
+	stubChain := depositSweepFeeCheckChain{}
+	btcChain := newLocalBitcoinChain()
+
+	// Compute the exact safe-minimum fee for a proposal with no deposits
+	// using the same estimator call the soft check itself performs
+	// (deposit_sweep.go), so the boundary between "below" and "at/above" the
+	// floor is derived rather than hardcoded. The floor is the buffered
+	// minimum that warnIfProposedWalletTxFeeBelowBufferedFloor
+	// (proposal_fee_check.go) recomputes from the bare sweep floor using the
+	// WalletTxFeeBufferPercent mirror (the
+	// 25% safety buffer that tbtcpg.applyWalletTxFeeFloor also reapplies on
+	// the leader side). Keeping the formula here in sync with the helper is
+	// exactly the property this test exercises.
+	sweepTxSize, err := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddScriptHashInputs(0, DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufferedRate := (MinWalletTxSatPerVByteFee*(100+WalletTxFeeBufferPercent) +
+		99) / 100
+	minBufferedSweepTxFee := big.NewInt(int64(bufferedRate) * sweepTxSize)
+
+	scenarios := map[string]struct {
+		fee        *big.Int
+		expectWarn bool
+	}{
+		"fee below the safe buffered minimum": {
+			fee:        new(big.Int).Sub(minBufferedSweepTxFee, big.NewInt(1)),
+			expectWarn: true,
+		},
+		"fee at the safe buffered minimum": {
+			fee:        minBufferedSweepTxFee,
+			expectWarn: false,
+		},
+		"fee above the safe buffered minimum": {
+			fee:        new(big.Int).Add(minBufferedSweepTxFee, big.NewInt(1000)),
+			expectWarn: false,
+		},
+		// A nil SweepTxFee cannot occur on the real production path (see the
+		// comment on the nil case in deposit_sweep.go): the on-chain
+		// WalletProposalValidator call a few lines above the soft check
+		// already ABI-packs the fee and panics first, and wire
+		// deserialization always constructs a non-nil value. This scenario
+		// exists to lock in the defense-in-depth behavior for callers, like
+		// this test's stub chain, that can hand the soft check a nil fee
+		// directly.
+		"nil fee from a test/mock caller": {
+			fee:        nil,
+			expectWarn: true,
+		},
+	}
+
+	for name, scenario := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			proposal := &DepositSweepProposal{
+				SweepTxFee: scenario.fee,
+			}
+
+			logger := &capturingLogger{}
+
+			_, err := ValidateDepositSweepProposal(
+				logger,
+				walletPublicKeyHash,
+				proposal,
+				0,
+				stubChain,
+				btcChain,
+			)
+			if err != nil {
+				t.Fatalf(
+					"expected the log-only soft check to never fail "+
+						"validation; got error: [%v]",
+					err,
+				)
+			}
+
+			gotWarn := len(logger.warnings) > 0
+			if gotWarn != scenario.expectWarn {
+				t.Errorf(
+					"unexpected warning presence for fee [%v]\n"+
+						"expected warning: %v\nactual warning:   %v\n"+
+						"captured warnings: %v",
+					scenario.fee,
+					scenario.expectWarn,
+					gotWarn,
+					logger.warnings,
+				)
+			}
 		})
 	}
 }

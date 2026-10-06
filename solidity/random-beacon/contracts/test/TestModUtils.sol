@@ -82,7 +82,7 @@ contract TestModUtils {
         // a simple test
         require(a.modExp(2, 5) == 1, "");
         // test for overflow - (2 ^ 256 - 1) ^ 2 % alt_bn128_P
-        uint256 almostOverflow = (2**256 - 1);
+        uint256 almostOverflow = (2 ** 256 - 1);
         uint256 result = almostOverflow.modExp(
             2,
             21888242871839275222246405745257275088696311157297823662689037894645226208583

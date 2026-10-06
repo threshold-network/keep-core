@@ -1,3 +1,5 @@
+import waitForConfirmations from "../utils/wait-for-confirmations"
+
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction, DeployOptions } from "hardhat-deploy/types"
 
@@ -15,15 +17,18 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     "RandomBeaconChaosnet",
     {
       ...deployOptions,
-    }
+    },
   )
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      RandomBeaconChaosnet.transactionHash,
-      2,
-      300000
-    )
+    if (RandomBeaconChaosnet.transactionHash) {
+      await waitForConfirmations(
+        hre.ethers.provider,
+        RandomBeaconChaosnet.transactionHash,
+        2,
+        300000,
+      )
+    }
     await helpers.etherscan.verify(RandomBeaconChaosnet)
   }
 
