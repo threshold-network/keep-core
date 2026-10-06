@@ -224,12 +224,30 @@ func (rrt *ReservationReanchorTask) Run(
 
 	// One target search serves every reservation of this pass, so
 	// registrations and wallet states are read at most once per pass.
+	headTime, err := rrt.chain.GetLatestBlockTimestamp()
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"cannot get the chain head timestamp: [%w]",
+			err,
+		)
+	}
+	walletParameters, err := rrt.chain.GetWalletParameters()
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"cannot get wallet parameters: [%w]",
+			err,
+		)
+	}
 	targets := rrt.newReanchorTargetSearch(
 		taskLogger,
 		walletPublicKeyHash,
 		params.MaxReservationsPerWallet,
 		maxReservationsAmountPerWallet,
+		headTime,
+		walletParameters.CreationPeriod,
 	)
+
+	var waitingOnAgedTarget bool
 
 reservationLoop:
 	for _, reservationKey := range reservationKeys {
@@ -299,6 +317,74 @@ reservationLoop:
 				continue reservationLoop
 			}
 
+			// G1-L25: re-read the action state just before proposing. The
+			// generation may have advanced (e.g. another party's proposal
+			// was mined) in the window since the pass-start read; proposing
+			// against a stale pending action would revert. The on-chain
+			// validation in ProposeReservationReanchor also re-reads, but
+			// we catch the drift here to avoid wasted fee estimation.
+			freshAction, err := rrt.chain.GetReservationAction(
+				reservationKey,
+				reservation.RequestNonce,
+			)
+			if err != nil {
+				taskLogger.Errorf(
+					"cannot re-read reservation action for [0x%x] nonce [%d] "+
+						"before resume: [%v]; skipping for this pass",
+					reservationKey,
+					reservation.RequestNonce,
+					err,
+				)
+				continue reservationLoop
+			}
+			if freshAction.ActionType != tbtc.ReservationActionTypeReanchor ||
+				freshAction.State != tbtc.ReservationActionStatePending ||
+				freshAction.TargetWalletPublicKeyHash != action.TargetWalletPublicKeyHash {
+				taskLogger.Infof(
+					"reservation [0x%x] generation [%d] changed before resume "+
+						"(type=%v, state=%v, target=0x%x); skipping",
+					reservationKey,
+					reservation.RequestNonce,
+					freshAction.ActionType,
+					freshAction.State,
+					freshAction.TargetWalletPublicKeyHash,
+				)
+				continue reservationLoop
+			}
+
+			// G1-F2/G1-F12: a target wallet must have aged out of its
+			// creation period before it can be a re-anchor destination.
+			targetData, err := rrt.chain.GetWallet(freshAction.TargetWalletPublicKeyHash)
+			if err != nil {
+				taskLogger.Errorf(
+					"cannot get target wallet [0x%x] for reservation [0x%x]: [%v]; "+
+						"skipping for this pass",
+					freshAction.TargetWalletPublicKeyHash,
+					reservationKey,
+					err,
+				)
+				continue reservationLoop
+			}
+			if !tbtc.IsReanchorTargetAged(
+				targetData.CreatedAt,
+				walletParameters.CreationPeriod,
+				headTime,
+				0,
+			) {
+				taskLogger.Infof(
+					"re-anchor target [0x%x] for reservation [0x%x] has not "+
+						"aged out of its creation period (created at [%v], "+
+						"period [%ds], head time [%v]); waiting on aged target",
+					freshAction.TargetWalletPublicKeyHash,
+					reservationKey,
+					targetData.CreatedAt,
+					walletParameters.CreationPeriod,
+					headTime,
+				)
+				waitingOnAgedTarget = true
+				continue reservationLoop
+			}
+
 			taskLogger.Infof(
 				"resuming pending reservation re-anchor for [0x%x] at nonce [%d]",
 				reservationKey,
@@ -309,7 +395,7 @@ reservationLoop:
 				taskLogger,
 				walletPublicKeyHash,
 				reservationKey,
-				action.TargetWalletPublicKeyHash,
+				freshAction.TargetWalletPublicKeyHash,
 				0,
 			)
 			if err != nil {
@@ -322,6 +408,14 @@ reservationLoop:
 					err,
 				)
 				continue reservationLoop
+			}
+
+			// Not waiting; reset the gauge.
+			if rrt.metricsRecorder != nil {
+				rrt.metricsRecorder.SetGauge(
+					"reanchor_waiting_on_aged_target",
+					0.0,
+				)
 			}
 
 			return proposal, true, nil
@@ -372,6 +466,9 @@ reservationLoop:
 								"available for reservation [0x%x]",
 							reservationKey,
 						)
+						if targets.waitingOnAgedTarget {
+							waitingOnAgedTarget = true
+						}
 						continue reservationLoop
 					}
 					return nil, false, fmt.Errorf(
@@ -388,6 +485,13 @@ reservationLoop:
 					0,
 				)
 				if err == nil {
+					// Not waiting; reset the gauge.
+					if rrt.metricsRecorder != nil {
+						rrt.metricsRecorder.SetGauge(
+							"reanchor_waiting_on_aged_target",
+							0.0,
+						)
+					}
 					return proposal, true, nil
 				}
 
@@ -429,7 +533,26 @@ reservationLoop:
 		}
 	}
 
-	taskLogger.Info("no reservations eligible for re-anchor")
+	// Publish the gauge on every pass that ends without a proposal, so it
+	// neither sticks at 1 once an aged target is available nor stays 0
+	// while re-anchors are waiting.
+	waitingGauge := 0.0
+	if waitingOnAgedTarget {
+		waitingGauge = 1.0
+		taskLogger.Info(
+			"re-anchor waiting on aged target: no live wallet has aged out " +
+				"of its creation period",
+		)
+	} else {
+		taskLogger.Info("no reservations eligible for re-anchor")
+	}
+	if rrt.metricsRecorder != nil {
+		rrt.metricsRecorder.SetGauge(
+			"reanchor_waiting_on_aged_target",
+			waitingGauge,
+		)
+	}
+
 	return nil, false, nil
 }
 
@@ -860,7 +983,7 @@ type reanchorTargetSearch struct {
 	// checked holds every wallet whose state was already read this pass.
 	checked map[[20]byte]bool
 	// excluded holds wallets ruled out for every anchor value this pass:
-	// count cap reached, or rejected by a request-time capacity revert.
+	// count cap reached, age gate, or rejected by a request-time capacity revert.
 	excluded map[[20]byte]bool
 	// candidates are the Live wallets found so far, in selection order:
 	// the cached wallet first, then newest registration first.
@@ -875,6 +998,18 @@ type reanchorTargetSearch struct {
 	// check only gets harder as the anchor grows, so every anchor at or
 	// above it is ruled out too.
 	noHeadroomFromAnchor uint64
+
+	// headTime is the latest block timestamp used for the age gate.
+	headTime time.Time
+	// creationPeriod is the wallet creation period used for the age gate.
+	creationPeriod uint32
+	// createdAt holds the CreatedAt timestamp of every candidate added
+	// this pass, so pick can evaluate the age gate without extra RPCs.
+	createdAt map[[20]byte]time.Time
+
+	// waitingOnAgedTarget is true when the search excluded at least one
+	// candidate because it had not aged out of its creation period.
+	waitingOnAgedTarget bool
 }
 
 // newReanchorTargetSearch returns a target search for one Run pass. It
@@ -884,6 +1019,8 @@ func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 	sourceWalletPublicKeyHash [20]byte,
 	maxReservationsPerWallet uint32,
 	maxReservationsAmountPerWallet uint64,
+	headTime time.Time,
+	creationPeriod uint32,
 ) *reanchorTargetSearch {
 	return &reanchorTargetSearch{
 		rrt:                            rrt,
@@ -893,6 +1030,9 @@ func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 		maxReservationsAmountPerWallet: maxReservationsAmountPerWallet,
 		checked:                        make(map[[20]byte]bool),
 		excluded:                       make(map[[20]byte]bool),
+		createdAt:                      make(map[[20]byte]time.Time),
+		headTime:                       headTime,
+		creationPeriod:                 creationPeriod,
 	}
 }
 
@@ -946,13 +1086,35 @@ func (s *reanchorTargetSearch) exclude(target [20]byte) {
 
 // pick returns the first candidate, starting at index from, with headroom
 // for anchorValue. A candidate whose count cap is reached is excluded for
-// the rest of the pass.
+// the rest of the pass. G1-F12: a candidate that has not aged out of its
+// creation period is also excluded.
 func (s *reanchorTargetSearch) pick(
 	anchorValue uint64,
 	from int,
 ) ([20]byte, bool, error) {
 	for _, candidate := range s.candidates[from:] {
 		if s.excluded[candidate] {
+			continue
+		}
+
+		// G1-F12: the target must have aged out of its creation period.
+		if !tbtc.IsReanchorTargetAged(
+			s.createdAt[candidate],
+			s.creationPeriod,
+			s.headTime,
+			0,
+		) {
+			s.logger.Infof(
+				"candidate re-anchor target wallet [0x%x] has not aged "+
+					"out of its creation period (created at [%v], "+
+					"period [%ds], head time [%v]); skipping",
+				candidate,
+				s.createdAt[candidate],
+				s.creationPeriod,
+				s.headTime,
+			)
+			s.exclude(candidate)
+			s.waitingOnAgedTarget = true
 			continue
 		}
 
@@ -1104,6 +1266,7 @@ func (s *reanchorTargetSearch) addCandidateIfLive(walletPublicKeyHash [20]byte) 
 		return false
 	}
 
+	s.createdAt[walletPublicKeyHash] = wallet.CreatedAt
 	s.candidates = append(s.candidates, walletPublicKeyHash)
 	return true
 }

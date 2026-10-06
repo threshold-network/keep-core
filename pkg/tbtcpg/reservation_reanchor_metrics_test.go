@@ -123,7 +123,17 @@ func TestReservationReanchorTask_TargetSearch_CachesAcrossRuns(t *testing.T) {
 
 	// Each pass gets its own search, as each Run does.
 	find := func() ([20]byte, error) {
-		return task.newReanchorTargetSearch(logger, walletA, 5, 100000000).find(100000)
+		headTime, err := lc.GetLatestBlockTimestamp()
+		if err != nil {
+			t.Fatal(err)
+		}
+		walletParams, err := lc.GetWalletParameters()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.newReanchorTargetSearch(
+			logger, walletA, 5, 100000000, headTime, walletParams.CreationPeriod,
+		).find(100000)
 	}
 
 	// First pass: no cache, must scan the registration events.
