@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"time"
 
@@ -139,6 +140,10 @@ type ReservationStaleDepositWatcher struct {
 	// re-checked every tick until its record clears on-chain.
 	pending       map[string]*trackedStaleDeposit
 	lastSeenBlock uint64
+
+	// checkCursor is the tracked key pollTick resumes its budget-limited
+	// checks from; empty means from the start (see nextCheckOrder).
+	checkCursor string
 
 	// activationBlock is the network's reservation activation block
 	// (see tbtc.ReservationsActivationBlock): the first reveal scan
@@ -564,7 +569,33 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		scanOK = false
 	}
 
-	for key, tracked := range rsdw.pending {
+	// Past-deadline deposits cost chain reads, so a tick checks at most
+	// reservationStaleDepositMaxChecksPerTick of them and resumes after the
+	// last one on the next tick (checkCursor), instead of re-reading the
+	// whole tracked set every tick (G2-F3). A deposit this watcher
+	// notified recently is not re-read before the renotify interval
+	// elapses: the notification needs time to land.
+	checksLeft := reservationStaleDepositMaxChecksPerTick
+	rsdw.checkCursor = ""
+	for _, key := range rsdw.nextCheckOrder() {
+		tracked, ok := rsdw.pending[key]
+		if !ok {
+			continue
+		}
+
+		if now >= tracked.refundDeadline {
+			if at, notified := rsdw.notifiedAt[key]; notified &&
+				now >= at &&
+				now-at < uint32(actionTimeoutRenotifyInterval.Seconds()) {
+				continue
+			}
+			if checksLeft == 0 {
+				rsdw.checkCursor = key
+				break
+			}
+			checksLeft--
+		}
+
 		depositKey := tracked.depositKey
 		resolution, err := rsdw.CheckStaleReservedDeposit(
 			depositKey,
@@ -588,12 +619,36 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 		case StaleDepositResolutionKeep:
 			// Stays tracked: before its refund deadline it costs no
 			// chain reads at all, and after the deadline it is
-			// re-checked every tick - including while its wallet is
-			// Live - until its record clears on-chain.
+			// re-checked, within the per-tick budget, until its record
+			// clears on-chain.
 		}
 	}
 
 	return len(rsdw.pending), scanOK
+}
+
+// reservationStaleDepositMaxChecksPerTick bounds the number of past-deadline
+// deposits whose chain state pollTick re-reads on a single tick.
+const reservationStaleDepositMaxChecksPerTick = 50
+
+// nextCheckOrder returns the tracked deposit keys in a stable order,
+// starting at checkCursor (the first key the previous tick left unchecked)
+// and wrapping around, so successive budget-limited ticks cover the whole
+// tracked set.
+func (rsdw *ReservationStaleDepositWatcher) nextCheckOrder() []string {
+	keys := make([]string, 0, len(rsdw.pending))
+	for key := range rsdw.pending {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	if rsdw.checkCursor == "" || len(keys) == 0 {
+		return keys
+	}
+
+	start := sort.SearchStrings(keys, rsdw.checkCursor) % len(keys)
+
+	return append(keys[start:], keys[:start]...)
 }
 
 // trackRevealedDeposits adds every reveal routed to reservationVault to

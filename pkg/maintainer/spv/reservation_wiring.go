@@ -321,16 +321,18 @@ func WireReservationWatchers(
 			unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
 			continue
 		}
-		if wallet.State != tbtc.StateClosed &&
-			wallet.State != tbtc.StateTerminated {
-			continue
-		}
+		// Closed and Terminated wallets are always checked; a Closing
+		// wallet is checked too, but only reservations past their
+		// dissolution-eligible time are notified (see
+		// checkStrandingForWalletState).
 		var checkErr error
 		for attempt := range 3 {
-			checkErr = strandingWatcher.checkReservationStrandingForWallet(
+			var checked bool
+			checked, _, checkErr = strandingWatcher.checkStrandingForWalletState(
 				event.WalletPublicKeyHash,
+				wallet.State,
 			)
-			if checkErr == nil {
+			if !checked || checkErr == nil {
 				break
 			}
 			reservationWiringLogger.Warnf(
@@ -587,18 +589,22 @@ type scanResult struct {
 // goroutine that calls it - so the decision logic is unit-testable in
 // isolation, independent of the goroutine's Errorf logging side effect.
 //
-// The check requires ALL THREE scans to have definitively succeeded
-// (scanOK) before a zero count is trusted as a genuine activity
-// signal; if any scan's own success is uncertain, the function
-// reports no misconfiguration regardless of the counts, deferring to
-// each scan's own per-tick warning logs.
+// The check requires the two reservation scans (stale-deposit and
+// action-timeout) to have definitively succeeded (scanOK) before a
+// zero count is trusted as a genuine activity signal; if either scan's
+// own success is uncertain, the function reports no misconfiguration
+// regardless of the counts, deferring to each scan's own per-tick
+// warning logs. The registration scan result is not part of the
+// condition: on an active network the registration scan is always
+// non-zero and would mask a genuine misconfiguration of the two
+// reservation feature flags.
 func reservationSelfCheckMisconfigured(
 	pairedFlagEnabled bool,
 	registration, staleDeposit, actionTimeout scanResult,
 ) bool {
 	return !pairedFlagEnabled &&
 		registration.scanOK && staleDeposit.scanOK && actionTimeout.scanOK &&
-		registration.count == 0 && staleDeposit.count == 0 && actionTimeout.count == 0
+		staleDeposit.count == 0 && actionTimeout.count == 0
 }
 
 // scanReservationStrandingStartupRegistrations fetches the wallet
@@ -689,11 +695,9 @@ func retryReservationStrandingStartupScan(
 			)
 			continue
 		}
-		if wallet.State != tbtc.StateClosed && wallet.State != tbtc.StateTerminated {
-			continue
-		}
-		if err := strandingWatcher.checkReservationStrandingForWallet(
+		if _, _, err := strandingWatcher.checkStrandingForWalletState(
 			walletPublicKeyHash,
+			wallet.State,
 		); err != nil {
 			reservationWiringLogger.Errorf(
 				"stranding startup scan second-chance retry failed to "+
@@ -737,7 +741,7 @@ func subscribeReservationWalletClosed(
 				return
 			}
 
-			if err := watcher.checkReservationStrandingForWallet(
+			if _, err := watcher.checkReservationStrandingForWallet(
 				walletPublicKeyHash,
 			); err != nil {
 				reservationWiringLogger.Errorf(
@@ -755,30 +759,55 @@ func subscribeReservationWalletClosed(
 // resolveWalletPublicKeyHash maps an ECDSA wallet ID to the wallet's public
 // key hash via its NewWalletRegistered event. Every wallet is registered
 // exactly once before it can be closed, and the filter is indexed on the
-// wallet ID, so this is a targeted lookup rather than a history scan.
+// wallet ID, so this is a targeted lookup. It still must not be a
+// genesis-to-tip scan, which most providers reject: the search starts with
+// the last reservationDefaultLookBackBlocks blocks and doubles the window
+// until the registration is found or genesis is reached, the way the
+// Ethereum chain handle resolves a wallet's registration block.
 func resolveWalletPublicKeyHash(
 	spvChain Chain,
 	walletID [32]byte,
 ) ([20]byte, error) {
-	events, err := spvChain.PastNewWalletRegisteredEvents(
-		&tbtc.NewWalletRegisteredEventFilter{
-			EcdsaWalletID: [][32]byte{walletID},
-		},
-	)
+	blockCounter, err := spvChain.BlockCounter()
 	if err != nil {
-		return [20]byte{}, fmt.Errorf(
-			"failed to fetch wallet registration event: [%w]",
-			err,
-		)
+		return [20]byte{}, fmt.Errorf("failed to get block counter: [%w]", err)
 	}
-	if len(events) == 0 {
-		return [20]byte{}, fmt.Errorf(
-			"no wallet registration event found for wallet ID [0x%x]",
-			walletID,
-		)
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("failed to get current block: [%w]", err)
 	}
 
-	// A wallet ID is registered at most once; take the latest match
-	// defensively in case of a duplicate log delivery.
-	return events[len(events)-1].WalletPublicKeyHash, nil
+	window := reservationDefaultLookBackBlocks
+	for {
+		startBlock := uint64(0)
+		if currentBlock > window {
+			startBlock = currentBlock - window
+		}
+
+		events, err := spvChain.PastNewWalletRegisteredEvents(
+			&tbtc.NewWalletRegisteredEventFilter{
+				StartBlock:    startBlock,
+				EcdsaWalletID: [][32]byte{walletID},
+			},
+		)
+		if err != nil {
+			return [20]byte{}, fmt.Errorf(
+				"failed to fetch wallet registration event: [%w]",
+				err,
+			)
+		}
+		if len(events) > 0 {
+			// A wallet ID is registered at most once; take the latest
+			// match defensively in case of a duplicate log delivery.
+			return events[len(events)-1].WalletPublicKeyHash, nil
+		}
+
+		if startBlock == 0 {
+			return [20]byte{}, fmt.Errorf(
+				"no wallet registration event found for wallet ID [0x%x]",
+				walletID,
+			)
+		}
+		window *= 2
+	}
 }

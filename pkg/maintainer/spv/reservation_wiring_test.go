@@ -25,9 +25,18 @@ import (
 func TestResolveWalletPublicKeyHash(t *testing.T) {
 	walletID := [32]byte{0x01, 0x02, 0x03}
 	expectedPKH := [20]byte{0xAA, 0xBB, 0xCC}
+	const currentBlock = 2_000_000
+
+	newChain := func() *localChain {
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock)
+		spvChain.setBlockCounter(blockCounter)
+		return spvChain
+	}
 
 	t.Run("found", func(t *testing.T) {
-		spvChain := newLocalChain()
+		spvChain := newChain()
 		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
 			EcdsaWalletID:       walletID,
 			WalletPublicKeyHash: expectedPKH,
@@ -47,7 +56,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		spvChain := newLocalChain()
+		spvChain := newChain()
 		// No matching event registered for walletID; a different wallet's
 		// event exists to confirm the filter, not just an empty set, drives
 		// the not-found path.
@@ -63,7 +72,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 	})
 
 	t.Run("chain error", func(t *testing.T) {
-		spvChain := newLocalChain()
+		spvChain := newChain()
 		spvChain.setPastNewWalletRegisteredEventsErr(
 			fmt.Errorf("rpc unavailable"),
 		)
@@ -75,7 +84,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 	})
 
 	t.Run("duplicate event delivery uses the latest match", func(t *testing.T) {
-		spvChain := newLocalChain()
+		spvChain := newChain()
 		staleePKH := [20]byte{0x11}
 		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
 			EcdsaWalletID:       walletID,
@@ -96,6 +105,59 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 				expectedPKH,
 				pkh,
 			)
+		}
+	})
+
+	t.Run("recent registration is found in the first bounded window", func(t *testing.T) {
+		recording := &g2FilterRecordingChain{localChain: newChain()}
+		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+			BlockNumber:         currentBlock - 1000,
+		})
+
+		if _, err := resolveWalletPublicKeyHash(recording, walletID); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		starts := recording.pastNewWalletRegisteredStartBlocks
+		if len(starts) != 1 || starts[0] != currentBlock-reservationDefaultLookBackBlocks {
+			t.Errorf(
+				"expected one lookup bounded to the last %d blocks, got start blocks %v",
+				reservationDefaultLookBackBlocks,
+				starts,
+			)
+		}
+	})
+
+	t.Run("old registration is found by widening the window, never by a genesis scan first", func(t *testing.T) {
+		recording := &g2FilterRecordingChain{localChain: newChain()}
+		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+			BlockNumber:         currentBlock - 500_000,
+		})
+
+		pkh, err := resolveWalletPublicKeyHash(recording, walletID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pkh != expectedPKH {
+			t.Errorf("unexpected public key hash %x", pkh)
+		}
+		starts := recording.pastNewWalletRegisteredStartBlocks
+		expected := []uint64{
+			currentBlock - reservationDefaultLookBackBlocks,
+			currentBlock - 2*reservationDefaultLookBackBlocks,
+			currentBlock - 4*reservationDefaultLookBackBlocks,
+		}
+		if len(starts) != len(expected) {
+			t.Fatalf("expected start blocks %v, got %v", expected, starts)
+		}
+		for i := range expected {
+			if starts[i] != expected[i] {
+				t.Errorf("expected start blocks %v, got %v", expected, starts)
+				break
+			}
 		}
 	})
 }
@@ -452,11 +514,12 @@ func TestReservationSelfCheckMisconfigured(t *testing.T) {
 			staleDeposit:      definitiveZero,
 			actionTimeout:     unreliable,
 		},
-		"nonzero registration activity is not misconfigured": {
-			pairedFlagEnabled: false,
-			registration:      definitiveActivity,
-			staleDeposit:      definitiveZero,
-			actionTimeout:     definitiveZero,
+		"nonzero registration activity with zero reservation scans is misconfigured": {
+			pairedFlagEnabled:   false,
+			registration:        definitiveActivity,
+			staleDeposit:        definitiveZero,
+			actionTimeout:       definitiveZero,
+			expectMisconfigured: true,
 		},
 		"nonzero stale-deposit activity is not misconfigured": {
 			pairedFlagEnabled: false,
@@ -1260,5 +1323,86 @@ func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
 			events[0].BlockNumber,
 			events[1].BlockNumber,
 		)
+	}
+}
+
+// TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet pins
+// G2F24: the startup stranding scan's retry pass forwarded only Closed and
+// Terminated wallets, so a Closing wallet whose reservation term had passed
+// its DissolutionEligibleAt was never checked. Eligibility is judged against
+// the chain head time, not the wall clock.
+func TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet(t *testing.T) {
+	headTime := time.Unix(2_000_000, 0)
+
+	tests := map[string]struct {
+		walletState           tbtc.WalletState
+		dissolutionEligibleAt uint32
+		expectNotified        bool
+	}{
+		"Closed wallet": {
+			walletState:    tbtc.StateClosed,
+			expectNotified: true,
+		},
+		"Terminated wallet": {
+			walletState:    tbtc.StateTerminated,
+			expectNotified: true,
+		},
+		"Closing wallet past the reservation's dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			expectNotified:        true,
+		},
+		"Closing wallet exactly at the dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()),
+			expectNotified:        true,
+		},
+		"Closing wallet before the dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) + 1,
+		},
+		"Closing wallet with an unset dissolution-eligible time": {
+			walletState: tbtc.StateClosing,
+		},
+		"Live wallet": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			spvChain := newLocalChain()
+			// The wall clock is far past the head time: a check against it
+			// would treat every Closing wallet as eligible.
+			spvChain.setLatestBlockTimestamp(headTime)
+			strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+			wallet := walletPKHAt(0x4C)
+			key := reservationKey(0x4C00)
+
+			spvChain.setWallet(wallet, &tbtc.WalletChainData{State: test.walletState})
+			spvChain.setWalletReservations(wallet, []*big.Int{key})
+			spvChain.setReservation(key, &tbtc.Reservation{
+				State:                 tbtc.ReservationStateActive,
+				DissolutionEligibleAt: test.dissolutionEligibleAt,
+			})
+
+			retryReservationStrandingStartupScan(
+				context.Background(),
+				spvChain,
+				strandingWatcher,
+				[][20]byte{wallet},
+				0,
+			)
+
+			calls := spvChain.getSubmittedReservationStrandedKeys()
+			if test.expectNotified && len(calls) != 1 {
+				t.Fatalf("expected 1 stranding notification, got %d", len(calls))
+			}
+			if !test.expectNotified && len(calls) != 0 {
+				t.Fatalf("expected no stranding notification, got %d", len(calls))
+			}
+		})
 	}
 }

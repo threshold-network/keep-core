@@ -1340,11 +1340,15 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if wrapped.getReservationActionCalls != reservationActionTimeoutMaxChecksPerTick {
+	// Every checked action is overdue, so each costs its batch read plus
+	// one re-read right before its notification (G2-L9): still bounded by
+	// the per-tick batch cap, not by the tracked count.
+	expectedReads := 2 * reservationActionTimeoutMaxChecksPerTick
+	if wrapped.getReservationActionCalls != expectedReads {
 		t.Fatalf(
 			"expected exactly %d GetReservationAction calls on a single "+
 				"tick with %d tracked actions, got %d",
-			reservationActionTimeoutMaxChecksPerTick,
+			expectedReads,
 			total,
 			wrapped.getReservationActionCalls,
 		)
@@ -1577,5 +1581,302 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotR
 
 	if _, ok := ratw.strandingRecheckWallets[wallet]; ok {
 		t.Fatalf("expected a successfully-drained wallet not to be re-queued")
+	}
+}
+
+// TestG2F2_ZeroWalletPendingAcceptance_SendsAcceptanceTimeoutNotice pins
+// G2F2: the zero-wallet early return in checkReservationActionTimeout
+// suppressed the acceptance timeout notice for every first-generation
+// reservation (wallet hash is zero until settled at
+// ReservationProofs.sol:563). The notice needs only the reservation key,
+// so the early return was incorrect; the fix removes it and forwards the
+// zero-wallet pending acceptance to the Bridge.
+func TestG2F2_ZeroWalletPendingAcceptance_SendsAcceptanceTimeoutNotice(t *testing.T) {
+	spvChain := newLocalChain()
+	key := reservationKey(0xC0F2)
+
+	// Zero wallet with a pending first-generation acceptance.
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		[20]byte{}, // zero wallet public key hash
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeAcceptance,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), 0,
+	)
+	notified, err := watcher.checkReservationActionTimeout(key, 5_000, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !notified {
+		t.Fatal(
+			"expected the zero-wallet pending acceptance to emit " +
+				"NotifyReservationAcceptanceTimedOut",
+		)
+	}
+
+	calls := spvChain.getSubmittedAcceptanceTimeouts()
+	if len(calls) != 1 {
+		t.Fatalf(
+			"expected one acceptance-timeout notice for the zero-wallet "+
+				"pending first-generation, got %d",
+			len(calls),
+		)
+	}
+}
+
+// TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck pins
+// G2F18: the stranding requeue in the reanchor branch was inside the
+// NotifyReservationActionTimeout success path. A reverted or
+// transiently-failed notice silently lost the deferred stranding
+// recheck. The fix moves the requeue before the call and gates it on
+// a non-zero wallet hash.
+func TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKHAt(0x48)
+	key := reservationKey(0xC0F8)
+
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// The notice itself fails: the action left Pending between read and
+	// send, or the RPC is down.
+	spvChain.notifyReservationActionTimeoutErr = errors.New(
+		"reverting: action no longer pending",
+	)
+
+	strandingWatcher := newReservationStrandingWatcher(spvChain)
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain,
+		0,
+		common.Address{},
+		strandingWatcher,
+		0,
+	)
+
+	notified, err := watcher.checkReservationActionTimeout(key, 1_000, nil, 0)
+	if err == nil {
+		t.Fatalf("expected the failed notice to surface an error, got notified=%v", notified)
+	}
+	if notified {
+		t.Fatal("expected notified=false on the failed notice path")
+	}
+
+	// The wallet must be enqueued for stranding recheck regardless of
+	// the notice outcome (G2F18); a zero wallet is skipped since
+	// drainStrandingRechecks has no reservation key to re-resolve it.
+	if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+		t.Fatalf(
+			"expected the failed notice to enqueue stranding recheck " +
+				"(strandingRecheckWallets[wallet] should be set), got 0 entries",
+		)
+	}
+}
+
+// TestG2F19_DrainRequeuesNonTerminalWalletAndCleanPendingSkip pins G2F19:
+// drainStrandingRechecks requeues a wallet on the non-terminal branch and
+// when the stranding check cleanly skips a non-Active reservation,
+// instead of silently dropping the deferred recheck.
+func TestG2F19_DrainRequeuesNonTerminalWalletAndCleanPendingSkip(t *testing.T) {
+	t.Run(
+		"a non-terminal wallet is requeued until Closed or Terminated",
+		func(t *testing.T) {
+			spvChain := newLocalChain()
+			wallet := walletPKHAt(0x49)
+			key := reservationKey(0xC0F9)
+
+			// The wallet is still Closing: the reanchor timeout notice
+			// was sent but the wallet hasn't reached a terminal state.
+			spvChain.setWallet(
+				wallet,
+				&tbtc.WalletChainData{State: tbtc.StateClosing},
+			)
+			spvChain.setWalletReservations(wallet, []*big.Int{key})
+			spvChain.setReservation(
+				key,
+				&tbtc.Reservation{State: tbtc.ReservationStateActive},
+			)
+
+			strandingWatcher := newReservationStrandingWatcher(spvChain)
+			watcher := NewReservationActionTimeoutWatcher(
+				spvChain,
+				0,
+				common.Address{},
+				strandingWatcher,
+				0,
+			)
+			watcher.strandingRecheckWallets[wallet] = struct{}{}
+
+			watcher.drainStrandingRechecks()
+
+			// The wallet is requeued because it is non-terminal;
+			// it will be checked again once it reaches Closed/Terminated.
+			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+				t.Fatal(
+					"expected the non-terminal wallet to be requeued, " +
+						"not silently dropped",
+				)
+			}
+
+			// No stranding notification should have been sent while
+			// the wallet is still Closing.
+			if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+				t.Fatalf(
+					"expected no stranding notification while wallet is Closing, got %d",
+					len(calls),
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"a clean stranding skip of a non-Active reservation requeues the wallet",
+		func(t *testing.T) {
+			spvChain := newLocalChain()
+			wallet := walletPKHAt(0x4A)
+			key := reservationKey(0xC0FA)
+
+			// The wallet is Closed, but its reservation has a pending
+			// action generation: the stranding check's Active-only guard
+			// skips it cleanly. With the fix the wallet is requeued so
+			// the stranding will be retried once the reservation resolves.
+			spvChain.setWallet(
+				wallet,
+				&tbtc.WalletChainData{State: tbtc.StateClosed},
+			)
+			spvChain.setWalletReservations(wallet, []*big.Int{key})
+			spvChain.setReservation(key, &tbtc.Reservation{
+				State:        tbtc.ReservationStateActionPending,
+				RequestNonce: 1,
+			})
+
+			strandingWatcher := newReservationStrandingWatcher(spvChain)
+			watcher := NewReservationActionTimeoutWatcher(
+				spvChain,
+				0,
+				common.Address{},
+				strandingWatcher,
+				0,
+			)
+			watcher.strandingRecheckWallets[wallet] = struct{}{}
+
+			// First drain: the stranding check cleanly skips the
+			// ActionPending reservation and requeues the wallet.
+			watcher.drainStrandingRechecks()
+
+			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+				t.Fatal(
+					"expected the wallet to be requeued after a clean " +
+						"skip of a non-Active reservation",
+				)
+			}
+
+			// Second drain: same outcome since the reservation is still
+			// pending; the wallet is requeued again.
+			watcher.drainStrandingRechecks()
+
+			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+				t.Fatal(
+					"expected the wallet to remain requeued on the " +
+						"second drain (reservation still pending)",
+				)
+			}
+
+			// No stranding notification should have been sent yet.
+			if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+				t.Fatalf(
+					"expected no stranding notification while reservation "+
+						"is ActionPending, got %d",
+					len(calls),
+				)
+			}
+		},
+	)
+}
+
+// TestG2L9_StalePreloadNonceMatchWithStaleState_FallsBackToFreshRead
+// extends TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFreshRead
+// to cover the nonce-match-but-stale case: the reservation's RequestNonce
+// matches the preloaded nonce, but the preloaded action state is stale
+// (e.g. the action moved from Pending to Settled between the caller's
+// read and this call). Even with a matching nonce the preloaded state
+// must not be trusted; the fix always re-reads the action.
+func TestG2L9_StalePreloadNonceMatchWithStaleState_FallsBackToFreshRead(t *testing.T) {
+	spvChain := newLocalChain()
+	wallet := walletPKH()
+	key := reservationKey(0xC0F5)
+
+	// The reservation's only generation (nonce 1) is now Settled.
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStateSettled,
+				TimeoutAt:  100,
+			},
+		},
+		1, // RequestNonce matches preloadedActionNonce
+	)
+
+	// Simulate a preloaded action that was captured when the generation
+	// was Pending (the preloaded state is stale, but the nonce matches).
+	stalePreload := &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeReanchor,
+		State:      tbtc.ReservationActionStatePending, // stale!
+		TimeoutAt:  100,
+	}
+
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), 0,
+	)
+	notified, err := watcher.checkReservationActionTimeout(
+		key, 5_000, stalePreload, 1, // nonce matches RequestNonce
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The action is Settled on chain, so no timeout notification is due.
+	// With the bug (nonce-match reuse) the stale Pending preload would
+	// cause a spurious notice; with the fix the fresh read finds
+	// Settled and skips correctly.
+	if notified {
+		t.Fatal(
+			"expected no notification for a Settled action even with " +
+				"a stale Pending preloaded state",
+		)
+	}
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 0 {
+		t.Fatalf(
+			"expected zero reanchor timeout notices for Settled action, got %d",
+			len(calls),
+		)
 	}
 }

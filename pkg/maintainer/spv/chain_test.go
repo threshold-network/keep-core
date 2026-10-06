@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -73,6 +74,12 @@ type reservedDepositRecord struct {
 
 type localChain struct {
 	mutex sync.Mutex
+
+	// latestBlockTimestamp is the chain head time GetLatestBlockTimestamp
+	// reports; the zero value reports the Unix epoch, so nothing that
+	// depends on head time fires unless a test sets it.
+	latestBlockTimestamp    time.Time
+	latestBlockTimestampErr error
 
 	blockCounter                             chain.BlockCounter
 	wallets                                  map[[20]byte]*tbtc.WalletChainData
@@ -317,6 +324,26 @@ func (lc *localChain) BlockCounter() (chain.BlockCounter, error) {
 	defer lc.mutex.Unlock()
 
 	return lc.blockCounter, nil
+}
+
+func (lc *localChain) GetLatestBlockTimestamp() (time.Time, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.latestBlockTimestampErr != nil {
+		return time.Time{}, lc.latestBlockTimestampErr
+	}
+	if lc.latestBlockTimestamp.IsZero() {
+		return time.Unix(0, 0), nil
+	}
+	return lc.latestBlockTimestamp, nil
+}
+
+func (lc *localChain) setLatestBlockTimestamp(timestamp time.Time) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.latestBlockTimestamp = timestamp
 }
 
 func (lc *localChain) setBlockCounter(blockCounter chain.BlockCounter) {

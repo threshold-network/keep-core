@@ -43,7 +43,7 @@ func TestReservationStrandingWatcher_NoReservations(t *testing.T) {
 		t.Fatal("expected non-nil watcher")
 	}
 
-	if err := watcher.checkReservationStrandingForWallet(walletPKH()); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(walletPKH()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestReservationStrandingWatcher_NotifiesActiveReservation(t *testing.T) {
 	})
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestReservationStrandingWatcher_SkipsClosedReservation(t *testing.T) {
 	})
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestReservationStrandingWatcher_SkipsPendingReservation(t *testing.T) {
 	})
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestReservationStrandingWatcher_MultipleReservations(t *testing.T) {
 	})
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestReservationStrandingWatcher_UnknownReservationIsSkipped(t *testing.T) {
 
 	watcher := newReservationStrandingWatcher(spvChain)
 	watcher.retryDelay = time.Millisecond
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestReservationStrandingWatcher_WalletChainError(t *testing.T) {
 	spvChain.setWalletReservations(wallet, nil)
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error for empty wallet: %v", err)
 	}
 
@@ -256,7 +256,7 @@ func TestReservationStrandingWatcher_NotifierErrorContinuesProcessing(t *testing
 	}
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf(
 			"a single notifier failure must not fail the whole check: %v",
 			err,
@@ -286,7 +286,7 @@ func TestReservationStrandingWatcher_WalletReservationsChainError(t *testing.T) 
 
 	watcher := newReservationStrandingWatcher(spvChain)
 	watcher.retryDelay = time.Millisecond
-	if err := watcher.checkReservationStrandingForWallet(walletPKH()); err == nil {
+	if _, err := watcher.checkReservationStrandingForWallet(walletPKH()); err == nil {
 		t.Fatal("expected error when WalletReservations fails, got nil")
 	}
 
@@ -355,7 +355,7 @@ func TestReservationStrandingWatcher_WalletReservationsTransientErrorRetries(t *
 
 	watcher := newReservationStrandingWatcher(wrapped)
 	watcher.retryDelay = time.Millisecond
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("expected the retry to eventually succeed, got error: %v", err)
 	}
 
@@ -389,7 +389,7 @@ func TestReservationStrandingWatcher_WalletReservationsExhaustsRetriesAndFails(t
 
 	watcher := newReservationStrandingWatcher(wrapped)
 	watcher.retryDelay = time.Millisecond
-	if err := watcher.checkReservationStrandingForWallet(wallet); err == nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err == nil {
 		t.Fatal("expected an error after exhausting all retry attempts")
 	}
 
@@ -423,7 +423,7 @@ func TestReservationStrandingWatcher_GetReservationTransientErrorRetries(t *test
 
 	watcher := newReservationStrandingWatcher(wrapped)
 	watcher.retryDelay = time.Millisecond
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -455,7 +455,7 @@ func TestReservationStrandingWatcher_CapturesTerminationCause(t *testing.T) {
 	spvChain.setWalletTerminationCause(wallet, tbtc.WalletTerminationCauseFraudChallengeDefeat)
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -485,7 +485,7 @@ func TestReservationStrandingWatcher_CauseLookupErrorDoesNotBlockNotification(t 
 	spvChain.walletTerminationCauseErr = fmt.Errorf("rpc unavailable")
 
 	watcher := newReservationStrandingWatcher(spvChain)
-	if err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
+	if _, err := watcher.checkReservationStrandingForWallet(wallet); err != nil {
 		t.Fatalf("cause lookup failure must not fail the whole check: %v", err)
 	}
 
