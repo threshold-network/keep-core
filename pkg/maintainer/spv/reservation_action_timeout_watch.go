@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -146,6 +147,13 @@ type ReservationActionTimeoutWatcher struct {
 	// without an entry: reservations are inactive there, the first scan
 	// is skipped and later scans cover only new blocks.
 	activationBlock uint64
+
+	// metricsRecorder receives the overdue-action counter increments
+	// (clientinfo.MetricSpvReservationActionOverdueTotal). A nil recorder
+	// is valid and disables the counter; the Warn log stays the
+	// authoritative signal. It is a constructor parameter, like the
+	// fields above, so a watcher can never be left half-wired.
+	metricsRecorder MetricsRecorder
 }
 
 type pendingAction struct {
@@ -188,12 +196,14 @@ func actionEventKey(reservationKey *big.Int, requestNonce uint64) string {
 // constructor parameters rather than post-construction setters so a
 // watcher can never be constructed in a partially-initialized state
 // that would silently skip staggering or the stranding recheck.
+// metricsRecorder may be nil, which disables the overdue-action counter.
 func NewReservationActionTimeoutWatcher(
 	spvChain Chain,
 	pollInterval time.Duration,
 	operatorAddress common.Address,
 	strandingWatcher *reservationStrandingWatcher,
 	activationBlock uint64,
+	metricsRecorder MetricsRecorder,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
 		spvChain:                spvChain,
@@ -204,6 +214,7 @@ func NewReservationActionTimeoutWatcher(
 		strandingWatcher:        strandingWatcher,
 		strandingRecheckWallets: make(map[[20]byte]struct{}),
 		activationBlock:         activationBlock,
+		metricsRecorder:         metricsRecorder,
 	}
 }
 
@@ -436,13 +447,26 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			)
 		}
 
-		// The comparison is inclusive because the contract itself
-		// accepts the notification at exactly action.timeoutAt
-		// (block.timestamp >= timeoutAt); see checkReservationActionTimeout.
-		if now >= deadline {
+		// G2-L11: the notify decision is a deadline comparison, so it is
+		// judged on the chain head's block time, not the node's wall clock:
+		// a skewed host clock otherwise fires a notice the Bridge's
+		// block.timestamp check would reject early, or defers it past the
+		// deadline when the clock runs slow. The comparison is inclusive
+		// because the contract itself accepts the notification at exactly
+		// action.timeoutAt (block.timestamp >= timeoutAt); see
+		// checkReservationActionTimeout. The node clock (now) stays in use
+		// only for the renotify-interval backoff above and the notifiedAt
+		// stamp below. When the head time cannot be read the deadline
+		// decision is skipped for this pass - no notification on a guess.
+		if headTime.IsZero() {
+			continue
+		}
+		headNow := uint32(max(headTime.Unix(), 0))
+		if headNow >= deadline {
+			ratw.alertOverdueAction(item, action, headTime)
 			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
-				now,
+				headNow,
 				action,
 				item.requestNonce,
 			)
@@ -473,6 +497,36 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 	}
 
 	return nil
+}
+
+// alertOverdueAction raises the client-side alert for a tracked action
+// generation that is still Pending past its timeoutAt in chain time with no
+// proof submitted - the case pollPendingActions is about to notify the
+// Bridge about. It logs a Warn naming the reservation key, the action kind,
+// the timeoutAt and the chain head time, and increments
+// clientinfo.MetricSpvReservationActionOverdueTotal. It fires on every
+// notify decision, so a generation whose notice keeps failing to land
+// keeps being reported once per renotify interval.
+func (ratw *ReservationActionTimeoutWatcher) alertOverdueAction(
+	item *pendingAction,
+	action *tbtc.ReservationAction,
+	headTime time.Time,
+) {
+	logger.Warnf(
+		"reservation action [%v]/%d (%s) is still Pending past its "+
+			"timeoutAt [%d] in chain time (chain head time [%d]) with no "+
+			"proof submitted",
+		item.reservationKey,
+		item.requestNonce,
+		action.ActionType,
+		action.TimeoutAt,
+		headTime.Unix(),
+	)
+
+	incrementReservationCounter(
+		ratw.metricsRecorder,
+		clientinfo.MetricSpvReservationActionOverdueTotal,
+	)
 }
 
 // nextActionCheckBatch returns up to reservationActionTimeoutMaxChecksPerTick

@@ -249,6 +249,10 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 				State: test.actionState,
 			})
 			watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+			// G2-L13: the refund-deadline gate now runs on the chain head's
+			// block time, so drive it to the case's `now` and keep the node
+			// clock at `now` for the renotify backoff.
+			spvChain.setLatestBlockTimestamp(time.Unix(int64(test.now), 0))
 
 			resolution, err := watcher.CheckStaleReservedDeposit(
 				depositKey,
@@ -576,6 +580,10 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
+	// Deadline decisions are judged on the chain head's block time (G2-L11,
+	// G2-L13), not on the wall clock: put the head past every seeded
+	// deadline plus the maximum stagger offset.
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	// Seed an overdue Reanchor action generation: the action-timeout
 	// watcher's backgrounded initial pollPendingActions pass must
@@ -705,6 +713,8 @@ func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *test
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
+	// The notify decision is judged on the chain head's block time (G2-L11).
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	wallet := walletPKHAt(0x70)
 	key := reservationKey(0xBB01)
@@ -1048,6 +1058,10 @@ func TestRunStaleDepositPollTick_EvictsOnClearedWallet(t *testing.T) {
 	spvChain.setReservedDeposit(depositKey, [20]byte{}, true)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// time; drive it to the tick's now so the post-deadline check reads
+	// the record and evicts the cleared deposit.
+	spvChain.setLatestBlockTimestamp(time.Unix(1_000, 0))
 
 	trackedCount, ok := watcher.pollTick(1_000)
 	if !ok {
@@ -1072,6 +1086,9 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(currentBlock)
 	spvChain.setBlockCounter(blockCounter)
+	// The refund-deadline gate is judged on the chain head's block time
+	// (G2-L13): 5_000 is past deadline (100) plus any stagger offset.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	vault := chain.Address("0xVault")
 	spvChain.setReservationParameters(&tbtc.ReservationParameters{

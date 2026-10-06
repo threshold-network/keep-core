@@ -150,8 +150,9 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricSpvProofTaskFailuresTotal,
 		MetricRedemptionProofTaskFailuresTotal,
 
-		// ----- SPV reservation watcher health counter -----
+		// ----- SPV reservation watcher health counters -----
 		MetricSpvReservationWatcherDeathsTotal,
+		MetricSpvReservationActionOverdueTotal,
 
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
@@ -665,6 +666,13 @@ const (
 	// watcher wiring started by pkg/maintainer/spv.WireReservationWatchers
 	// in the client and maintainer processes.
 	MetricSpvReservationWatcherDeathsTotal = "spv_reservation_watcher_deaths_total"
+
+	// MetricSpvReservationActionOverdueTotal counts the notify decisions
+	// the reservation action-timeout watcher made for a tracked action
+	// generation that was still Pending past its timeoutAt in chain time
+	// with no proof submitted. A steadily increasing value means actions
+	// are not being proved or timed out in time.
+	MetricSpvReservationActionOverdueTotal = "spv_reservation_action_overdue_total"
 
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"

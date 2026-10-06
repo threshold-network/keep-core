@@ -188,7 +188,6 @@ func TestG2F8_EarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement(t *t
 // generation is still proved in the same pass.
 func TestG2F15_FailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
-	fixture.state.nowFn = func() uint32 { return 1100 }
 
 	// A second, Pending generation of the same reservation, re-requested at
 	// nonce 2 with the same wallet: the same anchor transaction is a valid
@@ -261,7 +260,6 @@ func TestG2F15_FailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 // pass.
 func TestG2F17_FailedReanchorSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
-	fixture.state.nowFn = func() uint32 { return 4_000_000_000 }
 
 	// A second, Pending reanchor generation of the same reservation,
 	// re-requested at nonce 3 against the same source wallet: the same
@@ -379,7 +377,7 @@ func TestG2F22_SingleReservationReadFailureFlagsWalletForRecheck(t *testing.T) {
 		failing := newChain()
 		strandingWatcher := newReservationStrandingWatcher(failing)
 		strandingWatcher.retryDelay = 0
-		ratw := NewReservationActionTimeoutWatcher(failing, 0, common.Address{}, strandingWatcher, 0)
+		ratw := NewReservationActionTimeoutWatcher(failing, 0, common.Address{}, strandingWatcher, 0, nil)
 		ratw.strandingRecheckWallets[wallet] = struct{}{}
 
 		ratw.drainStrandingRechecks()
@@ -447,6 +445,9 @@ func TestG2F3_StaleDepositPollTickReadsAreBoundedPerTick(t *testing.T) {
 	// now is past the deadline and past the maximum operator stagger
 	// offset, so the first-check stagger gate holds no deposit back.
 	now := deadline + 601
+	// The stagger gate is judged on the chain head's block time (G2-L13),
+	// so the head sits at the same point.
+	spvChain.setLatestBlockTimestamp(time.Unix(int64(now), 0))
 
 	vault := chain.Address("")
 	spvChain.setReservationParameters(&tbtc.ReservationParameters{})
@@ -621,13 +622,7 @@ func TestG2L10_StuckNotifiedPendingActionIsEvicted(t *testing.T) {
 		)
 
 		counting := &actionReadCountingChain{localChain: spvChain}
-		watcher := NewReservationActionTimeoutWatcher(
-			counting,
-			0,
-			common.Address{},
-			nil,
-			0,
-		)
+		watcher := NewReservationActionTimeoutWatcher(counting, 0, common.Address{}, nil, 0, nil)
 		// Before the deadline: nothing is notified, so the only question
 		// is whether the entry is kept.
 		watcher.nowFn = func() uint32 { return 100 }

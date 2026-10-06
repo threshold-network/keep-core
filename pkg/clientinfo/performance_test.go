@@ -510,8 +510,9 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 }
 
 // TestSpvProofSkipCountersRegistered tests that the SPV proof-skip
-// counters and the reservation watcher-death counter are registered
-// upfront so they appear in the metrics endpoint before any increment.
+// counters and the reservation watcher counters (watcher deaths, overdue
+// actions) are registered upfront so they appear in the metrics endpoint
+// before any increment.
 // The spv.go maintainer and WireReservationWatchers emit IncrementCounter
 // calls for these counters from the relay-range, exceeded-max-headers
 // skip branches and the watcher panic/error death paths; a missing
@@ -529,6 +530,7 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
 		MetricSpvReservationWatcherDeathsTotal,
+		MetricSpvReservationActionOverdueTotal,
 	}
 
 	for _, counterName := range expectedCounters {
