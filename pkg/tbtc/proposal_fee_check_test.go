@@ -310,16 +310,17 @@ func TestRejectIfProposedWalletTxFeeBelowProtocolMin(t *testing.T) {
 // tbtcpg, so the formula is replicated inline; it cites
 // tbtcpg.applyWalletTxFeeFloor for reference.
 //
-// Formula: max(ceil(estimate * (100 + buffer) / 100), floor) * vsize.
+// Formula: ceil(max(estimate, floor) * (100 + buffer) / 100) * vsize. The
+// floor is applied before the buffer, so the lowest honest rate is the
+// buffered floor (ceil(5 * 125 / 100) = 7 sat/vB with the defaults).
 func applyWalletTxFeeFloor(estimate, floor int64, buffer int64, vsize int64) *big.Int {
-	// ceil(estimate * (100 + buffer) / 100)
-	numerator := estimate * (100 + buffer)
-	denom := int64(100)
-	ceil := (numerator + denom - 1) / denom
-	if ceil < floor {
-		ceil = floor
+	rate := estimate
+	if rate < floor {
+		rate = floor
 	}
-	return big.NewInt(ceil * vsize)
+	denom := int64(100)
+	rate = (rate*(100+buffer) + denom - 1) / denom
+	return big.NewInt(rate * vsize)
 }
 
 // TestRejectIfProposedWalletTxFeeBelowProtocolMin_HonestLeaderOutputNeverRejected

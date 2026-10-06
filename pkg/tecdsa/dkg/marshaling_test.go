@@ -48,18 +48,33 @@ func TestEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var (
-			senderID            group.MemberIndex
-			ephemeralPublicKeys map[group.MemberIndex][]byte
-			sessionID           string
+			senderID  group.MemberIndex
+			memberIDs []group.MemberIndex
+			sessionID string
 		)
 
 		f := fuzz.New().NilChance(0.1).
-			NumElements(0, 512).
+			NumElements(0, 16).
 			Funcs(pbutils.FuzzFuncs()...)
 
 		f.Fuzz(&senderID)
-		f.Fuzz(&ephemeralPublicKeys)
+		f.Fuzz(&memberIDs)
 		f.Fuzz(&sessionID)
+
+		// Unmarshal rejects malformed ephemeral keys, so the key bytes
+		// must be real keys for the round trip to succeed. Member indexes
+		// and the other fields stay fuzzed.
+		var ephemeralPublicKeys map[group.MemberIndex][]byte
+		if memberIDs != nil {
+			ephemeralPublicKeys = make(map[group.MemberIndex][]byte)
+			for _, memberID := range memberIDs {
+				keyPair, err := ephemeral.GenerateKeyPair()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ephemeralPublicKeys[memberID] = keyPair.PublicKey.Marshal()
+			}
+		}
 
 		message := &ephemeralPublicKeyMessage{
 			senderID:            senderID,

@@ -163,9 +163,9 @@ func bufferedWalletTxFeeFloor(
 //
 // The reject threshold is ProtocolMinWalletTxSatPerVByteFee * (txVsize - 1):
 // the one-vByte allowance covers size-estimate differences between the leader
-// (which sized the fee) and this follower. An honest leader emits at least
-// 5 sat/vB for mempool estimates of 4 sat/vB or less (ceil(4*125/100)=5),
-// so its fee is at least ProtocolMin * leaderVsize. A follower estimating
+// (which sized the fee) and this follower. An honest leader applies its
+// floor (at least ProtocolMinWalletTxSatPerVByteFee) before the buffer, so
+// its fee is at least ProtocolMin * leaderVsize. A follower estimating
 // the same tx one vByte larger computes a threshold one vByte lower, so an
 // honest leader's fee always clears the reject gate. See
 // tbtcpg.applyWalletTxFeeFloor for the leader-side formula this gate must
