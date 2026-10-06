@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ipfs/go-log/v2"
@@ -148,4 +149,107 @@ func bufferedWalletTxFeeFloor(
 	minBufferedFee = new(big.Int).Mul(bufferedRate, big.NewInt(txVsize))
 
 	return bufferedRate, minBufferedFee
+}
+
+// rejectIfProposedWalletTxFeeBelowProtocolMin is the follower-side hard-reject
+// gate on every wallet-tx proposal validator and reservation execute path.
+// It returns an error when the leader's proposed total fee for a wallet
+// transaction is below the fixed protocol minimum for the estimated virtual
+// size. A follower never co-signs a wallet tx whose fee is below this floor,
+// even when the leader proposes it.
+//
+// The reject threshold is ProtocolMinWalletTxSatPerVByteFee * (txVsize - 1):
+// the one-vByte allowance covers size-estimate differences between the leader
+// (which sized the fee) and this follower. An honest leader emits at least
+// 5 sat/vB for mempool estimates of 4 sat/vB or less (ceil(4*125/100)=5),
+// so its fee is at least ProtocolMin * leaderVsize. A follower estimating
+// the same tx one vByte larger computes a threshold one vByte lower, so an
+// honest leader's fee always clears the reject gate. See
+// tbtcpg.applyWalletTxFeeFloor for the leader-side formula this gate must
+// never reject.
+//
+// txVsize must be positive; if not, the check is skipped (the caller has
+// already surfaced the underlying estimation error and proceeding would be
+// incorrect). proposedFee may be nil (treated as below minimum, since a nil
+// fee means no fee was set) on test/mock chains unreachable in production
+// where on-chain validation has already ABI-packed the fee and panicked on
+// nil.
+//
+// actionLabel identifies the proposal type in the error message
+// (e.g. "deposit sweep", "redemption", "moving funds").
+func rejectIfProposedWalletTxFeeBelowProtocolMin(
+	proposedFee *big.Int,
+	txVsize int64,
+	actionLabel string,
+) error {
+	if txVsize <= 0 {
+		return nil
+	}
+	minProtocolFee := big.NewInt(ProtocolMinWalletTxSatPerVByteFee * (txVsize - 1))
+	if proposedFee == nil || proposedFee.Cmp(minProtocolFee) < 0 {
+		return fmt.Errorf(
+			"%s tx fee [%v] is below the protocol minimum [%v] "+
+				"(%d sat/vByte * [%d] vByte, less one vByte); refusing to co-sign",
+			actionLabel,
+			proposedFee,
+			minProtocolFee,
+			ProtocolMinWalletTxSatPerVByteFee,
+			txVsize,
+		)
+	}
+	return nil
+}
+
+// warnIfProposedWalletTxFeeBelowBareFloor is the follower-side soft
+// (log-only) check used by every wallet-tx proposal validator and
+// reservation execute path after the hard-reject gate. It warns when the
+// leader's proposed total fee is below the operator's own bare floor
+// (MinWalletTxSatPerVByteFee * txVsize), which catches degraded fees that
+// pass the fixed protocol minimum but fall short of the operator's own
+// configured floor. Unlike the buffered floor (which adds a 25% safety
+// margin), this comparison uses the bare floor so the warning fires only
+// on genuinely degraded fees and not on honest low-fee proposals that are
+// valid but below the buffer. This fixes G1-S3: the buffered-floor warning
+// was firing on every honest quiet-mempool proposal.
+//
+// satPerVByteFloor is the operator's configured floor rate (sat/vByte);
+// pass MinWalletTxSatPerVByteFee. txVsize is the estimated transaction
+// virtual size in vBytes. proposedFee is the leader's proposed total fee
+// in satoshis; nil is treated as "no fee set" (defense-in-depth).
+// actionLabel identifies the proposal type in the log message.
+func warnIfProposedWalletTxFeeBelowBareFloor(
+	logger log.StandardLogger,
+	satPerVByteFloor int64,
+	txVsize int64,
+	proposedFee *big.Int,
+	actionLabel string,
+) {
+	if txVsize <= 0 {
+		return
+	}
+	if proposedFee == nil {
+		logger.Warnf(
+			"%s proposal has no tx fee set; expected at least the "+
+				"operator's bare floor minimum [%d * %d vByte = %d sat]",
+			actionLabel,
+			satPerVByteFloor,
+			txVsize,
+			satPerVByteFloor*txVsize,
+		)
+		return
+	}
+	bareFloorFee := big.NewInt(satPerVByteFloor * txVsize)
+	if proposedFee.Cmp(bareFloorFee) < 0 {
+		logger.Warnf(
+			"proposed %s tx fee [%v] is below the operator's bare floor "+
+				"[%d sat/vByte * %d vByte = %v]; the leader may be "+
+				"underpricing the tx, which risks it getting stuck in "+
+				"the mempool and jamming the wallet",
+			actionLabel,
+			proposedFee,
+			satPerVByteFloor,
+			txVsize,
+			bareFloorFee,
+		)
+	}
 }

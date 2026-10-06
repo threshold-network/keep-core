@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -717,6 +719,159 @@ func reservationTestWallet(t *testing.T) wallet {
 	return wallet{publicKey: mustUnmarshalPublicKey(t, publicKeyBytes)}
 }
 
+// newAnchorActionWithFee builds an anchor action over a chain on which every
+// read and the on-chain validation of the anchor execute path succeed (the
+// same setup as the happy path of TestReservationAnchorAction_Execute), with
+// the given anchor fee. The low expiry block makes execute stop with
+// "invalid proposal expiry block" right before signing, so reaching that
+// error proves the fee gate passed.
+func newAnchorActionWithFee(t *testing.T, fee *big.Int) *reservationAnchorAction {
+	t.Helper()
+
+	const fundingOutputIndex = 0
+
+	custodyWallet := reservationTestWallet(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
+
+	depositForScript := &Deposit{
+		Depositor:           "0x0000000000000000000000000000000000000001",
+		WalletPublicKeyHash: walletPublicKeyHash,
+	}
+	depositScript, err := depositForScript.Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptHash := sha256.Sum256(depositScript)
+	fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	btcChain := newLocalBitcoinChain()
+	fundingTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: fundingOutputScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+	fundingTxHash := fundingTx.Hash()
+
+	chain := newRangeRevealChain(&DepositRevealedEvent{
+		BlockNumber:         299990,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  fundingOutputIndex,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		Amount:              100000,
+		Depositor:           "0x0000000000000000000000000000000000000001",
+	})
+	chain.setDepositRequest(fundingTxHash, fundingOutputIndex, &DepositChainRequest{
+		Amount:     100000,
+		RevealedAt: time.Now(),
+	})
+	chain.setReservationAction(&ReservationAction{
+		ActionType:                ReservationActionTypeAcceptance,
+		State:                     ReservationActionStatePending,
+		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:                  2000,
+	})
+
+	return newReservationAnchorAction(
+		zap.NewNop().Sugar(),
+		chain,
+		btcChain,
+		custodyWallet,
+		nil, // signing executor unreached: execute stops before signing
+		&ReservationAnchorProposal{
+			DepositFundingTxHash:      fundingTxHash,
+			DepositFundingOutputIndex: fundingOutputIndex,
+			RequestNonce:              1,
+			AnchorTxFee:               fee,
+		},
+		300000,
+		lowExpiryBlock,
+		nil,
+		nil,
+	)
+}
+
+func anchorVsize(t *testing.T) int64 {
+	t.Helper()
+
+	vsize, err := bitcoin.NewTransactionSizeEstimator().
+		AddScriptHashInputs(1, DepositScriptByteSize, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return vsize
+}
+
+// TestReservationAnchorAction_RejectsBelowProtocolMinimum verifies that an
+// anchor proposal with a fee below ProtocolMinWalletTxSatPerVByteFee *
+// (vsize - 1) is rejected before signing. On the base code the check only
+// warned, so execute went on to the signing boundary.
+func TestReservationAnchorAction_RejectsBelowProtocolMinimum(t *testing.T) {
+	vsize := anchorVsize(t)
+	threshold := ProtocolMinWalletTxSatPerVByteFee * (vsize - 1)
+
+	scenarios := map[string]*big.Int{
+		"one satoshi below the threshold": big.NewInt(threshold - 1),
+		"relay floor fee":                 big.NewInt(vsize),
+	}
+
+	for name, fee := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			err := newAnchorActionWithFee(t, fee).execute()
+			if err == nil {
+				t.Fatalf(
+					"expected fee [%v] to be rejected (threshold [%d])",
+					fee,
+					threshold,
+				)
+			}
+			if !strings.Contains(err.Error(), "protocol minimum") {
+				t.Errorf("expected a protocol minimum error, got: [%v]", err)
+			}
+		})
+	}
+}
+
+// TestReservationAnchorAction_AcceptsAtProtocolMinimum verifies that fees at
+// the reject threshold and at the full protocol minimum pass the fee gate and
+// the action proceeds to the signing boundary.
+func TestReservationAnchorAction_AcceptsAtProtocolMinimum(t *testing.T) {
+	vsize := anchorVsize(t)
+
+	scenarios := map[string]*big.Int{
+		"exactly at the threshold": big.NewInt(
+			ProtocolMinWalletTxSatPerVByteFee * (vsize - 1),
+		),
+		"exactly at the full protocol minimum": big.NewInt(
+			ProtocolMinWalletTxSatPerVByteFee * vsize,
+		),
+	}
+
+	for name, fee := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			err := newAnchorActionWithFee(t, fee).execute()
+			if err == nil || err.Error() != reachedSigningBoundaryError {
+				t.Errorf(
+					"expected fee [%v] to reach the signing boundary "+
+						"(error [%s]), got: [%v]",
+					fee,
+					reachedSigningBoundaryError,
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestReservationAnchorAction_Execute(t *testing.T) {
 	const fundingOutputIndex = 0
 
@@ -971,6 +1126,501 @@ func TestReservationAnchorAction_Execute(t *testing.T) {
 	})
 }
 
+// reanchorTestCreationPeriod is the Bridge wallet creation period used by the
+// re-anchor tests, in seconds.
+const reanchorTestCreationPeriod = uint32(30 * 24 * 60 * 60)
+
+// reanchorFixture holds a chain on which every on-chain read of the
+// re-anchor execute path succeeds: the reservation, a pending re-anchor
+// action targeting targetWalletPKH, the target wallet, the wallet parameters
+// and the chain head timestamp.
+type reanchorFixture struct {
+	chain           *localChain
+	btcChain        *localBitcoinChain
+	custodyWallet   wallet
+	targetWalletPKH [20]byte
+}
+
+// newReanchorFixture builds a reanchorFixture whose target wallet was
+// created targetAge before the chain head.
+func newReanchorFixture(t *testing.T, targetAge time.Duration) *reanchorFixture {
+	t.Helper()
+
+	custodyWallet := reservationTestWallet(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
+	targetWalletPKH := [20]byte{0x02}
+
+	btcChain := newLocalBitcoinChain()
+	anchorOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorAnchorTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 10000},
+			{Value: 100000, PublicKeyScript: anchorOutputScript},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(priorAnchorTx); err != nil {
+		t.Fatal(err)
+	}
+
+	headTime := time.Unix(1_700_000_000, 0)
+
+	chain := Connect()
+	chain.setReservation(&Reservation{
+		WalletPublicKeyHash: walletPublicKeyHash,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: priorAnchorTx.Hash(),
+				OutputIndex:     1,
+			},
+			Value: 100000,
+		},
+	})
+	chain.setReservationAction(&ReservationAction{
+		ActionType:                ReservationActionTypeReanchor,
+		State:                     ReservationActionStatePending,
+		TargetWalletPublicKeyHash: targetWalletPKH,
+		TxMaxFee:                  2000,
+	})
+	chain.setWallet(targetWalletPKH, &WalletChainData{
+		CreatedAt: headTime.Add(-targetAge),
+	})
+	chain.SetWalletParameters(WalletParameters{
+		CreationPeriod: reanchorTestCreationPeriod,
+	})
+	chain.SetLatestBlockTimestamp(headTime)
+
+	return &reanchorFixture{
+		chain:           chain,
+		btcChain:        btcChain,
+		custodyWallet:   custodyWallet,
+		targetWalletPKH: targetWalletPKH,
+	}
+}
+
+// newAgedReanchorFixture returns a fixture whose target wallet is well past the
+// creation period.
+func newAgedReanchorFixture(t *testing.T) *reanchorFixture {
+	t.Helper()
+
+	return newReanchorFixture(
+		t,
+		2*time.Duration(reanchorTestCreationPeriod)*time.Second,
+	)
+}
+
+// action builds a re-anchor action over the given chain. An expiry block
+// below reservationActionSigningTimeoutSafetyMarginBlocks makes execute stop
+// with "invalid proposal expiry block" right before signing, so reaching
+// that error proves every earlier check passed.
+func (f *reanchorFixture) action(
+	chain Chain,
+	fee *big.Int,
+	expiryBlock uint64,
+) *reservationReanchorAction {
+	return newReservationReanchorAction(
+		zap.NewNop().Sugar(),
+		chain,
+		f.btcChain,
+		f.custodyWallet,
+		nil, // signing executor unreached: execute stops before signing
+		&ReservationReanchorProposal{
+			ReservationKey:            big.NewInt(777),
+			RequestNonce:              1,
+			TargetWalletPublicKeyHash: f.targetWalletPKH,
+			ReanchorTxFee:             fee,
+		},
+		300000,
+		expiryBlock,
+		nil,
+		nil,
+	)
+}
+
+const (
+	// reachedSigningBoundaryError is the error execute returns when every
+	// check before signing passed and only the test's low expiry block
+	// stops it.
+	reachedSigningBoundaryError = "invalid proposal expiry block"
+	// lowExpiryBlock is below reservationActionSigningTimeoutSafetyMarginBlocks.
+	lowExpiryBlock = 100
+)
+
+func reanchorVsize(t *testing.T) int64 {
+	t.Helper()
+
+	vsize, err := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(1, true).
+		VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return vsize
+}
+
+// TestReservationReanchorAction_RejectsBelowProtocolMinimum verifies that a
+// re-anchor proposal with a fee below ProtocolMinWalletTxSatPerVByteFee *
+// (vsize - 1) is rejected before signing. On the base code the check only
+// warned, so execute went on to the signing boundary.
+func TestReservationReanchorAction_RejectsBelowProtocolMinimum(t *testing.T) {
+	vsize := reanchorVsize(t)
+	threshold := ProtocolMinWalletTxSatPerVByteFee * (vsize - 1)
+
+	scenarios := map[string]*big.Int{
+		"one satoshi below the threshold": big.NewInt(threshold - 1),
+		"relay floor fee":                 big.NewInt(vsize),
+	}
+
+	for name, fee := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			fixture := newAgedReanchorFixture(t)
+
+			err := fixture.action(fixture.chain, fee, lowExpiryBlock).execute()
+			if err == nil {
+				t.Fatalf(
+					"expected fee [%v] to be rejected (threshold [%d])",
+					fee,
+					threshold,
+				)
+			}
+			if !strings.Contains(err.Error(), "protocol minimum") {
+				t.Errorf("expected a protocol minimum error, got: [%v]", err)
+			}
+		})
+	}
+}
+
+// TestReservationReanchorAction_AcceptsAtProtocolMinimum verifies that fees at
+// the reject threshold and at the full protocol minimum pass the fee gate and
+// the action proceeds to the signing boundary.
+func TestReservationReanchorAction_AcceptsAtProtocolMinimum(t *testing.T) {
+	vsize := reanchorVsize(t)
+
+	scenarios := map[string]*big.Int{
+		"exactly at the threshold": big.NewInt(
+			ProtocolMinWalletTxSatPerVByteFee * (vsize - 1),
+		),
+		"exactly at the full protocol minimum": big.NewInt(
+			ProtocolMinWalletTxSatPerVByteFee * vsize,
+		),
+	}
+
+	for name, fee := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			fixture := newAgedReanchorFixture(t)
+
+			err := fixture.action(fixture.chain, fee, lowExpiryBlock).execute()
+			if err == nil || err.Error() != reachedSigningBoundaryError {
+				t.Errorf(
+					"expected fee [%v] to reach the signing boundary "+
+						"(error [%s]), got: [%v]",
+					fee,
+					reachedSigningBoundaryError,
+					err,
+				)
+			}
+		})
+	}
+}
+
+// reanchorReadFailureChain makes the chain reads of the re-anchor age gate
+// fail on demand.
+type reanchorReadFailureChain struct {
+	*localChain
+	failGetWallet            bool
+	failWalletParameters     bool
+	failLatestBlockTimestamp bool
+}
+
+func (c *reanchorReadFailureChain) GetWallet(
+	walletPublicKeyHash [20]byte,
+) (*WalletChainData, error) {
+	if c.failGetWallet {
+		return nil, fmt.Errorf("simulated GetWallet failure")
+	}
+	return c.localChain.GetWallet(walletPublicKeyHash)
+}
+
+func (c *reanchorReadFailureChain) GetWalletParameters() (WalletParameters, error) {
+	if c.failWalletParameters {
+		return WalletParameters{}, fmt.Errorf("simulated GetWalletParameters failure")
+	}
+	return c.localChain.GetWalletParameters()
+}
+
+func (c *reanchorReadFailureChain) GetLatestBlockTimestamp() (time.Time, error) {
+	if c.failLatestBlockTimestamp {
+		return time.Time{}, fmt.Errorf("simulated GetLatestBlockTimestamp failure")
+	}
+	return c.localChain.GetLatestBlockTimestamp()
+}
+
+// TestReservationReanchorAction_RejectsYoungTarget verifies the follower-side
+// target age gate: a re-anchor to a wallet younger than the Bridge creation
+// period is refused (the leader may be malicious), an aged target and one
+// within the two-block tolerance at the boundary are signed, and any failed
+// read fails closed. Target ages are relative to the chain head timestamp.
+func TestReservationReanchorAction_RejectsYoungTarget(t *testing.T) {
+	period := time.Duration(reanchorTestCreationPeriod) * time.Second
+
+	ageCases := []struct {
+		name      string
+		targetAge time.Duration
+		// wantError is empty when the action must reach the signing
+		// boundary, otherwise a substring of the expected rejection.
+		wantError string
+	}{
+		{
+			name:      "young target is rejected",
+			targetAge: 24 * time.Hour,
+			wantError: "younger than the creation period",
+		},
+		{
+			name:      "brand new target is rejected",
+			targetAge: 0,
+			wantError: "younger than the creation period",
+		},
+		{
+			name:      "aged target is accepted",
+			targetAge: 2 * period,
+		},
+		{
+			name:      "target exactly at the creation period is accepted",
+			targetAge: period,
+		},
+		{
+			name:      "target at the tolerance boundary is accepted",
+			targetAge: period - ReanchorTargetAgeTolerance,
+		},
+		{
+			name:      "target one second past the tolerance is rejected",
+			targetAge: period - ReanchorTargetAgeTolerance - time.Second,
+			wantError: "younger than the creation period",
+		},
+	}
+
+	for _, tc := range ageCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newReanchorFixture(t, tc.targetAge)
+
+			err := fixture.action(
+				fixture.chain,
+				big.NewInt(1500),
+				lowExpiryBlock,
+			).execute()
+
+			assertReanchorOutcome(t, err, tc.wantError)
+		})
+	}
+
+	readFailureCases := map[string]struct {
+		configure func(*reanchorReadFailureChain)
+		wantError string
+	}{
+		"target wallet read failure is rejected": {
+			configure: func(c *reanchorReadFailureChain) { c.failGetWallet = true },
+			wantError: "cannot get target wallet",
+		},
+		"wallet parameters read failure is rejected": {
+			configure: func(c *reanchorReadFailureChain) { c.failWalletParameters = true },
+			wantError: "cannot get wallet parameters",
+		},
+		"chain head read failure is rejected": {
+			configure: func(c *reanchorReadFailureChain) { c.failLatestBlockTimestamp = true },
+			wantError: "cannot get chain head timestamp",
+		},
+	}
+
+	for name, tc := range readFailureCases {
+		t.Run(name, func(t *testing.T) {
+			// The target is aged, so only the failed read can reject it.
+			fixture := newAgedReanchorFixture(t)
+			chain := &reanchorReadFailureChain{localChain: fixture.chain}
+			tc.configure(chain)
+
+			err := fixture.action(
+				chain,
+				big.NewInt(1500),
+				lowExpiryBlock,
+			).execute()
+
+			assertReanchorOutcome(t, err, tc.wantError)
+		})
+	}
+}
+
+// assertReanchorOutcome checks that err is the signing-boundary error when
+// wantError is empty, and otherwise contains wantError.
+func assertReanchorOutcome(t *testing.T, err error, wantError string) {
+	t.Helper()
+
+	if wantError == "" {
+		if err == nil || err.Error() != reachedSigningBoundaryError {
+			t.Errorf(
+				"expected to reach the signing boundary (error [%s]), got: [%v]",
+				reachedSigningBoundaryError,
+				err,
+			)
+		}
+		return
+	}
+
+	if err == nil || !strings.Contains(err.Error(), wantError) {
+		t.Errorf("expected error containing [%s], got: [%v]", wantError, err)
+	}
+}
+
+// hangingBitcoinChain blocks GetTransaction until release is closed.
+type hangingBitcoinChain struct {
+	*localBitcoinChain
+	release chan struct{}
+}
+
+func (h *hangingBitcoinChain) GetTransaction(
+	bitcoin.Hash,
+) (*bitcoin.Transaction, error) {
+	<-h.release
+	return nil, fmt.Errorf("released")
+}
+
+// hangingReanchorValidatorChain blocks the on-chain re-anchor proposal
+// validator view until release is closed.
+type hangingReanchorValidatorChain struct {
+	*localChain
+	release chan struct{}
+}
+
+func (h *hangingReanchorValidatorChain) ValidateReservationReanchorProposal(
+	[20]byte,
+	*ReservationReanchorProposal,
+) error {
+	<-h.release
+	return fmt.Errorf("released")
+}
+
+// TestReservationExecute_RPCTimeoutReleasesDispatcher verifies that a hung
+// RPC read in a reservation execute path times out, so the per-wallet
+// dispatcher lock is released and the wallet accepts the next action. Without
+// the bound the hung goroutine would hold the lock for the process lifetime.
+func TestReservationExecute_RPCTimeoutReleasesDispatcher(t *testing.T) {
+	originalTimeout := reservationRPCRequestTimeout
+	reservationRPCRequestTimeout = 200 * time.Millisecond
+	t.Cleanup(func() {
+		reservationRPCRequestTimeout = originalTimeout
+	})
+
+	custodyWallet := reservationTestWallet(t)
+
+	// Each case builds an action that blocks on one of the bounded reads.
+	// The release channel frees the blocked goroutines when the test ends.
+	newHangingActions := map[string]func(
+		t *testing.T,
+		release chan struct{},
+	) walletAction{
+		"bitcoin GetTransaction hangs in the anchor path": func(
+			t *testing.T,
+			release chan struct{},
+		) walletAction {
+			return newReservationAnchorAction(
+				zap.NewNop().Sugar(),
+				Connect(),
+				&hangingBitcoinChain{
+					localBitcoinChain: newLocalBitcoinChain(),
+					release:           release,
+				},
+				custodyWallet,
+				nil,
+				&ReservationAnchorProposal{
+					DepositFundingTxHash:      bitcoin.Hash{0x01},
+					DepositFundingOutputIndex: 0,
+					RequestNonce:              1,
+					AnchorTxFee:               big.NewInt(1500),
+				},
+				300000,
+				300000+600,
+				nil,
+				nil,
+			)
+		},
+		"on-chain validator view hangs in the re-anchor path": func(
+			t *testing.T,
+			release chan struct{},
+		) walletAction {
+			fixture := newAgedReanchorFixture(t)
+			fixture.custodyWallet = custodyWallet
+
+			return fixture.action(
+				&hangingReanchorValidatorChain{
+					localChain: fixture.chain,
+					release:    release,
+				},
+				big.NewInt(1500),
+				300000+600,
+			)
+		},
+	}
+
+	for name, newAction := range newHangingActions {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+
+			dispatcher := newWalletDispatcher()
+			dispatcherBusy := func() bool {
+				dispatcher.actionsMutex.Lock()
+				defer dispatcher.actionsMutex.Unlock()
+
+				return len(dispatcher.actions) > 0
+			}
+			waitUntilIdle := func() {
+				t.Helper()
+
+				deadline := time.Now().Add(5 * time.Second)
+				for dispatcherBusy() {
+					if time.Now().After(deadline) {
+						t.Fatal(
+							"dispatcher lock was not released after the " +
+								"RPC call timed out",
+						)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+
+			if err := dispatcher.dispatch(newAction(t, release)); err != nil {
+				t.Fatalf("first dispatch failed: [%v]", err)
+			}
+
+			// While the RPC call hangs, the wallet is busy.
+			if err := dispatcher.dispatch(newAction(t, release)); err != errWalletBusy {
+				t.Fatalf(
+					"expected the wallet to be busy during the hung call, "+
+						"got: [%v]",
+					err,
+				)
+			}
+
+			// The bounded call times out and execute returns, releasing the
+			// lock without the hung call ever finishing.
+			waitUntilIdle()
+
+			// The wallet accepts the next action.
+			if err := dispatcher.dispatch(newAction(t, release)); err != nil {
+				t.Fatalf(
+					"expected the wallet to accept an action after the "+
+						"timeout, got: [%v]",
+					err,
+				)
+			}
+			waitUntilIdle()
+		})
+	}
+}
+
 func TestReservationReanchorAction_Execute(t *testing.T) {
 	custodyWallet := reservationTestWallet(t)
 	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
@@ -1034,12 +1684,25 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 			TargetWalletPublicKeyHash: walletPublicKeyHash,
 			TxMaxFee:                  2000,
 		})
+		// The age gate reads the target wallet, the wallet parameters and
+		// the chain head time; the target is well past the creation period.
+		headTime := time.Unix(1_700_000_000, 0)
+		chain.setWallet(walletPublicKeyHash, &WalletChainData{
+			CreatedAt: headTime.Add(
+				-2 * time.Duration(reanchorTestCreationPeriod) * time.Second,
+			),
+		})
+		chain.SetWalletParameters(WalletParameters{
+			CreationPeriod: reanchorTestCreationPeriod,
+		})
+		chain.SetLatestBlockTimestamp(headTime)
 
 		// Every real upstream step (reservation load, action load,
-		// type/state check, target wallet match, on-chain validation,
-		// transaction assembly) must succeed before the expiry-block
-		// guard is reached and rejects the proposal - reaching this
-		// exact error is the test's proof that all of it worked.
+		// type/state check, target wallet match, target age gate,
+		// on-chain validation, fee gate, transaction assembly) must
+		// succeed before the expiry-block guard is reached and rejects
+		// the proposal - reaching this exact error is the test's proof
+		// that all of it worked.
 		err = newAction(chain, btcChain).execute()
 		if err == nil || err.Error() != "invalid proposal expiry block" {
 			t.Errorf(

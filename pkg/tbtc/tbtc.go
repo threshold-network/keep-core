@@ -92,6 +92,17 @@ const (
 	// DefaultWalletTxFeeBufferPercent is the default safety-buffer
 	// percentage applied over the per-vByte fee rate.
 	DefaultWalletTxFeeBufferPercent = 25
+	// ProtocolMinWalletTxSatPerVByteFee is the fixed minimum fee rate, in
+	// sat/vByte, that every wallet Bitcoin transaction must meet. It equals
+	// the pre-PR hard-coded leader floor (minWalletTxSatPerVByteFee = 5 in
+	// pkg/tbtcpg/fee.go) and the DefaultWalletTxSatPerVByteFloor default
+	// above. Both pre-PR and PR honest leaders emit at least this rate, so a
+	// follower hard-rejecting below it is safe in mixed-version traffic: a
+	// proposal that lands under it only comes from a misbehaving or unpatched
+	// leader underpricing the tx. The reject sites allow one vByte
+	// (ProtocolMin * (vsize - 1)) to cover size-estimate differences between
+	// leader and follower versions.
+	ProtocolMinWalletTxSatPerVByteFee int64 = 5
 )
 
 var DefaultKeyGenerationConcurrency = runtime.GOMAXPROCS(0)
@@ -176,13 +187,31 @@ type Config struct {
 // policy from Config to the package-level policy vars. Zero-valued Config
 // fields are skipped so a direct Config{} in tests retains the
 // DefaultWalletTx* constants.
-func applyWalletTxFeePolicy(config Config) {
+//
+// A non-zero WalletTxSatPerVByteFloor below ProtocolMinWalletTxSatPerVByteFee
+// is rejected with an error: an operator-tuned floor under the fixed protocol
+// minimum would let every follower co-sign underpriced wallet transactions on
+// all five wallet-tx paths, which the protocol minimum exists to prevent. The
+// caller (Initialize) must propagate the error so startup fails.
+func applyWalletTxFeePolicy(config Config) error {
 	if config.WalletTxSatPerVByteFloor > 0 {
-		MinWalletTxSatPerVByteFee = int64(config.WalletTxSatPerVByteFloor)
+		floor := int64(config.WalletTxSatPerVByteFloor)
+		if floor < ProtocolMinWalletTxSatPerVByteFee {
+			return fmt.Errorf(
+				"tbtc.walletTxSatPerVByteFloor [%d] is below the protocol "+
+					"minimum [%d]; refusing to start: a floor under the "+
+					"protocol minimum would let followers co-sign underpriced "+
+					"wallet transactions",
+				floor,
+				ProtocolMinWalletTxSatPerVByteFee,
+			)
+		}
+		MinWalletTxSatPerVByteFee = floor
 	}
 	if config.WalletTxFeeBufferPercent > 0 {
 		WalletTxFeeBufferPercent = int64(config.WalletTxFeeBufferPercent)
 	}
+	return nil
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -212,7 +241,9 @@ func Initialize(
 	perfMetrics *clientinfo.PerformanceMetrics,
 	ethereumNetwork ethereum.Network,
 ) error {
-	applyWalletTxFeePolicy(config)
+	if err := applyWalletTxFeePolicy(config); err != nil {
+		return err
+	}
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
 	if ethChain, ok := chain.(interface {

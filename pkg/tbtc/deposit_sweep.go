@@ -595,14 +595,11 @@ func ValidateDepositSweepProposal(
 			matchingEvent.Vault,
 			reservationParams.ReservationVault,
 		) {
-			// Hard reject, unlike the fee soft-check below: that check
-			// is log-only specifically to avoid splitting signers during
-			// a mixed-version rollout (see its comment ahead of
-			// warnIfProposedWalletTxFeeBelowBufferedFloor). Sweeping a
-			// reservation is irreversible, so here the tradeoff flips -
-			// a stalled sweep (some followers reject, signing doesn't
-			// reach threshold) is the acceptable cost, not a wrongly
-			// swept reservation.
+			// Hard reject, like the protocol-minimum fee gate below: a
+			// follower must not sign a sweep that spends a reservation.
+			// Sweeping a reservation is irreversible, so a stalled sweep
+			// (some followers reject, signing doesn't reach threshold) is
+			// the acceptable cost, not a wrongly swept reservation.
 			validateProposalLogger.Infof(
 				"deposit [%v] - checking reservation status",
 				depositDisplayIndex,
@@ -670,33 +667,45 @@ func ValidateDepositSweepProposal(
 		"deposit sweep proposal is valid",
 	)
 
-	// Follower-side soft check on the proposed fee. The on-chain
+	// Follower-side fee check on the proposed fee. The on-chain
 	// WalletProposalValidator only bounds the sweep fee from above, not below,
 	// so a misbehaving or unpatched leader can propose a fee at the ~1 sat/vByte
-	// relay floor that this node would otherwise sign - the same underpricing
-	// that jams the wallet (see threshold-network/keep-core#4171). We recompute
-	// the safe minimum (applying the 25% safety buffer that
-	// tbtcpg.applyWalletTxFeeFloor would also enforce on the leader side) and
-	// warn if the proposal is below it.
+	// relay floor that would jam the wallet (see
+	// threshold-network/keep-core#4171).
 	//
-	// This is intentionally log-only, not a rejection: rejecting a below-floor
-	// proposal here would, during a mixed-version rollout, split signers (patched
-	// nodes reject, unpatched nodes sign) and could stall signing. Hard
-	// enforcement belongs on-chain in the WalletProposalValidator, or behind a
-	// coordinated all-nodes upgrade. The threshold is recomputed in
-	// checkSweepFeeFloor using the same buffered floor
-	// (MinWalletTxSatPerVByteFee + WalletTxFeeBufferPercent) as
-	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go);
-	// keep the size estimator in checkSweepFeeFloor in sync with the
+	// The hard-reject gate uses the fixed protocol minimum
+	// (ProtocolMinWalletTxSatPerVByteFee = 5) so every follower rejects
+	// underpriced proposals regardless of operator tuning: an honest leader
+	// emits at least 5 sat/vB so its fee always clears the reject gate,
+	// and a misbehaving leader proposing below the protocol minimum is
+	// rejected outright. The one-vByte allowance (ProtocolMin * (vsize-1))
+	// covers size-estimate differences between leader and follower versions.
+	//
+	// The soft warning uses the operator's own bare floor
+	// (MinWalletTxSatPerVByteFee * vsize) to catch degraded fees that pass
+	// the protocol minimum but fall short of the configured floor. This
+	// fixes G1-S3: a buffered-floor warning was firing on every honest
+	// quiet-mempool proposal.
+	//
+	// Keep the size estimator in checkSweepFeeFloor in sync with the
 	// leader-side estimator in tbtcpg/deposit_sweep.go.
 	check, checkErr := checkSweepFeeFloor(proposal)
 	if checkErr != nil {
 		validateProposalLogger.Warnf(
-			"cannot estimate sweep tx size for the fee sanity check: [%v]",
+			"cannot estimate sweep tx size for the fee check: [%v]",
 			checkErr,
 		)
 	} else {
-		warnIfProposedWalletTxFeeBelowBufferedFloor(
+		// Hard reject: follower refuses to co-sign a below-protocol fee.
+		if err := rejectIfProposedWalletTxFeeBelowProtocolMin(
+			proposal.SweepTxFee,
+			check.sweepTxSize,
+			"deposit sweep",
+		); err != nil {
+			return nil, err
+		}
+		// Soft warning: below the operator's bare floor.
+		warnIfProposedWalletTxFeeBelowBareFloor(
 			validateProposalLogger,
 			MinWalletTxSatPerVByteFee,
 			check.sweepTxSize,

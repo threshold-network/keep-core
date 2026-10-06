@@ -21,6 +21,72 @@ const (
 	reservationReanchorProposalValidityBlocks = 600
 )
 
+// reservationRPCRequestTimeout bounds each Ethereum RPC read and Bitcoin
+// RPC read in the reservation execute paths. The value is a package var so
+// tests can shorten it to a small duration. A 30-second timeout matches the
+// HeaderByNumber pattern already used elsewhere in the codebase for
+// time-sensitive on-chain reads.
+var reservationRPCRequestTimeout = 30 * time.Second
+
+// rpcCallWithTimeout wraps a chain method call with a timeout. If the call
+// does not return within reservationRPCRequestTimeout, it returns an error
+// describing the timeout. This prevents a hung RPC endpoint from freezing
+// every signing action for a wallet indefinitely; the dispatcher lock is
+// released when execute returns.
+func rpcCallWithTimeout[T any](
+	call func() (T, error),
+	label string,
+) (T, error) {
+	type result struct {
+		val T
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		val, err := call()
+		resultCh <- result{val, err}
+	}()
+	select {
+	case r := <-resultCh:
+		return r.val, r.err
+	case <-time.After(reservationRPCRequestTimeout):
+		var zero T
+		return zero, fmt.Errorf(
+			"%s: RPC call timed out after %v",
+			label,
+			reservationRPCRequestTimeout,
+		)
+	}
+}
+
+// rpcCallWithTimeoutErr wraps a chain method call that returns only an error
+// with a timeout. If the call does not return within reservationRPCRequestTimeout,
+// it returns an error describing the timeout. This prevents a hung RPC endpoint
+// from freezing every signing action for a wallet indefinitely; the dispatcher
+// lock is released when execute returns.
+func rpcCallWithTimeoutErr(
+	call func() error,
+	label string,
+) error {
+	type result struct {
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		resultCh <- result{call()}
+	}()
+	select {
+	case r := <-resultCh:
+		return r.err
+	case <-time.After(reservationRPCRequestTimeout):
+		return fmt.Errorf(
+			"%s: RPC call timed out after %v",
+			label,
+			reservationRPCRequestTimeout,
+		)
+	}
+}
+
 // ReservationState represents the state of an on-chain UTXO reservation.
 type ReservationState uint8
 
@@ -497,18 +563,42 @@ func newReservationAnchorAction(
 func (raa *reservationAnchorAction) execute() error {
 	walletPublicKeyHash := bitcoin.PublicKeyHash(raa.custodyWallet.publicKey)
 
-	fundingTx, err := raa.btcChain.GetTransaction(raa.proposal.DepositFundingTxHash)
+	// Bound Bitcoin RPC reads to prevent a stuck Electrum endpoint from
+	// freezing every signing action for this wallet indefinitely.
+	fundingTx, err := func() (*bitcoin.Transaction, error) {
+		return rpcCallWithTimeout(
+			func() (*bitcoin.Transaction, error) {
+				return raa.btcChain.GetTransaction(raa.proposal.DepositFundingTxHash)
+			},
+			"GetTransaction",
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("cannot fetch funding transaction: [%v]", err)
 	}
 
-	depositRequest, found, err := raa.chain.GetDepositRequest(
-		raa.proposal.DepositFundingTxHash,
-		raa.proposal.DepositFundingOutputIndex,
-	)
+	// Bound Ethereum RPC reads similarly.
+	type depositRequestResult struct {
+		req   *DepositChainRequest
+		found bool
+		err   error
+	}
+	result, err := func() (depositRequestResult, error) {
+		return rpcCallWithTimeout(
+			func() (depositRequestResult, error) {
+				req, found, err := raa.chain.GetDepositRequest(
+					raa.proposal.DepositFundingTxHash,
+					raa.proposal.DepositFundingOutputIndex,
+				)
+				return depositRequestResult{req, found, err}, err
+			},
+			"GetDepositRequest",
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("cannot fetch deposit request: [%v]", err)
 	}
+	depositRequest, found := result.req, result.found
 	if !found {
 		return fmt.Errorf("deposit request not found")
 	}
@@ -525,20 +615,31 @@ func (raa *reservationAnchorAction) execute() error {
 	}); ok {
 		averageBlockTime = timedChain.AverageBlockTime()
 	}
-	matchingEvent, err := FindDepositRevealedEventByRevealTime(
-		raa.chain,
-		walletPublicKeyHash,
-		depositRequest.RevealedAt,
-		time.Now(),
-		raa.startBlock,
-		averageBlockTime,
-		func(event *DepositRevealedEvent) bool {
-			return event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
-				event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex
+
+	// Bound the event scan: PastDepositRevealedEvents is the RPC call inside
+	// FindDepositRevealedEventByRevealTime.
+	var matchingEvent *DepositRevealedEvent
+	findEventsErr := rpcCallWithTimeoutErr(
+		func() error {
+			var err error
+			matchingEvent, err = FindDepositRevealedEventByRevealTime(
+				raa.chain,
+				walletPublicKeyHash,
+				depositRequest.RevealedAt,
+				time.Now(),
+				raa.startBlock,
+				averageBlockTime,
+				func(event *DepositRevealedEvent) bool {
+					return event.FundingTxHash == raa.proposal.DepositFundingTxHash &&
+						event.FundingOutputIndex == raa.proposal.DepositFundingOutputIndex
+				},
+			)
+			return err
 		},
+		"PastDepositRevealedEvents",
 	)
-	if err != nil {
-		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", err)
+	if findEventsErr != nil {
+		return fmt.Errorf("cannot fetch deposit revealed events: [%v]", findEventsErr)
 	}
 	if matchingEvent == nil {
 		return fmt.Errorf("no matching DepositRevealed event for deposit")
@@ -553,7 +654,14 @@ func (raa *reservationAnchorAction) execute() error {
 		raa.proposal.DepositFundingOutputIndex,
 	)
 
-	action, err := raa.chain.GetReservationAction(reservationKey, raa.proposal.RequestNonce)
+	action, err := func() (*ReservationAction, error) {
+		return rpcCallWithTimeout(
+			func() (*ReservationAction, error) {
+				return raa.chain.GetReservationAction(reservationKey, raa.proposal.RequestNonce)
+			},
+			"GetReservationAction",
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("cannot get reservation action: [%v]", err)
 	}
@@ -563,33 +671,51 @@ func (raa *reservationAnchorAction) execute() error {
 	if action.TargetWalletPublicKeyHash != walletPublicKeyHash {
 		return fmt.Errorf("reservation action targets a different wallet")
 	}
-
-	err = raa.chain.ValidateReservationAnchorProposal(
-		walletPublicKeyHash,
-		raa.proposal,
-		struct {
-			*Deposit
-			FundingTx *bitcoin.Transaction
-		}{Deposit: deposit, FundingTx: fundingTx},
+	err = rpcCallWithTimeoutErr(
+		func() error {
+			return raa.chain.ValidateReservationAnchorProposal(
+				walletPublicKeyHash,
+				raa.proposal,
+				struct {
+					*Deposit
+					FundingTx *bitcoin.Transaction
+				}{Deposit: deposit, FundingTx: fundingTx},
+			)
+		},
+		"ValidateReservationAnchorProposal",
 	)
 	if err != nil {
 		return fmt.Errorf("cannot validate reservation anchor proposal: [%v]", err)
 	}
 
-	// Follower-side soft check on the proposed anchor fee. Mirrors the
-	// fee-floor check performed in ValidateDepositSweepProposal and
-	// ValidateRedemptionProposal; log-only (never rejects) for the same
-	// mixed-version rollout reasons described in those validators.
+	// Follower-side fee check on the proposed anchor fee. Mirrors the
+	// fee checks performed in ValidateDepositSweepProposal and
+	// ValidateRedemptionProposal.
+	//
+	// The hard-reject gate uses the fixed protocol minimum
+	// (ProtocolMinWalletTxSatPerVByteFee = 5); see
+	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
+	// soft warning uses the operator's bare floor
+	// (MinWalletTxSatPerVByteFee * vsize) to fix G1-S3.
 	if anchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
 		AddScriptHashInputs(1, DepositScriptByteSize, true).
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize(); sizeErr != nil {
 		raa.logger.Warnf(
-			"cannot estimate anchor tx size for the fee sanity check: [%v]",
+			"cannot estimate anchor tx size for the fee check: [%v]",
 			sizeErr,
 		)
 	} else {
-		warnIfProposedWalletTxFeeBelowBufferedFloor(
+		// Hard reject: follower refuses to co-sign a below-protocol fee.
+		if err := rejectIfProposedWalletTxFeeBelowProtocolMin(
+			raa.proposal.AnchorTxFee,
+			anchorTxSize,
+			"reservation anchor",
+		); err != nil {
+			return err
+		}
+		// Soft warning: below the operator's bare floor.
+		warnIfProposedWalletTxFeeBelowBareFloor(
 			raa.logger,
 			MinWalletTxSatPerVByteFee,
 			anchorTxSize,
@@ -692,12 +818,31 @@ func newReservationReanchorAction(
 func (rra *reservationReanchorAction) execute() error {
 	walletPublicKeyHash := bitcoin.PublicKeyHash(rra.custodyWallet.publicKey)
 
-	reservation, err := rra.chain.GetReservation(rra.proposal.ReservationKey)
+	// Bound Ethereum RPC reads to prevent a stuck endpoint from freezing
+	// every signing action for this wallet indefinitely.
+	reservation, err := func() (*Reservation, error) {
+		return rpcCallWithTimeout(
+			func() (*Reservation, error) {
+				return rra.chain.GetReservation(rra.proposal.ReservationKey)
+			},
+			"GetReservation",
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("cannot get reservation: [%v]", err)
 	}
 
-	action, err := rra.chain.GetReservationAction(rra.proposal.ReservationKey, rra.proposal.RequestNonce)
+	action, err := func() (*ReservationAction, error) {
+		return rpcCallWithTimeout(
+			func() (*ReservationAction, error) {
+				return rra.chain.GetReservationAction(
+					rra.proposal.ReservationKey,
+					rra.proposal.RequestNonce,
+				)
+			},
+			"GetReservationAction",
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("cannot get reservation action: [%v]", err)
 	}
@@ -708,28 +853,106 @@ func (rra *reservationReanchorAction) execute() error {
 		return fmt.Errorf("reservation action targets a different wallet")
 	}
 
-	err = rra.chain.ValidateReservationReanchorProposal(
-		walletPublicKeyHash,
-		rra.proposal,
+	// Follower-side gate: reject a re-anchor to a target wallet that is
+	// younger than the on-chain wallet creation period. A leader that
+	// proposes a young target would be trying to move anchors into a
+	// freshly-created wallet that has not yet aged out of the DKG result
+	// challenge window, violating the protocol's stranding protection.
+	// Read the target wallet's CreatedAt and the Bridge's creationPeriod
+	// to compute the age deadline, and read the chain head timestamp for
+	// comparison. Fail closed: any read error returns an error instead
+	// of treating the target as aged.
+	targetWallet, err := func() (*WalletChainData, error) {
+		return rpcCallWithTimeout(
+			func() (*WalletChainData, error) {
+				return rra.chain.GetWallet(rra.proposal.TargetWalletPublicKeyHash)
+			},
+			"GetWallet",
+		)
+	}()
+	if err != nil {
+		return fmt.Errorf("cannot get target wallet for age gate: [%v]", err)
+	}
+	walletParams, err := func() (WalletParameters, error) {
+		return rpcCallWithTimeout(
+			func() (WalletParameters, error) {
+				return rra.chain.GetWalletParameters()
+			},
+			"GetWalletParameters",
+		)
+	}()
+	if err != nil {
+		return fmt.Errorf("cannot get wallet parameters for age gate: [%v]", err)
+	}
+	headTimestamp, err := func() (time.Time, error) {
+		return rpcCallWithTimeout(
+			func() (time.Time, error) {
+				return rra.chain.GetLatestBlockTimestamp()
+			},
+			"GetLatestBlockTimestamp",
+		)
+	}()
+	if err != nil {
+		return fmt.Errorf("cannot get chain head timestamp for age gate: [%v]", err)
+	}
+	if !IsReanchorTargetAged(
+		targetWallet.CreatedAt,
+		walletParams.CreationPeriod,
+		headTimestamp,
+		ReanchorTargetAgeTolerance,
+	) {
+		return fmt.Errorf(
+			"re-anchor target wallet is younger than the creation period "+
+				"(created at %v, creation period %d s, head time %v, "+
+				"tolerance %v); refusing to co-sign",
+			targetWallet.CreatedAt,
+			walletParams.CreationPeriod,
+			headTimestamp,
+			ReanchorTargetAgeTolerance,
+		)
+	}
+
+	err = rpcCallWithTimeoutErr(
+		func() error {
+			return rra.chain.ValidateReservationReanchorProposal(
+				walletPublicKeyHash,
+				rra.proposal,
+			)
+		},
+		"ValidateReservationReanchorProposal",
 	)
 	if err != nil {
 		return fmt.Errorf("cannot validate reservation reanchor proposal: [%v]", err)
 	}
 
-	// Follower-side soft check on the proposed re-anchor fee. Mirrors the
-	// fee-floor check performed in ValidateDepositSweepProposal and
-	// ValidateRedemptionProposal; log-only (never rejects) for the same
-	// mixed-version rollout reasons described in those validators.
+	// Follower-side fee check on the proposed re-anchor fee. Mirrors the
+	// fee checks performed in ValidateDepositSweepProposal and
+	// ValidateRedemptionProposal.
+	//
+	// The hard-reject gate uses the fixed protocol minimum
+	// (ProtocolMinWalletTxSatPerVByteFee = 5); see
+	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
+	// soft warning uses the operator's bare floor
+	// (MinWalletTxSatPerVByteFee * vsize) to fix G1-S3.
 	if reanchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize(); sizeErr != nil {
 		rra.logger.Warnf(
-			"cannot estimate re-anchor tx size for the fee sanity check: [%v]",
+			"cannot estimate re-anchor tx size for the fee check: [%v]",
 			sizeErr,
 		)
 	} else {
-		warnIfProposedWalletTxFeeBelowBufferedFloor(
+		// Hard reject: follower refuses to co-sign a below-protocol fee.
+		if err := rejectIfProposedWalletTxFeeBelowProtocolMin(
+			rra.proposal.ReanchorTxFee,
+			reanchorTxSize,
+			"reservation re-anchor",
+		); err != nil {
+			return err
+		}
+		// Soft warning: below the operator's bare floor.
+		warnIfProposedWalletTxFeeBelowBareFloor(
 			rra.logger,
 			MinWalletTxSatPerVByteFee,
 			reanchorTxSize,
