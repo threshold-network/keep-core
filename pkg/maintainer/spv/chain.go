@@ -2,6 +2,7 @@ package spv
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -218,4 +219,9 @@ type Chain interface {
 	// BuildDepositKey calculates the key used by the Bridge to store a
 	// deposit request, which is a unique identifier for a deposit on-chain.
 	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
+
+	// GetLatestBlockTimestamp returns the block time of the chain head.
+	// Watchers compare it with on-chain timestamps (action deadlines,
+	// dissolution eligibility) instead of the local wall clock.
+	GetLatestBlockTimestamp() (time.Time, error)
 }

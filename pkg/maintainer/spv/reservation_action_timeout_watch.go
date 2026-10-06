@@ -342,6 +342,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 	)
 
 	now := ratw.nowFn()
+	headTime := reservationChainHeadTime(ratw.spvChain)
 
 	// 3. Re-check a bounded batch of tracked actions and remove entries
 	// that are no longer pending. Each checked action costs one serial
@@ -378,6 +379,21 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			continue
 		}
 
+		// A notification was submitted for this generation yet it is still
+		// Pending long after its deadline: further notices evidently do not
+		// land, so stop re-reading it every tick (G2-L10). A generation
+		// that was never notified stays tracked so its first notice is
+		// still attempted.
+		if item.notifiedAt != 0 && reservationActionAbandoned(action, headTime) {
+			logger.Warnf(
+				"giving up on reservation action [%v]/%d that stays Pending "+
+					"long after its timeout notification",
+				item.reservationKey,
+				item.requestNonce,
+			)
+			delete(ratw.pendingActions, key)
+			continue
+		}
 		if item.notifiedAt != 0 &&
 			(now < item.notifiedAt ||
 				now-item.notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds())) {
@@ -573,15 +589,12 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 	}
 
 	walletPublicKeyHash := reservation.WalletPublicKeyHash
-	if walletPublicKeyHash == ([20]byte{}) {
-		logger.Debugf("reservation [%v] has no wallet; skipping", reservationKey)
-		return false, nil
-	}
 
 	nonce := reservation.RequestNonce
 
 	action := preloadedAction
-	if action == nil || nonce != preloadedActionNonce {
+	preloadReused := action != nil && nonce == preloadedActionNonce
+	if !preloadReused {
 		action, err = ratw.spvChain.GetReservationAction(reservationKey, nonce)
 		if err != nil {
 			return false, fmt.Errorf(
@@ -622,6 +635,32 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 		return false, nil
 	}
 
+	// A reused preload can be stale even though the nonce still matches:
+	// the action may have settled or timed out between the caller's read
+	// and this call. Re-read it before spending a transaction on the
+	// notification (G2-L9).
+	if preloadReused {
+		action, err = ratw.spvChain.GetReservationAction(reservationKey, nonce)
+		if err != nil {
+			return false, fmt.Errorf(
+				"failed to re-read action for reservation [%v] at nonce %d: [%v]",
+				reservationKey,
+				nonce,
+				err,
+			)
+		}
+		if action.State != tbtc.ReservationActionStatePending {
+			logger.Debugf(
+				"reservation [%v] action nonce %d state=%s on re-read; "+
+					"not pending, nothing to time out",
+				reservationKey,
+				nonce,
+				action.State,
+			)
+			return false, nil
+		}
+	}
+
 	switch action.ActionType {
 	case tbtc.ReservationActionTypeAcceptance:
 		if err := ratw.spvChain.NotifyReservationAcceptanceTimedOut(
@@ -646,6 +685,23 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 
 		return true, nil
 	case tbtc.ReservationActionTypeReanchor:
+		// Defer the stranding recheck to the next pollPendingActions
+		// tick's drainStrandingRechecks call instead of running it
+		// synchronously here: NotifyReservationActionTimeout has only
+		// just been submitted, not mined, so a synchronous GetWallet
+		// read at this point would read pre-mining state (see the
+		// strandingRecheckWallets field doc). The map key naturally
+		// dedupes multiple reanchor timeouts against the same wallet
+		// within this tick down to a single recheck.
+		//
+		// Enqueue before the notification: even if the call reverts, the
+		// wallet's stranding must be rechecked once it is Closed or
+		// Terminated (G2-F18). A zero wallet hash cannot be enqueued -
+		// drainStrandingRechecks has no reservation key to re-resolve it.
+		if walletPublicKeyHash != ([20]byte{}) && ratw.strandingWatcher != nil {
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+		}
+
 		// The action-timeout watcher is the permissionless path that must
 		// not depend on cooperation from the (possibly dead) custodying
 		// wallet.
@@ -669,17 +725,6 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 			action.TimeoutAt,
 		)
 
-		// Defer the stranding recheck to the next pollPendingActions
-		// tick's drainStrandingRechecks call instead of running it
-		// synchronously here: NotifyReservationActionTimeout has only
-		// just been submitted, not mined, so a synchronous GetWallet
-		// read at this point would read pre-mining state (see the
-		// strandingRecheckWallets field doc). The map key naturally
-		// dedupes multiple Reanchor timeouts against the same wallet
-		// within this tick down to a single recheck.
-		if ratw.strandingWatcher != nil {
-			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
-		}
 		return true, nil
 	default:
 		// Redemption and Dissolution are m2+ scope and should never
@@ -743,13 +788,17 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 			continue
 		}
 
-		if wallet.State != tbtc.StateClosed && wallet.State != tbtc.StateTerminated {
-			continue
-		}
-
-		if err := ratw.strandingWatcher.checkReservationStrandingForWallet(
+		// A timed-out re-anchor can be noticed while the wallet is still
+		// Closing: it is checked through the dissolution-gated form and
+		// requeued until its reservations become eligible (G2-F19). A
+		// wallet in a state that cannot strand a reservation (Live and the
+		// like) is dropped: its later closure fires the OnWalletClosed
+		// subscription, so requeueing it would only poll it forever.
+		_, recheck, err := ratw.strandingWatcher.checkStrandingForWalletState(
 			walletPublicKeyHash,
-		); err != nil {
+			wallet.State,
+		)
+		if err != nil {
 			// Same transient-failure reasoning as the GetWallet error
 			// above: re-queue rather than silently drop the recheck.
 			logger.Errorf(
@@ -759,6 +808,14 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 				walletPublicKeyHash,
 				err,
 			)
+			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			continue
+		}
+
+		// Re-queue when the check left work for a later pass (a pending
+		// action that may return to Active, a reservation read that
+		// failed, or a Closing wallet not yet dissolution-eligible).
+		if recheck {
 			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
 		}
 	}

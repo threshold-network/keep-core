@@ -3,6 +3,7 @@ package spv
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -15,6 +16,21 @@ import (
 	"github.com/keep-network/keep-core/pkg/maintainer/btcdiff"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
+
+// chunkScanError marks an event-scan failure that left the scan cursor at
+// the last good chunk: the next pass resumes there, so the proof loop
+// retries after the idle backoff instead of restarting.
+type chunkScanError struct {
+	err error
+}
+
+func (e *chunkScanError) Error() string {
+	return e.err.Error()
+}
+
+func (e *chunkScanError) Unwrap() error {
+	return e.err
+}
 
 // reservationProofScanState persists the incremental event-scan cursor and
 // the set of still-settleable action-request events across successive
@@ -61,7 +77,10 @@ type reservationProofScanState struct {
 // set together with the corresponding transaction bodies fetched alongside
 // it; see reservationProofScanState.walletTransactionCache.
 type walletTransactionCacheEntry struct {
-	txHashes     []bitcoin.Hash
+	txHashes []bitcoin.Hash
+	// firstIndex is the index in txHashes of the first transaction whose
+	// body is in transactions; transactions covers txHashes[firstIndex:].
+	firstIndex   int
 	transactions []*bitcoin.Transaction
 }
 
@@ -143,11 +162,19 @@ func evictStaleWalletTransactionCacheEntries(state *reservationProofScanState) {
 // the hash set is unchanged since then, instead of unconditionally
 // refetching every wallet's full history on every ~config.IdleBackoffTime
 // pass regardless of whether anything happened on-chain for that wallet.
+//
+// The bodies cover the wallet's newest limit transactions. When
+// sinceTransactions names transactions of the wallet (the anchor
+// transactions a re-anchor transaction spends), the window is widened back
+// to the earliest of them: a re-anchor transaction is confirmed after the
+// anchor it spends, so a late proof is still found however many
+// transactions the wallet made since.
 func walletTransactionsForProof(
 	state *reservationProofScanState,
 	btcChain bitcoin.Chain,
 	walletPublicKeyHash [20]byte,
 	limit int,
+	sinceTransactions []bitcoin.Hash,
 ) ([]*bitcoin.Transaction, error) {
 	txHashes, err := btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
 	if err != nil {
@@ -157,21 +184,30 @@ func walletTransactionsForProof(
 		)
 	}
 
+	// Hashes are ordered ascending, latest at the end, so the newest
+	// 'limit' transactions start at len-limit (matching
+	// GetTransactionsForPublicKeyHash's own semantics).
+	firstIndex := max(len(txHashes)-limit, 0)
+	for _, since := range sinceTransactions {
+		for i, txHash := range txHashes[:firstIndex] {
+			if txHash == since {
+				firstIndex = i
+				break
+			}
+		}
+	}
+
 	if cached, ok := state.walletTransactionCache[walletPublicKeyHash]; ok &&
-		reservationTransactionHashesEqual(cached.txHashes, txHashes) {
-		return cached.transactions, nil
+		reservationTransactionHashesEqual(cached.txHashes, txHashes) &&
+		cached.firstIndex <= firstIndex {
+		return cached.transactions[firstIndex-cached.firstIndex:], nil
 	}
 
 	// Fetch transaction bodies for the already-known hash list instead of
 	// calling GetTransactionsForPublicKeyHash, whose Electrum implementation
 	// would otherwise re-fetch the same hash list via a second
-	// GetTxHashesForPublicKeyHash call internally. Respect the limit by
-	// taking the latest 'limit' hashes (hashes are ordered ascending, latest
-	// at the end), matching GetTransactionsForPublicKeyHash's own semantics.
-	selectedTxHashes := txHashes
-	if len(txHashes) > limit {
-		selectedTxHashes = txHashes[len(txHashes)-limit:]
-	}
+	// GetTxHashesForPublicKeyHash call internally.
+	selectedTxHashes := txHashes[firstIndex:]
 
 	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
 	for i, txHash := range selectedTxHashes {
@@ -185,6 +221,7 @@ func walletTransactionsForProof(
 
 	state.walletTransactionCache[walletPublicKeyHash] = &walletTransactionCacheEntry{
 		txHashes:     txHashes,
+		firstIndex:   firstIndex,
 		transactions: transactions,
 	}
 
@@ -331,17 +368,36 @@ func runReservationProofLoop(
 		// see evictStaleWalletTransactionCacheEntries.
 		evictStaleWalletTransactionCacheEntries(state)
 
+		// A chunk-fetch error keeps the scan cursor at the last good chunk,
+		// so the next pass resumes there: it is retried after the idle
+		// backoff below instead of the restart backoff (G2-L5).
 		if acceptanceErr != nil {
-			return fmt.Errorf(
-				"error while proving reservation acceptance actions: [%v]",
-				acceptanceErr,
-			)
+			if errors.As(acceptanceErr, new(*chunkScanError)) {
+				logger.Errorf(
+					"error while proving reservation acceptance actions: "+
+						"[%v]; resuming after the idle backoff",
+					acceptanceErr,
+				)
+			} else {
+				return fmt.Errorf(
+					"error while proving reservation acceptance actions: [%w]",
+					acceptanceErr,
+				)
+			}
 		}
 		if reanchorErr != nil {
-			return fmt.Errorf(
-				"error while proving reservation re-anchor actions: [%v]",
-				reanchorErr,
-			)
+			if errors.As(reanchorErr, new(*chunkScanError)) {
+				logger.Errorf(
+					"error while proving reservation re-anchor actions: "+
+						"[%v]; resuming after the idle backoff",
+					reanchorErr,
+				)
+			} else {
+				return fmt.Errorf(
+					"error while proving reservation re-anchor actions: [%w]",
+					reanchorErr,
+				)
+			}
 		}
 
 		select {
@@ -399,11 +455,11 @@ func proveReservationAcceptanceActions(
 				state.acceptanceLastScannedBlock = chunkEnd
 			},
 		); err != nil {
-			scanErr = fmt.Errorf(
+			scanErr = &chunkScanError{err: fmt.Errorf(
 				"failed to get past reservation acceptance requested "+
-					"events: [%v]",
+					"events: [%w]",
 				err,
-			)
+			)}
 		}
 	} else {
 		state.acceptanceLastScannedBlock = endBlock
@@ -417,6 +473,7 @@ func proveReservationAcceptanceActions(
 	// TimedOut candidates until that window has closed instead of
 	// deleting them the moment the state flips.
 	now := state.nowFn()
+	headTime := reservationChainHeadTime(spvChain)
 	var generations []reservationProofGeneration[*tbtc.ReservationAcceptanceRequestedEvent]
 	for key, event := range state.pendingAcceptanceEvents {
 		action, err := spvChain.GetReservationAction(
@@ -469,6 +526,15 @@ func proveReservationAcceptanceActions(
 				continue
 			}
 		case tbtc.ReservationActionStatePending:
+			// A Pending generation whose timeout notice never landed would
+			// otherwise stay tracked, and be re-read every pass, for the
+			// life of the process. Once the chain is far past its deadline
+			// the generation is abandoned and left to later passes of
+			// other operators (G2-F16).
+			if reservationActionAbandoned(action, headTime) {
+				delete(state.pendingAcceptanceEvents, key)
+				continue
+			}
 		default:
 			// Settled, Superseded, Vetoed and absent generations are not
 			// settleable on the Bridge; stop tracking them.
@@ -510,6 +576,7 @@ func proveReservationAcceptanceActions(
 				btcChain,
 				event.WalletPublicKeyHash,
 				config.TransactionLimit,
+				nil,
 			)
 			if err != nil {
 				logger.Errorf("failed to get transactions for wallet: [%v]", err)
@@ -560,7 +627,7 @@ func proveReservationAcceptanceActions(
 				)
 			},
 		)
-		if outcome == reservationProofSubmitted {
+		if outcome == reservationProofSubmitted && err == nil {
 			submittedReservations[reservationKey] = struct{}{}
 		}
 		if err != nil {
@@ -675,14 +742,20 @@ func sortReservationProofGenerations[E any](
 // comparison is keyed on the action's on-chain sourceAnchorUtxoHash
 // snapshot, not on any Go-side first-observation snapshot, so a process
 // restart still evicts a generation whose source anchor was already
-// replaced before the loop ever observed it. Re-anchor late settlement
-// is otherwise unbounded, so age alone never triggers an eviction.
+// replaced before the loop ever observed it. A TimedOut generation is also
+// evicted once the chain head is far past its deadline (see
+// reservationActionAbandoned): the Bridge would still settle it, but other
+// operators and later paths cover that, and tracking every abandoned
+// generation a requester can cycle through would grow the per-pass RPC
+// volume without bound. headTime is the zero time when the chain head time
+// could not be read, which disables that eviction for the pass.
 func settleableReanchorReservation(
 	state *reservationProofScanState,
 	spvChain Chain,
 	key string,
 	event *tbtc.ReservationReanchorRequestedEvent,
 	action *tbtc.ReservationAction,
+	headTime time.Time,
 ) (*tbtc.Reservation, bool) {
 	reservation, err := spvChain.GetReservation(event.ReservationKey)
 	if err != nil {
@@ -696,6 +769,11 @@ func settleableReanchorReservation(
 
 	if action.State != tbtc.ReservationActionStateTimedOut {
 		return reservation, true
+	}
+
+	if reservationActionAbandoned(action, headTime) {
+		forgetReanchorGeneration(state, key)
+		return nil, false
 	}
 
 	switch reservation.State {
@@ -847,10 +925,10 @@ func proveReservationReanchorActions(
 				state.reanchorLastScannedBlock = chunkEnd
 			},
 		); err != nil {
-			scanErr = fmt.Errorf(
-				"failed to get past reservation re-anchor requested events: [%v]",
+			scanErr = &chunkScanError{err: fmt.Errorf(
+				"failed to get past reservation re-anchor requested events: [%w]",
 				err,
-			)
+			)}
 		}
 	} else {
 		state.reanchorLastScannedBlock = endBlock
@@ -861,12 +939,15 @@ func proveReservationReanchorActions(
 	// Re-check every tracked event's on-chain action state and evict the
 	// non-settleable ones. The Bridge settles a re-anchor generation
 	// while its action is Pending or TimedOut, and re-anchor late
-	// settlement is unbounded (see loadSettleableAction in
-	// ReservationProofs.sol), so a TimedOut generation is kept for as
-	// long as settleableReanchorReservation finds it can still settle.
+	// settlement has no on-chain bound, so a TimedOut generation is kept
+	// while settleableReanchorReservation finds it can still settle and
+	// the chain head has not passed its abandonment bound.
+	headTime := reservationChainHeadTime(spvChain)
+	backedOffWallets := make(map[[20]byte]struct{})
 	var generations []reservationProofGeneration[*tbtc.ReservationReanchorRequestedEvent]
 	for key, event := range state.pendingReanchorEvents {
 		if reanchorGenerationBackedOff(state, key, event.SourceWalletPublicKeyHash) {
+			backedOffWallets[event.SourceWalletPublicKeyHash] = struct{}{}
 			continue
 		}
 
@@ -899,6 +980,7 @@ func proveReservationReanchorActions(
 			key,
 			event,
 			action,
+			headTime,
 		)
 		if !settleable {
 			continue
@@ -925,6 +1007,20 @@ func proveReservationReanchorActions(
 	// only the last one seen. A nil entry marks a wallet whose
 	// transactions could not be fetched this pass.
 	walletCandidates := make(map[[20]byte]map[bitcoin.TransactionOutpoint][]*bitcoin.Transaction)
+	// The anchor transactions each source wallet's generations spend: the
+	// wallet's history is fetched back to the earliest of them, so a late
+	// re-anchor proof is not pushed out of reach by newer transactions of
+	// the wallet (G2-F5).
+	anchorTransactions := make(map[[20]byte][]bitcoin.Hash)
+	for _, generation := range generations {
+		if anchor := generation.reservation.AnchorUtxo; anchor != nil && anchor.Outpoint != nil {
+			sourceWallet := generation.event.SourceWalletPublicKeyHash
+			anchorTransactions[sourceWallet] = append(
+				anchorTransactions[sourceWallet],
+				anchor.Outpoint.TransactionHash,
+			)
+		}
+	}
 	submittedReservations := make(map[string]struct{})
 	for _, generation := range generations {
 		event := generation.event
@@ -941,6 +1037,7 @@ func proveReservationReanchorActions(
 				btcChain,
 				event.SourceWalletPublicKeyHash,
 				config.TransactionLimit,
+				anchorTransactions[event.SourceWalletPublicKeyHash],
 			)
 			if err != nil {
 				logger.Errorf("failed to get transactions for wallet: [%v]", err)
@@ -997,7 +1094,7 @@ func proveReservationReanchorActions(
 				},
 			)
 		}
-		if outcome == reservationProofSubmitted {
+		if outcome == reservationProofSubmitted && err == nil {
 			submittedReservations[reservationKey] = struct{}{}
 		}
 		if err != nil {
@@ -1017,8 +1114,68 @@ func proveReservationReanchorActions(
 			delete(state.reanchorBackoff, generation.key)
 		}
 	}
+	// A wallet whose generations are all backed off is never fetched by the
+	// loop above, so its cached transaction list would stay as old as the
+	// backoff and the new-transaction early exit in
+	// reanchorGenerationBackedOff could never fire. Refresh the lists of
+	// those wallets on every pass (G2-L8); walletTransactionsForProof is
+	// cheap while the wallet's transaction hashes are unchanged.
+	for walletPublicKeyHash := range backedOffWallets {
+		if _, fetched := walletCandidates[walletPublicKeyHash]; fetched {
+			continue
+		}
+		if _, err := walletTransactionsForProof(
+			state,
+			btcChain,
+			walletPublicKeyHash,
+			config.TransactionLimit,
+			nil,
+		); err != nil {
+			logger.Errorf(
+				"failed to refresh transactions of backed-off wallet [0x%x]: [%v]",
+				walletPublicKeyHash,
+				err,
+			)
+		}
+	}
 
 	return scanErr
+}
+
+// reservationChainHeadTime returns the chain head's block time, or the zero
+// time when it cannot be read; reservationActionAbandoned treats the zero
+// time as "unknown" and evicts nothing.
+func reservationChainHeadTime(spvChain Chain) time.Time {
+	headTime, err := spvChain.GetLatestBlockTimestamp()
+	if err != nil {
+		logger.Warnf(
+			"failed to read the chain head time; skipping the eviction of "+
+				"abandoned reservation generations this pass: [%v]",
+			err,
+		)
+		return time.Time{}
+	}
+
+	return headTime
+}
+
+// reservationActionAbandoned reports whether the chain head is far enough
+// past an action generation's deadline that the generation is no longer
+// worth tracking: head time > timeoutAt + 4 * (timeoutAt - requestedAt),
+// using the action's own on-chain timestamps, so the window scales with the
+// generation's request timeout. The Bridge may still settle such a
+// generation, but another operator or a later path covers it.
+func reservationActionAbandoned(
+	action *tbtc.ReservationAction,
+	headTime time.Time,
+) bool {
+	if headTime.IsZero() || action.TimeoutAt == 0 || action.RequestedAt > action.TimeoutAt {
+		return false
+	}
+
+	window := uint64(action.TimeoutAt - action.RequestedAt)
+
+	return uint64(max(headTime.Unix(), 0)) > uint64(action.TimeoutAt)+4*window
 }
 
 func isMatchingReservationReanchorTransaction(
@@ -1127,7 +1284,15 @@ func proveReservationTransaction(
 			cache,
 		)
 		if err != nil {
-			return reservationProofNoMatch, fmt.Errorf("failed to get proof info: [%v]", err)
+			// Continue to the next candidate: a later confirmed RBF
+			// replacement may still be provable (G2-F8).
+			logger.Warnf(
+				"failed to get proof info for transaction [%s]: [%v]; "+
+					"continuing to next candidate",
+				transaction.Hash().Hex(bitcoin.ReversedByteOrder),
+				err,
+			)
+			continue
 		}
 
 		if skipReason == proofSkipNone && accumulatedConfirmations >= requiredConfirmations {
