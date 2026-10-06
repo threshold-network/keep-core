@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -65,6 +66,11 @@ func TestReservationStaleDepositWatcher_NonReservedDepositIsSkipped(t *testing.T
 	spvChain.setReservedDeposit(reservationDepositKey(0xB001), walletPKH(), false)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// time; drive it to 5_000 (past the 100s deadline + max stagger) so the
+	// check reaches the on-chain completion path.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
+
 	res, err := watcher.CheckStaleReservedDeposit(reservationDepositKey(0xB001), 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -99,6 +105,11 @@ func TestReservationStaleDepositWatcher_LiveWalletNotifiedAfterDeadline(t *testi
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// time; drive it to the tick's now so the deposit is past its 100s
+	// deadline + max stagger when the check runs.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
@@ -137,6 +148,10 @@ func TestReservationStaleDepositWatcher_TimedOutActionNotifiedAfterDeadline(t *t
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// time; drive it to the tick's now (5_000) so the deposit is past its
+	// 100s deadline + max stagger when the check runs.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
@@ -177,6 +192,13 @@ func TestReservationStaleDepositWatcher_PendingActionNotNotifiedAfterDeadline(t 
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// time; drive it to 5_000 (past the 100s deadline) so the check
+	// reaches the pending-action path that suppresses the notification,
+	// proving the suppression comes from the generation state rather than
+	// the deadline gate.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
@@ -277,6 +299,12 @@ func TestReservationStaleDepositWatcher_NoChainReadsBeforeDeadline(t *testing.T)
 		)
 	}
 
+	// G2-L13: the pre-deadline check above ran with the default (unset)
+	// chain head time, so the gate stayed closed and no chain read fired.
+	// Advance the chain head past the refund deadline + stagger to open
+	// the gate for the post-deadline check.
+	inner.setLatestBlockTimestamp(time.Unix(10_601, 0))
+
 	res, err = watcher.CheckStaleReservedDeposit(key, 10_000, 10_601)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -320,6 +348,9 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		})
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+		// G2-L13: drive the chain head past the 100s deadline (+ max
+		// stagger) so both checks reach the wallet-field completion path.
+		spvChain.setLatestBlockTimestamp(time.Unix(5_060, 0))
 
 		res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 		if err != nil {
@@ -357,6 +388,9 @@ func TestReservationStaleDepositWatcher_CompletionDetectedByClearedWalletField(t
 		spvChain.setReservedDeposit(key, [20]byte{}, true)
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+		// G2-L13: open the refund-deadline gate past the 100s deadline so
+		// the check reaches the wallet-field completion path.
+		spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 		res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 		if err != nil {
@@ -391,8 +425,11 @@ func TestReservationStaleDepositWatcher_NotifiedNotConfirmedIsRetried(t *testing
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate (chain head past the 100s
+	// deadline) for every tick below; the renotify backoff on the node
+	// clock is what the ticks' `now` values drive.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
-	// First tick: submit the notification, awaiting confirmation.
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -457,9 +494,13 @@ func TestReservationStaleDepositWatcher_RenotifyBackoffSurvivesNowBeforeNotified
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-
+	// G2-L13: open the refund-deadline gate on the chain head so both
+	// calls reach the wallet-field / renotify paths; the node-clock `now`
+	// is what drives the backoff under test.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 	// First tick: submit the notification, recording notifiedAt = 5_000.
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
+
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -510,6 +551,9 @@ func TestReservationStaleDepositWatcher_ReservedDepositWalletChainError(t *testi
 	spvChain.reservedDepositWalletErr = fmt.Errorf("rpc unavailable")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the failing ReservedDepositWallet read.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 	// Past the deadline, the first chain read - ReservedDepositWallet -
 	// fails.
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
@@ -534,6 +578,9 @@ func TestReservationStaleDepositWatcher_GetReservationChainError(t *testing.T) {
 	spvChain.getReservationErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the failing GetReservation read.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err == nil {
@@ -563,6 +610,9 @@ func TestReservationStaleDepositWatcher_GetReservationActionChainError_DoesNotNo
 	spvChain.getReservationActionErr = fmt.Errorf("transient RPC failure")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the failing GetReservationAction read.
+	spvChain.setLatestBlockTimestamp(time.Unix(10_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 10_000)
 	if err == nil {
@@ -605,6 +655,9 @@ func TestReservationStaleDepositWatcher_AdvancingNonceEvaluatesCurrentGeneration
 	})
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the current-generation read and the notification path.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
@@ -638,6 +691,9 @@ func TestReservationStaleDepositWatcher_NotifierError(t *testing.T) {
 	spvChain.notifyStaleReservedDepositErr = fmt.Errorf("notifier unavailable")
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the failing notification submit.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err == nil {
@@ -659,6 +715,10 @@ func TestReservationStaleDepositWatcher_ZeroWalletSkips(t *testing.T) {
 	spvChain.setReservedDeposit(key, [20]byte{}, true)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// G2-L13: open the refund-deadline gate on the chain head so the check
+	// reaches the cleared-wallet completion path.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
+
 	res, err := watcher.CheckStaleReservedDeposit(key, 100, 5_000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -755,7 +815,9 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
 
 	// First tick, now (1_000) is far before the deadline (50_000): the
 	// reveal is discovered and tracked, with its deadline taken from the event,
-	// and the check stays in-memory.
+	// and the check stays in-memory. The chain head is kept before the
+	// deadline so the check's refund gate (G2-L13) stays closed.
+	inner.setLatestBlockTimestamp(time.Unix(1_000, 0))
 	trackedCount, ok := watcher.pollTick(1_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")
@@ -780,7 +842,9 @@ func TestRunStaleDepositPollTick_TracksVaultMatchWithoutImmediateWalletRead(
 
 	// Second tick, now (60_000) is past the deadline: the post-deadline
 	// check reads the record's wallet field and observes it cleared,
-	// retiring the deposit without notifying.
+	// retiring the deposit without notifying. The chain head advances
+	// past the deadline so the check's refund gate (G2-L13) opens.
+	inner.setLatestBlockTimestamp(time.Unix(60_000, 0))
 	trackedCount, ok = watcher.pollTick(60_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")
@@ -857,9 +921,11 @@ func TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline(
 	)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-
 	// First tick, now (1_000) is far before the deadline (50_000): the
-	// reveal is tracked and the check stays in-memory.
+	// reveal is tracked and the check stays in-memory; the chain head is
+	// likewise kept before the deadline so the refund gate (G2-L13)
+	// stays closed.
+	inner.setLatestBlockTimestamp(time.Unix(1_000, 0))
 	trackedCount, ok := watcher.pollTick(1_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")
@@ -869,7 +935,9 @@ func TestRunStaleDepositPollTick_PendingReservedDepositNotifiedAfterDeadline(
 	}
 
 	// Second tick, now (60_000) is past the deadline: the still-pending
-	// record is notified and stays tracked awaiting the clear.
+	// record is notified and stays tracked awaiting the clear. The chain
+	// head advances past the deadline so the refund gate (G2-L13) opens.
+	inner.setLatestBlockTimestamp(time.Unix(60_000, 0))
 	trackedCount, ok = watcher.pollTick(60_000)
 	if !ok {
 		t.Fatal("expected pollTick to report a definitively successful scan")

@@ -65,12 +65,6 @@ type reservationProofScanState struct {
 	// runReservationProofLoop pass, so this cache does not grow
 	// unboundedly for the life of the process as new wallets are observed.
 	walletTransactionCache map[[20]byte]*walletTransactionCacheEntry
-
-	// nowFn returns the current UNIX timestamp the scans use to evaluate
-	// the Bridge's late-settlement window for TimedOut acceptance
-	// generations. Production runs on wall time; tests override it to
-	// drive the deadline deterministically.
-	nowFn func() uint32
 }
 
 // walletTransactionCacheEntry holds one wallet's confirmed transaction hash
@@ -90,15 +84,7 @@ func newReservationProofScanState() *reservationProofScanState {
 		pendingReanchorEvents:   make(map[string]*tbtc.ReservationReanchorRequestedEvent),
 		reanchorBackoff:         make(map[string]*reanchorProofBackoff),
 		walletTransactionCache:  make(map[[20]byte]*walletTransactionCacheEntry),
-		nowFn:                   defaultReservationProofNowFn,
 	}
-}
-
-// defaultReservationProofNowFn returns time.Now() as a uint32 UNIX
-// timestamp. Kept separate from the struct so tests can swap it
-// deterministically, mirroring the watcher's nowFn pattern.
-func defaultReservationProofNowFn() uint32 {
-	return uint32(time.Now().Unix())
 }
 
 // reanchorSourceAnchorHash computes the Bridge's
@@ -468,11 +454,15 @@ func proveReservationAcceptanceActions(
 	// Re-check every tracked event's on-chain action state and evict the
 	// non-settleable ones. The Bridge settles a generation while its
 	// action is Pending or TimedOut: a TimedOut acceptance generation
-	// stays settleable only through timeoutAt + termSeconds (see
-	// loadSettleableAction in ReservationProofs.sol), so the scans keep
-	// TimedOut candidates until that window has closed instead of
-	// deleting them the moment the state flips.
-	now := state.nowFn()
+	// stays settleable only through the chain head time reaching
+	// timeoutAt + termSeconds (see loadSettleableAction in
+	// ReservationProofs.sol), so the scans keep TimedOut candidates until
+	// that window has closed in chain time instead of deleting them the
+	// moment the state flips. The gate reads the chain head rather than
+	// the node's wall clock: a skewed host clock would otherwise evict a
+	// still-settleable generation early, or keep a dead one. When the
+	// head time cannot be read the eviction decision is skipped for this
+	// pass (the generation is kept rather than evicted on a guess).
 	headTime := reservationChainHeadTime(spvChain)
 	var generations []reservationProofGeneration[*tbtc.ReservationAcceptanceRequestedEvent]
 	for key, event := range state.pendingAcceptanceEvents {
@@ -492,14 +482,18 @@ func proveReservationAcceptanceActions(
 
 		switch action.State {
 		case tbtc.ReservationActionStateTimedOut:
-			// The Bridge settles this generation while
-			// now <= timeoutAt + termSeconds, where termSeconds is the
-			// custody term snapshotted onto the action when the
+			// The Bridge settles this generation while the chain head
+			// time is <= timeoutAt + termSeconds, where termSeconds is
+			// the custody term snapshotted onto the action when the
 			// generation was requested. A governance change to the live
 			// reservationTermSeconds parameter does not shrink that
-			// window, so evict only once now has passed the snapshotted
-			// bound.
-			if uint64(now) > uint64(action.TimeoutAt)+uint64(action.TermSeconds) {
+			// window, so evict only once the chain head has passed the
+			// snapshotted bound. When the head time cannot be read the
+			// decision is skipped for this pass (no eviction on a
+			// guess).
+			if !headTime.IsZero() &&
+				uint64(max(headTime.Unix(), 0)) >
+					uint64(action.TimeoutAt)+uint64(action.TermSeconds) {
 				delete(state.pendingAcceptanceEvents, key)
 				continue
 			}

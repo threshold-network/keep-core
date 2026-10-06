@@ -245,10 +245,10 @@ func reverseUint32(locktime [4]byte) uint32 {
 //   - depositKey: the deposit identifier reported by the Bridge.
 //   - refundDeadline: the deposit's refund deadline snapshotted at
 //     reveal, decoded from its DepositRevealed event.
-//   - now:        the UNIX timestamp against which the refund deadline
-//     and the notifiedAt renotify backoff are compared. Tests pass an
-//     explicit value; production passes time.Now().Unix() cast to
-//     uint32.
+//   - now:        the node clock, used only for the notifiedAt renotify
+//     backoff. The refund-deadline gate is judged on the chain head's
+//     block time instead (G2-L13). Tests pass an explicit value;
+//     production passes time.Now().Unix() cast to uint32.
 func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
 	refundDeadline uint32,
@@ -261,16 +261,30 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKeyStr := depositKey.String()
 	deadline := refundDeadline
 
-	// Until the snapshotted refund deadline has STRICTLY passed the
-	// contract rejects the notification and nothing about this deposit
-	// is eligible; keep the check in-memory-only until it does.
-	if now <= deadline {
+	// G2-L13: the refund-deadline gate is a deadline comparison, so it is
+	// judged on the chain head's block time, not the node's wall clock: a
+	// skewed host clock otherwise releases a deposit early, or, when it
+	// runs slow, defers the release past the deadline. The node clock
+	// (now) stays in use only for the renotify-interval backoff below and
+	// the notifiedAt stamp. When the head time cannot be read the deadline
+	// decision is skipped for this call - the deposit is kept tracked
+	// rather than notified or evicted on a guess.
+	headTime := reservationChainHeadTime(rsdw.spvChain)
+	if headTime.IsZero() {
+		return StaleDepositResolutionKeep, nil
+	}
+	headNow := uint32(max(headTime.Unix(), 0))
+
+	// Until the snapshotted refund deadline has STRICTLY passed in chain
+	// time the contract rejects the notification and nothing about this
+	// deposit is eligible; keep the check in-memory-only until it does.
+	if headNow <= deadline {
 		logger.Debugf(
 			"reserved deposit [%v] refund deadline [%d] not yet reached "+
-				"(now=%d); no chain reads until it passes",
+				"(chain head=%d); no chain reads until it passes",
 			depositKey,
 			deadline,
-			now,
+			headNow,
 		)
 		return StaleDepositResolutionKeep, nil
 	}
@@ -418,7 +432,7 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 			depositKeyStr,
 			actionTimeoutRenotifyInterval,
 		)
-		if now <= deadline+offset {
+		if headNow <= deadline+offset {
 			return StaleDepositResolutionKeep, nil
 		}
 		rsdw.attempted[depositKeyStr] = struct{}{}

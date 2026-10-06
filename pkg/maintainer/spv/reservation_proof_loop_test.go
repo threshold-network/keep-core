@@ -1809,8 +1809,8 @@ func newTimedOutReanchorFixture(
 // proof is submitted and the generation stays tracked, and strictly past
 // the bound it is evicted with zero submissions. Both authorized-wallet
 // output encodings (P2WPKH and P2PKH) are driven through the pipeline, and
-// time is driven deterministically through
-// reservationProofScanState.nowFn.
+// the late-settlement window is judged on the chain head's block
+// timestamp, set through setLatestBlockTimestamp.
 func TestProveReservationAcceptanceActions_TimedOutLateWindow(t *testing.T) {
 	encodings := []struct {
 		name     string
@@ -1822,9 +1822,9 @@ func TestProveReservationAcceptanceActions_TimedOutLateWindow(t *testing.T) {
 
 	for _, enc := range encodings {
 		t.Run(enc.name, func(t *testing.T) {
-			runPass := func(now uint32) (*timedOutAcceptanceFixture, error) {
+			runPass := func(headSeconds int64) (*timedOutAcceptanceFixture, error) {
 				fixture := newTimedOutAcceptanceFixture(t, enc.encoding)
-				fixture.state.nowFn = func() uint32 { return now }
+				fixture.spvChain.setLatestBlockTimestamp(time.Unix(headSeconds, 0))
 
 				err := proveReservationAcceptanceActions(
 					fixture.state,
@@ -2057,7 +2057,7 @@ func TestProveReservationActions_EvictNonSettleableStates(t *testing.T) {
 func TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot(t *testing.T) {
 	runSnapshotPass := func(
 		liveTermSeconds uint32,
-		now uint32,
+		headSeconds int64,
 	) (*timedOutAcceptanceFixture, error) {
 		fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
 		// The fixture's action snapshot carries TermSeconds 100; the live
@@ -2067,7 +2067,7 @@ func TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot(t *testing
 		fixture.spvChain.setReservationParameters(&tbtc.ReservationParameters{
 			ReservationTermSeconds: liveTermSeconds,
 		})
-		fixture.state.nowFn = func() uint32 { return now }
+		fixture.spvChain.setLatestBlockTimestamp(time.Unix(headSeconds, 0))
 
 		err := proveReservationAcceptanceActions(
 			fixture.state,
@@ -2083,9 +2083,9 @@ func TestProveReservationAcceptanceActions_TimedOutUsesActionSnapshot(t *testing
 	}
 
 	t.Run("live parameter lower than the snapshot does not shrink the window", func(t *testing.T) {
-		// Live 10 against snapshot 100: TimeoutAt 1000, now 1050. A live
-		// bound of 1010 would evict this generation; the snapshot bound
-		// of 1100 keeps it.
+		// Live 10 against snapshot 100: TimeoutAt 1000, chain head 1050.
+		// A live bound of 1010 would evict this generation; the snapshot
+		// bound of 1100 keeps it.
 		fixture, err := runSnapshotPass(10, 1050)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -2673,7 +2673,6 @@ func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
 // exists"), so proving it again would only burn proof-assembly work.
 func TestProveReservationAcceptanceActions_TimedOutEvictedOnceReservationExists(t *testing.T) {
 	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
-	fixture.state.nowFn = func() uint32 { return 1050 }
 	fixture.spvChain.setReservation(fixture.reservationKey, &tbtc.Reservation{
 		State: tbtc.ReservationStateActive,
 	})
@@ -2707,7 +2706,6 @@ func TestProveReservationAcceptanceActions_TimedOutEvictedOnceReservationExists(
 func TestProveReservationActions_OneSubmissionPerReservation(t *testing.T) {
 	t.Run("acceptance", func(t *testing.T) {
 		fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
-		fixture.state.nowFn = func() uint32 { return 1050 }
 
 		const pendingNonce = 2
 		fixture.spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{

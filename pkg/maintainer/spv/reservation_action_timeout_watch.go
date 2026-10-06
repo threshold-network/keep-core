@@ -436,13 +436,25 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			)
 		}
 
-		// The comparison is inclusive because the contract itself
-		// accepts the notification at exactly action.timeoutAt
-		// (block.timestamp >= timeoutAt); see checkReservationActionTimeout.
-		if now >= deadline {
+		// G2-L11: the notify decision is a deadline comparison, so it is
+		// judged on the chain head's block time, not the node's wall clock:
+		// a skewed host clock otherwise fires a notice the Bridge's
+		// block.timestamp check would reject early, or defers it past the
+		// deadline when the clock runs slow. The comparison is inclusive
+		// because the contract itself accepts the notification at exactly
+		// action.timeoutAt (block.timestamp >= timeoutAt); see
+		// checkReservationActionTimeout. The node clock (now) stays in use
+		// only for the renotify-interval backoff above and the notifiedAt
+		// stamp below. When the head time cannot be read the deadline
+		// decision is skipped for this pass - no notification on a guess.
+		if headTime.IsZero() {
+			continue
+		}
+		headNow := uint32(max(headTime.Unix(), 0))
+		if headNow >= deadline {
 			notified, err := ratw.checkReservationActionTimeout(
 				item.reservationKey,
-				now,
+				headNow,
 				action,
 				item.requestNonce,
 			)

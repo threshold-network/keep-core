@@ -645,6 +645,9 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLo
 	// gate never masks the recovery notification this test asserts.
 	currentNow := uint32(900)
 	ratw.nowFn = func() uint32 { return currentNow }
+	// The notify decision is judged on the chain head's block time (G2-L11),
+	// not on the node clock above. 900 is past TimeoutAt plus the stagger.
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	key1 := reservationKey(0x4001)
 	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
@@ -723,6 +726,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
 	// gate never masks the notifications this test asserts.
 	ratw.nowFn = func() uint32 { return 900 }
+	// The deadline decision uses the chain head time (G2-L11); 900 is past
+	// every seeded TimeoutAt plus the stagger and inside key2's abandonment
+	// bound (200 + 4*200).
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -845,6 +852,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	// possible reservationOperatorStaggerOffset (see the identical
 	// comment in RunLoop_IncrementalTracking above).
 	ratw.nowFn = func() uint32 { return 900 }
+	// Chain head time (G2-L11): past TimeoutAt (100) plus the stagger, but
+	// not past the abandonment bound (100 + 4*100), so the notified entry
+	// stays tracked.
+	spvChain.setLatestBlockTimestamp(time.Unix(200, 0))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -955,6 +966,10 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 		defer nowMutex.Unlock()
 		return currentNow
 	}
+	// Chain head time (G2-L11): past TimeoutAt (100) plus this key's stagger
+	// offset and not past the abandonment bound (100 + 4*100), so the entry
+	// stays tracked until the re-notification.
+	spvChain.setLatestBlockTimestamp(time.Unix(500, 0))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1081,6 +1096,8 @@ func TestReservationActionTimeoutWatcher_FirstScanStartsAtActivation(t *testing.
 		// now is comfortably beyond TimeoutAt plus the maximum
 		// reservationOperatorStaggerOffset.
 		ratw.nowFn = func() uint32 { return 900 }
+		// The deadline decision uses the chain head time (G2-L11).
+		spvChain.setLatestBlockTimestamp(time.Unix(300, 0))
 		return spvChain, ratw
 	}
 
@@ -1310,6 +1327,8 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 	// tracked keys (see the identical comment in
 	// RunLoop_IncrementalTracking above).
 	ratw.nowFn = func() uint32 { return 900 }
+	// The deadline decision uses the chain head time (G2-L11).
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	wallet := walletPKH()
 	total := reservationActionTimeoutMaxChecksPerTick + 10
