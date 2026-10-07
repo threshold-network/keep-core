@@ -48,7 +48,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var func = function (hre) { return __awaiter(void 0, void 0, void 0, function () {
-    var getNamedAccounts, deployments, helpers, deployer, T, TokenStaking, ReimbursementPool, BeaconSortitionPool, BeaconDkgValidator, deployOptions, BLS, BeaconAuthorization, BeaconDkg, BeaconInactivity, RandomBeacon;
+    var getNamedAccounts, deployments, helpers, deployer, RandomBeacon, poolOwner, T, TokenStaking, ReimbursementPool, BeaconSortitionPool, BeaconDkgValidator, deployOptions, BLS, BeaconAuthorization, BeaconDkg, BeaconInactivity, verifyRecorded;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -56,37 +56,50 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                 return [4 /*yield*/, getNamedAccounts()];
             case 1:
                 deployer = (_a.sent()).deployer;
-                return [4 /*yield*/, deployments.get("T")];
+                return [4 /*yield*/, deployments.getOrNull("RandomBeacon")];
             case 2:
+                RandomBeacon = _a.sent();
+                return [4 /*yield*/, deployments.read("BeaconSortitionPool", "owner")];
+            case 3:
+                poolOwner = _a.sent();
+                if (!(RandomBeacon && helpers.address.equal(poolOwner, RandomBeacon.address))) return [3 /*break*/, 4];
+                deployments.log("using existing RandomBeacon at " + RandomBeacon.address);
+                return [3 /*break*/, 16];
+            case 4:
+                if (!helpers.address.equal(poolOwner, deployer)) {
+                    throw new Error("BeaconSortitionPool is owned by " + poolOwner + "; cannot deploy a new RandomBeacon from " + deployer);
+                }
+                return [4 /*yield*/, deployments.get("T")];
+            case 5:
                 T = _a.sent();
                 return [4 /*yield*/, deployments.get("TokenStaking")];
-            case 3:
+            case 6:
                 TokenStaking = _a.sent();
                 return [4 /*yield*/, deployments.get("ReimbursementPool")];
-            case 4:
+            case 7:
                 ReimbursementPool = _a.sent();
                 return [4 /*yield*/, deployments.get("BeaconSortitionPool")];
-            case 5:
+            case 8:
                 BeaconSortitionPool = _a.sent();
                 return [4 /*yield*/, deployments.get("BeaconDkgValidator")];
-            case 6:
+            case 9:
                 BeaconDkgValidator = _a.sent();
                 deployOptions = {
                     from: deployer,
                     log: true,
-                    waitConfirmations: 1,
+                    waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
                 };
                 return [4 /*yield*/, deployments.deploy("BLS", deployOptions)];
-            case 7:
+            case 10:
                 BLS = _a.sent();
                 return [4 /*yield*/, deployments.deploy("BeaconAuthorization", deployOptions)];
-            case 8:
+            case 11:
                 BeaconAuthorization = _a.sent();
                 return [4 /*yield*/, deployments.deploy("BeaconDkg", deployOptions)];
-            case 9:
+            case 12:
                 BeaconDkg = _a.sent();
                 return [4 /*yield*/, deployments.deploy("BeaconInactivity", deployOptions)];
-            case 10:
+            case 13:
                 BeaconInactivity = _a.sent();
                 return [4 /*yield*/, deployments.deploy("RandomBeacon", __assign({ contract: process.env.TEST_USE_STUBS_BEACON === "true"
                             ? "RandomBeaconStub"
@@ -102,41 +115,59 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                             BeaconDkg: BeaconDkg.address,
                             BeaconInactivity: BeaconInactivity.address,
                         } }, deployOptions))];
-            case 11:
+            case 14:
                 RandomBeacon = _a.sent();
                 return [4 /*yield*/, helpers.ownable.transferOwnership("BeaconSortitionPool", RandomBeacon.address, deployer)];
-            case 12:
-                _a.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 19];
-                return [4 /*yield*/, hre.ethers.provider.waitForTransaction(RandomBeacon.transactionHash, 2, 300000)];
-            case 13:
-                _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BLS)];
-            case 14:
-                _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconAuthorization)];
             case 15:
                 _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconDkg)];
+                _a.label = 16;
             case 16:
-                _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconInactivity)];
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 22];
+                verifyRecorded = function (name) { return __awaiter(void 0, void 0, void 0, function () {
+                    var record;
+                    return __generator(this, function (_a) {
+                        switch (_a.label) {
+                            case 0: return [4 /*yield*/, deployments.getOrNull(name)];
+                            case 1:
+                                record = _a.sent();
+                                if (!record) return [3 /*break*/, 3];
+                                return [4 /*yield*/, helpers.etherscan.verify(record)];
+                            case 2:
+                                _a.sent();
+                                return [3 /*break*/, 4];
+                            case 3:
+                                deployments.log("no " + name + " deployment record; skipping verification");
+                                _a.label = 4;
+                            case 4: return [2 /*return*/];
+                        }
+                    });
+                }); };
+                return [4 /*yield*/, verifyRecorded("BLS")];
             case 17:
                 _a.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(RandomBeacon)];
+                return [4 /*yield*/, verifyRecorded("BeaconAuthorization")];
             case 18:
                 _a.sent();
-                _a.label = 19;
+                return [4 /*yield*/, verifyRecorded("BeaconDkg")];
             case 19:
-                if (!hre.network.tags.tenderly) return [3 /*break*/, 21];
+                _a.sent();
+                return [4 /*yield*/, verifyRecorded("BeaconInactivity")];
+            case 20:
+                _a.sent();
+                return [4 /*yield*/, helpers.etherscan.verify(RandomBeacon)];
+            case 21:
+                _a.sent();
+                _a.label = 22;
+            case 22:
+                if (!hre.network.tags.tenderly) return [3 /*break*/, 24];
                 return [4 /*yield*/, hre.tenderly.verify({
                         name: "RandomBeacon",
                         address: RandomBeacon.address,
                     })];
-            case 20:
+            case 23:
                 _a.sent();
-                _a.label = 21;
-            case 21: return [2 /*return*/];
+                _a.label = 24;
+            case 24: return [2 /*return*/];
         }
     });
 }); };

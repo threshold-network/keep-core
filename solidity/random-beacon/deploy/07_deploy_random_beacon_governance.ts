@@ -9,22 +9,29 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const GOVERNANCE_DELAY = 604_800 // 1 week
 
+  // Reuse a saved record only if it was deployed for this beacon. A record left
+  // over from an earlier beacon must not receive its governance.
+  const args = [RandomBeacon.address, GOVERNANCE_DELAY]
+  const previous = await deployments.getOrNull("RandomBeaconGovernance")
+  const sameArgs =
+    previous?.args?.length === args.length &&
+    previous.args.every(
+      (arg, index) =>
+        String(arg).toLowerCase() === String(args[index]).toLowerCase()
+    )
+
   const RandomBeaconGovernance = await deployments.deploy(
     "RandomBeaconGovernance",
     {
       from: deployer,
-      args: [RandomBeacon.address, GOVERNANCE_DELAY],
+      skipIfAlreadyDeployed: sameArgs,
+      args,
       log: true,
-      waitConfirmations: 1,
+      waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
     }
   )
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      RandomBeaconGovernance.transactionHash,
-      2,
-      300000
-    )
     await helpers.etherscan.verify(RandomBeaconGovernance)
   }
 

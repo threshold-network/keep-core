@@ -14,7 +14,16 @@ runs:
         WRAPPER_DIR="${RUNNER_TEMP:-/tmp}/git-clean-bin"
         SAFE_HOME="${SAFE_TMP}/git-clean-home"
         SAFE_XDG_CONFIG_HOME="${SAFE_TMP}/git-clean-xdg-config"
-        REAL_GIT="$(command -v git)"
+        # A job may run this action more than once. Resolve git without the
+        # wrapper directory, or the second run points the wrapper at itself and
+        # every later git call loops forever.
+        CLEAN_PATH=":${PATH}:"
+        while [[ "$CLEAN_PATH" == *":${WRAPPER_DIR}:"* ]]; do
+          CLEAN_PATH="${CLEAN_PATH//:${WRAPPER_DIR}:/:}"
+        done
+        CLEAN_PATH="${CLEAN_PATH#:}"
+        CLEAN_PATH="${CLEAN_PATH%:}"
+        REAL_GIT="$(PATH="$CLEAN_PATH" command -v git)"
 
         mkdir -p "$WRAPPER_DIR" "$SAFE_HOME" "$SAFE_XDG_CONFIG_HOME"
         printf '%s\n' \

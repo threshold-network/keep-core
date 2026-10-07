@@ -5,33 +5,45 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { getNamedAccounts, deployments, helpers } = hre
   const { deployer, chaosnetOwner } = await getNamedAccounts()
   const { execute } = deployments
-  const { to1e18 } = helpers.number
 
-  const POOL_WEIGHT_DIVISOR = to1e18(1)
+  const POOL_WEIGHT_DIVISOR = "1000000000000000000"
 
   const T = await deployments.get("T")
 
+  // Reuse a saved record only if it was deployed for this token, so a
+  // redeployed T never ends up with a pool bound to the old one.
+  const args = [T.address, POOL_WEIGHT_DIVISOR]
+  const previous = await deployments.getOrNull("BeaconSortitionPool")
+  const sameArgs =
+    previous?.args?.length === args.length &&
+    previous.args.every(
+      (arg, index) =>
+        String(arg).toLowerCase() === String(args[index]).toLowerCase()
+    )
+
   const BeaconSortitionPool = await deployments.deploy("BeaconSortitionPool", {
     contract: "SortitionPool",
+    skipIfAlreadyDeployed: sameArgs,
     from: deployer,
-    args: [T.address, POOL_WEIGHT_DIVISOR],
+    args,
     log: true,
-    waitConfirmations: 1,
+    waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   })
 
-  await execute(
+  const currentChaosnetOwner = await deployments.read(
     "BeaconSortitionPool",
-    { from: deployer, log: true, waitConfirmations: 1 },
-    "transferChaosnetOwnerRole",
-    chaosnetOwner
+    "chaosnetOwner"
   )
+  if (!helpers.address.equal(currentChaosnetOwner, chaosnetOwner)) {
+    await execute(
+      "BeaconSortitionPool",
+      { from: deployer, log: true, waitConfirmations: 1 },
+      "transferChaosnetOwnerRole",
+      chaosnetOwner
+    )
+  }
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      BeaconSortitionPool.transactionHash,
-      2,
-      300000
-    )
     await helpers.etherscan.verify(BeaconSortitionPool)
   }
 

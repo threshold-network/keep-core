@@ -11,15 +11,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     from: deployer,
     args: [BeaconSortitionPool.address],
     log: true,
-    waitConfirmations: 1,
+    waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   })
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      BeaconDkgValidator.transactionHash,
-      2,
-      300000
-    )
     await helpers.etherscan.verify(BeaconDkgValidator)
   }
 

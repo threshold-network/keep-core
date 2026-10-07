@@ -12,15 +12,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     from: deployer,
     args: [staticGas, maxGasPrice],
     log: true,
-    waitConfirmations: 1,
+    // Explorer-verified networks wait for a second confirmation so the
+    // explorer has indexed the bytecode before the verify call.
+    waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
   })
 
   if (hre.network.tags.etherscan) {
-    await hre.ethers.provider.waitForTransaction(
-      ReimbursementPool.transactionHash,
-      2,
-      300000
-    )
     await helpers.etherscan.verify(ReimbursementPool)
   }
 

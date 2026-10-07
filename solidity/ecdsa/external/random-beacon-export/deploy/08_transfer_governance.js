@@ -37,7 +37,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var func = function (hre) { return __awaiter(void 0, void 0, void 0, function () {
-    var getNamedAccounts, deployments, helpers, _a, deployer, governance, RandomBeaconGovernance;
+    var getNamedAccounts, deployments, helpers, _a, deployer, governance, RandomBeaconGovernance, currentGovernance, linkedBeacon, RandomBeacon, owner;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -45,14 +45,47 @@ var func = function (hre) { return __awaiter(void 0, void 0, void 0, function ()
                 return [4 /*yield*/, getNamedAccounts()];
             case 1:
                 _a = _b.sent(), deployer = _a.deployer, governance = _a.governance;
-                return [4 /*yield*/, deployments.get("RandomBeaconGovernance")];
+                return [4 /*yield*/, deployments.get("RandomBeaconGovernance")
+                    // Governance moves only once, so refuse to hand it to a governance contract
+                    // that is not ours or is linked to another beacon.
+                ];
             case 2:
                 RandomBeaconGovernance = _b.sent();
-                return [4 /*yield*/, helpers.ownable.transferOwnership("RandomBeaconGovernance", governance, deployer)];
+                return [4 /*yield*/, deployments.read("RandomBeacon", "governance")];
             case 3:
-                _b.sent();
-                return [4 /*yield*/, deployments.execute("RandomBeacon", { from: deployer, log: true, waitConfirmations: 1 }, "transferGovernance", RandomBeaconGovernance.address)];
+                currentGovernance = _b.sent();
+                if (!helpers.address.equal(currentGovernance, deployer) &&
+                    !helpers.address.equal(currentGovernance, RandomBeaconGovernance.address)) {
+                    throw new Error("RandomBeacon governance is " + currentGovernance + ", expected the deployer or " + RandomBeaconGovernance.address);
+                }
+                return [4 /*yield*/, deployments.read("RandomBeaconGovernance", "randomBeacon")];
             case 4:
+                linkedBeacon = _b.sent();
+                return [4 /*yield*/, deployments.get("RandomBeacon")];
+            case 5:
+                RandomBeacon = _b.sent();
+                if (!helpers.address.equal(linkedBeacon, RandomBeacon.address)) {
+                    throw new Error("RandomBeaconGovernance at " + RandomBeaconGovernance.address + " points to " + linkedBeacon + ", expected " + RandomBeacon.address);
+                }
+                return [4 /*yield*/, deployments.read("RandomBeaconGovernance", "owner")];
+            case 6:
+                owner = _b.sent();
+                if (!helpers.address.equal(owner, deployer) &&
+                    !helpers.address.equal(owner, governance)) {
+                    throw new Error("RandomBeaconGovernance is owned by " + owner + ", expected the deployer or " + governance);
+                }
+                if (!helpers.address.equal(owner, deployer)) return [3 /*break*/, 8];
+                return [4 /*yield*/, helpers.ownable.transferOwnership("RandomBeaconGovernance", governance, deployer)];
+            case 7:
+                _b.sent();
+                _b.label = 8;
+            case 8:
+                if (!helpers.address.equal(currentGovernance, deployer)) {
+                    deployments.log("RandomBeacon governance is already " + currentGovernance + "; skipping transfer");
+                    return [2 /*return*/];
+                }
+                return [4 /*yield*/, deployments.execute("RandomBeacon", { from: deployer, log: true, waitConfirmations: 1 }, "transferGovernance", RandomBeaconGovernance.address)];
+            case 9:
                 _b.sent();
                 return [2 /*return*/];
         }

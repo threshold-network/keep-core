@@ -1,7 +1,7 @@
 // `@nomicfoundation/hardhat-verify` ^2.1.x is the Hardhat 2–compatible line; Hardhat 3 uses ^3.x (API v2).
 // Plugin is imported statically so HardhatUserConfig picks up the `etherscan` field type
-// augmentation. Set DISABLE_HARDHAT_VERIFY=true to skip the Etherscan config and any verify
-// calls in deploy scripts; the plugin's task registration is harmless when unused.
+// augmentation. Set DISABLE_HARDHAT_VERIFY=true to skip the Etherscan config and the Etherscan
+// verify calls in deploy scripts (Tenderly verification is gated by its network tag); the plugin's task registration is harmless when unused.
 import fs from "fs"
 import path from "path"
 

@@ -37,50 +37,65 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var func = function (hre) { return __awaiter(void 0, void 0, void 0, function () {
-    var getNamedAccounts, deployments, helpers, _a, deployer, chaosnetOwner, execute, to1e18, POOL_WEIGHT_DIVISOR, T, BeaconSortitionPool;
-    return __generator(this, function (_b) {
-        switch (_b.label) {
+    var getNamedAccounts, deployments, helpers, _a, deployer, chaosnetOwner, execute, POOL_WEIGHT_DIVISOR, T, args, previous, sameArgs, BeaconSortitionPool, currentChaosnetOwner;
+    var _b;
+    return __generator(this, function (_c) {
+        switch (_c.label) {
             case 0:
                 getNamedAccounts = hre.getNamedAccounts, deployments = hre.deployments, helpers = hre.helpers;
                 return [4 /*yield*/, getNamedAccounts()];
             case 1:
-                _a = _b.sent(), deployer = _a.deployer, chaosnetOwner = _a.chaosnetOwner;
+                _a = _c.sent(), deployer = _a.deployer, chaosnetOwner = _a.chaosnetOwner;
                 execute = deployments.execute;
-                to1e18 = helpers.number.to1e18;
-                POOL_WEIGHT_DIVISOR = to1e18(1);
-                return [4 /*yield*/, deployments.get("T")];
+                POOL_WEIGHT_DIVISOR = "1000000000000000000";
+                return [4 /*yield*/, deployments.get("T")
+                    // Reuse a saved record only if it was deployed for this token, so a
+                    // redeployed T never ends up with a pool bound to the old one.
+                ];
             case 2:
-                T = _b.sent();
+                T = _c.sent();
+                args = [T.address, POOL_WEIGHT_DIVISOR];
+                return [4 /*yield*/, deployments.getOrNull("BeaconSortitionPool")];
+            case 3:
+                previous = _c.sent();
+                sameArgs = ((_b = previous === null || previous === void 0 ? void 0 : previous.args) === null || _b === void 0 ? void 0 : _b.length) === args.length &&
+                    previous.args.every(function (arg, index) {
+                        return String(arg).toLowerCase() === String(args[index]).toLowerCase();
+                    });
                 return [4 /*yield*/, deployments.deploy("BeaconSortitionPool", {
                         contract: "SortitionPool",
+                        skipIfAlreadyDeployed: sameArgs,
                         from: deployer,
-                        args: [T.address, POOL_WEIGHT_DIVISOR],
+                        args: args,
                         log: true,
-                        waitConfirmations: 1,
+                        waitConfirmations: hre.network.tags.etherscan ? 2 : 1,
                     })];
-            case 3:
-                BeaconSortitionPool = _b.sent();
-                return [4 /*yield*/, execute("BeaconSortitionPool", { from: deployer, log: true, waitConfirmations: 1 }, "transferChaosnetOwnerRole", chaosnetOwner)];
             case 4:
-                _b.sent();
-                if (!hre.network.tags.etherscan) return [3 /*break*/, 7];
-                return [4 /*yield*/, hre.ethers.provider.waitForTransaction(BeaconSortitionPool.transactionHash, 2, 300000)];
+                BeaconSortitionPool = _c.sent();
+                return [4 /*yield*/, deployments.read("BeaconSortitionPool", "chaosnetOwner")];
             case 5:
-                _b.sent();
-                return [4 /*yield*/, helpers.etherscan.verify(BeaconSortitionPool)];
+                currentChaosnetOwner = _c.sent();
+                if (!!helpers.address.equal(currentChaosnetOwner, chaosnetOwner)) return [3 /*break*/, 7];
+                return [4 /*yield*/, execute("BeaconSortitionPool", { from: deployer, log: true, waitConfirmations: 1 }, "transferChaosnetOwnerRole", chaosnetOwner)];
             case 6:
-                _b.sent();
-                _b.label = 7;
+                _c.sent();
+                _c.label = 7;
             case 7:
-                if (!hre.network.tags.tenderly) return [3 /*break*/, 9];
+                if (!hre.network.tags.etherscan) return [3 /*break*/, 9];
+                return [4 /*yield*/, helpers.etherscan.verify(BeaconSortitionPool)];
+            case 8:
+                _c.sent();
+                _c.label = 9;
+            case 9:
+                if (!hre.network.tags.tenderly) return [3 /*break*/, 11];
                 return [4 /*yield*/, hre.tenderly.verify({
                         name: "BeaconSortitionPool",
                         address: BeaconSortitionPool.address,
                     })];
-            case 8:
-                _b.sent();
-                _b.label = 9;
-            case 9: return [2 /*return*/];
+            case 10:
+                _c.sent();
+                _c.label = 11;
+            case 11: return [2 /*return*/];
         }
     });
 }); };

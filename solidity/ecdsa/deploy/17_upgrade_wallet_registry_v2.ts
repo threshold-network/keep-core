@@ -16,11 +16,11 @@ import type { DeployFunction } from "hardhat-deploy/types"
  * - Outputs calldata for governance to schedule via Timelock
  * - Does NOT execute the upgrade (must go through 24h Timelock)
  *
- * The atomic upgradeToAndCall pattern prevents front-running attacks
+ * The atomic upgradeAndCall pattern prevents front-running attacks
  * by ensuring the upgrade and initialization happen in a single transaction.
  */
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { deployments, ethers, helpers, network } = hre
+  const { deployments, ethers, helpers, network, upgrades } = hre
 
   const isMainnet = network.name === "mainnet"
 
@@ -56,10 +56,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Check if already upgraded (allowlist is set)
   // Note: V1 doesn't have allowlist() function, so we need to handle that case
-  let currentAllowlist = ethers.constants.AddressZero
+  // Literals instead of ethers.constants / BigNumber helpers: these scripts run
+  // under the consumer's ethers, which may be v5 or v6.
+  let currentAllowlist = "0x0000000000000000000000000000000000000000"
   try {
     currentAllowlist = await walletRegistryBefore.allowlist()
-    if (currentAllowlist !== ethers.constants.AddressZero) {
+    if (currentAllowlist !== "0x0000000000000000000000000000000000000000") {
       console.log(`  Allowlist: ${currentAllowlist}`)
       console.log()
       console.log("WalletRegistry is already upgraded to V2!")
@@ -73,31 +75,21 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       console.error(`  Expected: ${Allowlist.address}`)
       return false
     }
-  } catch (error) {
-    // V1 doesn't have allowlist() function - upgrade is needed
+  } catch (error: any) {
+    // V1 doesn't have allowlist() function, so the call reverts. Any other
+    // failure (RPC error, wrong address) must not be read as "V1".
+    if (error?.code !== "CALL_EXCEPTION") throw error
     console.log("  Allowlist: not found (V1 detected - upgrade needed)")
   }
 
-  // Get ProxyAdmin address from EIP-1967 slot
-  const ADMIN_SLOT =
-    "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
-  const proxyAdminSlot = await ethers.provider.getStorageAt(
-    walletRegistryDeployment.address,
-    ADMIN_SLOT
-  )
-  const proxyAdminAddress = ethers.utils.getAddress(
-    `0x${proxyAdminSlot.slice(-40)}`
+  const proxyAdminAddress = await upgrades.erc1967.getAdminAddress(
+    walletRegistryDeployment.address
   )
   console.log(`  ProxyAdmin: ${proxyAdminAddress}`)
 
-  // Get current implementation
-  const IMPL_SLOT =
-    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
-  const implSlot = await ethers.provider.getStorageAt(
-    walletRegistryDeployment.address,
-    IMPL_SLOT
+  const currentImpl = await upgrades.erc1967.getImplementationAddress(
+    walletRegistryDeployment.address
   )
-  const currentImpl = ethers.utils.getAddress(`0x${implSlot.slice(-40)}`)
   console.log(`  Current Implementation: ${currentImpl}`)
 
   // Verify governance state is preserved
@@ -109,47 +101,36 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   console.log("=== DEPLOYING NEW IMPLEMENTATION ===")
   console.log()
 
-  const WalletRegistryFactory = await ethers.getContractFactory(
-    "WalletRegistry",
+  const newImplementation = await deployments.deploy(
+    "WalletRegistryV2Implementation",
     {
-      signer: deployer,
-      libraries: {
-        EcdsaInactivity: EcdsaInactivity.address,
-      },
+      contract: "WalletRegistry",
+      from: deployer.address,
+      args: [EcdsaSortitionPool.address, TokenStaking.address],
+      libraries: { EcdsaInactivity: EcdsaInactivity.address },
+      log: true,
+      waitConfirmations: 1,
     }
   )
 
-  // Deploy implementation with constructor args (immutable variables)
-  const newImplementation = await WalletRegistryFactory.deploy(
-    EcdsaSortitionPool.address,
-    TokenStaking.address
-  )
-  await newImplementation.deployed()
-
   console.log(`New implementation deployed: ${newImplementation.address}`)
-  console.log(`  TX: ${newImplementation.deployTransaction.hash}`)
+  console.log(`  TX: ${newImplementation.transactionHash}`)
   console.log()
 
-  // Save deployment artifact
-  await deployments.save("WalletRegistryV2Implementation", {
-    address: newImplementation.address,
-    abi: WalletRegistryFactory.interface.format("json") as any,
-    transactionHash: newImplementation.deployTransaction.hash,
-  })
-
-  // Encode initializeV2 call
-  const initializeV2Data = WalletRegistryFactory.interface.encodeFunctionData(
+  const initializeV2Data = walletRegistryBefore.interface.encodeFunctionData(
     "initializeV2",
     [Allowlist.address]
   )
 
-  // Encode upgradeAndCall for ProxyAdmin
-  const proxyAdminInterface = new ethers.utils.Interface([
-    "function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable",
-    "function owner() external view returns (address)",
-  ])
+  const proxyAdmin = await ethers.getContractAt(
+    [
+      "function upgradeAndCall(address proxy, address implementation, bytes data) payable",
+      "function owner() view returns (address)",
+    ],
+    proxyAdminAddress
+  )
 
-  const upgradeCalldata = proxyAdminInterface.encodeFunctionData(
+  const upgradeCalldata = proxyAdmin.interface.encodeFunctionData(
     "upgradeAndCall",
     [
       walletRegistryDeployment.address,
@@ -159,10 +140,6 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   )
 
   // Get ProxyAdmin owner
-  const proxyAdmin = await ethers.getContractAt(
-    ["function owner() view returns (address)"],
-    proxyAdminAddress
-  )
   const proxyAdminOwner = await proxyAdmin.owner()
   console.log(`ProxyAdmin owner: ${proxyAdminOwner}`)
 
@@ -231,9 +208,11 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       },
     }
 
+    // Relative to the consumer project, not to this file: in a published
+    // package this file lives in node_modules.
     const proposalPath = path.join(
-      __dirname,
-      "../upgrade-proposal-mainnet.json"
+      hre.config.paths.root,
+      "upgrade-proposal-mainnet.json"
     )
     fs.writeFileSync(proposalPath, JSON.stringify(proposalData, null, 2))
     console.log(`Proposal data saved to: ${proposalPath}`)
