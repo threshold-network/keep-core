@@ -36,7 +36,7 @@ func TestReservationReanchorTask_SkipsYoungResumeTarget(t *testing.T) {
 	// Young subtest: target created 1 second before it would age.
 	// createdAt + period = wall - 3599s + 3600s = wall + 1s > headTime (wall) → not aged.
 	t.Run("young target: skipped, no proposal", func(t *testing.T) {
-		youngCreatedAt := wall.Add(-period + 30*time.Second)
+		youngCreatedAt := wall.Add(-period + time.Second)
 		tbtcChain.SetLatestBlockTimestamp(wall)
 		tbtcChain.SetWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{
 			State:     tbtc.StateLive,
@@ -136,7 +136,7 @@ func TestReanchorTargetSearch_SkipsYoungCandidate(t *testing.T) {
 	})
 	lc.SetWallet(youngWallet, &tbtc.WalletChainData{
 		State:     tbtc.StateLive,
-		CreatedAt: wall.Add(-time.Duration(period-30) * time.Second), // young (outside 24s tolerance)
+		CreatedAt: wall.Add(-time.Duration(period-1) * time.Second), // young
 	})
 
 	lc.SetLiveWalletsCount(2)
@@ -181,7 +181,7 @@ func TestReanchorTargetSearch_SkipsYoungCandidate(t *testing.T) {
 		)
 		lcOnlyYoung.SetWallet(youngWallet, &tbtc.WalletChainData{
 			State:     tbtc.StateLive,
-			CreatedAt: wall.Add(-time.Duration(period-30) * time.Second),
+			CreatedAt: wall.Add(-time.Duration(period-1) * time.Second),
 		})
 		lcOnlyYoung.SetLiveWalletsCount(1)
 
@@ -411,7 +411,7 @@ func TestReservationReanchorTask_WaitingOnAgedTargetGauge(t *testing.T) {
 	// Young target: waiting.
 	tbtcChain.SetWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{
 		State:     tbtc.StateLive,
-		CreatedAt: wall.Add(-time.Duration(creationPeriod-30) * time.Second),
+		CreatedAt: wall.Add(-time.Duration(creationPeriod-1) * time.Second),
 	})
 	if shouldExecute, err := run(); err != nil || shouldExecute {
 		t.Fatalf("expected no proposal and no error, got %v, %v", shouldExecute, err)
