@@ -36,8 +36,17 @@ func TestGasEstimateWithMargin(t *testing.T) {
 	}
 }
 
+// TestRerun_G5R58_GasEstimateWithMarginSaturates checks estimates whose
+// margin product overflows uint64. Without the guard, 1<<62 wraps the
+// product to zero and returns the estimate with no margin at all.
 func TestRerun_G5R58_GasEstimateWithMarginSaturates(t *testing.T) {
-	if got := gasEstimateWithMargin(math.MaxUint64); got != math.MaxUint64 {
-		t.Fatalf("expected MaxUint64 on overflow, got %d", got)
+	for _, estimate := range []uint64{1 << 62, math.MaxUint64 / 2, math.MaxUint64} {
+		if got := gasEstimateWithMargin(estimate); got != math.MaxUint64 {
+			t.Errorf(
+				"estimate %d: expected saturation at MaxUint64, got %d",
+				estimate,
+				got,
+			)
+		}
 	}
 }

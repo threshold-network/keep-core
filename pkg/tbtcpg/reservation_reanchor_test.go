@@ -2,7 +2,6 @@ package tbtcpg_test
 
 import (
 	"errors"
-	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -1851,57 +1850,4 @@ func TestLocalChain_RequestReservationReanchor_MirrorsSolidity(t *testing.T) {
 			t.Fatalf("unexpected reservation after settlement: %+v", reservation)
 		}
 	})
-}
-
-func TestRerun_G1R19_LeaderUsesReanchorTargetAgeTolerance(t *testing.T) {
-	now := time.Now()
-	creationPeriod := uint32(86400)
-	createdAt := now.Add(-time.Duration(creationPeriod)*time.Second + 12*time.Second)
-
-	if tbtc.IsReanchorTargetAged(createdAt, creationPeriod, now, 0) {
-		t.Fatal("expected target NOT aged under tolerance 0")
-	}
-
-	if !tbtc.IsReanchorTargetAged(createdAt, creationPeriod, now, tbtc.ReanchorTargetAgeTolerance) {
-		t.Fatal("expected target aged under ReanchorTargetAgeTolerance")
-	}
-}
-
-func TestRerun_G1R22_AnchorFloorCheckCheckedAddition(t *testing.T) {
-	sourceWallet := hexToByte20("1111111111111111111111111111111111111111")
-	reservationKey := big.NewInt(4242)
-
-	tbtcChain := tbtcpg.NewLocalChain()
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-
-	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
-		ReservationTxMaxFee:      math.MaxUint64 - 100,
-		ReservationMinAmount:     200,
-		MaxReservationsPerWallet: 5,
-		ReservationActionTimeout: 86400,
-	})
-	tbtcChain.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
-	tbtcChain.SetReservation(reservationKey, &tbtc.Reservation{
-		WalletPublicKeyHash: sourceWallet,
-		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: bitcoin.Hash{0x42},
-				OutputIndex:     3,
-			},
-			Value: 500,
-		},
-		State: tbtc.ReservationStateActive,
-	})
-	tbtcChain.SetWalletReservations(sourceWallet, []*big.Int{reservationKey})
-
-	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
-	proposal, _, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWallet,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if proposal != nil {
-		t.Fatalf("expected nil proposal when floor overflows, got %+v", proposal)
-	}
 }

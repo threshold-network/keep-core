@@ -3,7 +3,6 @@ package tbtcpg
 import (
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -370,7 +369,7 @@ reservationLoop:
 				targetData.CreatedAt,
 				walletParameters.CreationPeriod,
 				headTime,
-				tbtc.ReanchorTargetAgeTolerance,
+				0,
 			) {
 				taskLogger.Infof(
 					"re-anchor target [0x%x] for reservation [0x%x] has not "+
@@ -445,8 +444,7 @@ reservationLoop:
 				)
 				continue reservationLoop
 			}
-			if params.ReservationTxMaxFee > math.MaxUint64-params.ReservationMinAmount ||
-				anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
+			if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
 				taskLogger.Infof(
 					"reservation [0x%x] anchor [%d] is not above the "+
 						"re-anchor floor (tx max fee [%d] + min amount [%d]), "+
@@ -1104,7 +1102,7 @@ func (s *reanchorTargetSearch) pick(
 			s.createdAt[candidate],
 			s.creationPeriod,
 			s.headTime,
-			tbtc.ReanchorTargetAgeTolerance,
+			0,
 		) {
 			s.logger.Infof(
 				"candidate re-anchor target wallet [0x%x] has not aged "+

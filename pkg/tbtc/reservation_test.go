@@ -1743,31 +1743,77 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 	})
 }
 
-func TestRerun_G1R11_RPCCallInFlightDeduplication(t *testing.T) {
+// TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded checks that calls whose
+// caller timed out keep their slot until the backend answers, and that a new
+// call fails at once when every slot is held, instead of parking one more
+// goroutine.
+func TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded(t *testing.T) {
 	origTimeout := reservationRPCRequestTimeout
-	reservationRPCRequestTimeout = 50 * time.Millisecond
-	defer func() { reservationRPCRequestTimeout = origTimeout }()
+	origSlots := reservationRPCSlots
+	reservationRPCRequestTimeout = 20 * time.Millisecond
+	reservationRPCSlots = make(chan struct{}, 2)
+	defer func() {
+		reservationRPCRequestTimeout = origTimeout
+		reservationRPCSlots = origSlots
+	}()
 
 	blocker := make(chan struct{})
 	defer close(blocker)
 
-	key := "testInFlightDeduplicationKey"
-
-	go func() {
-		_, _ = rpcCallWithTimeout(func() (int, error) {
+	for i := range 2 {
+		_, err := rpcCallWithTimeout(func() (int, error) {
 			<-blocker
-			return 42, nil
-		}, key)
-	}()
+			return 0, nil
+		}, "hung")
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("call %d: expected a timeout, got: %v", i, err)
+		}
+	}
 
-	time.Sleep(10 * time.Millisecond)
-
+	called := false
 	_, err := rpcCallWithTimeout(func() (int, error) {
-		return 100, nil
-	}, key)
+		called = true
+		return 1, nil
+	}, "fresh")
+	if err == nil || !strings.Contains(err.Error(), "too many") {
+		t.Fatalf("expected the slot bound to reject the call, got: %v", err)
+	}
+	if called {
+		t.Fatal("the call ran although every slot was held")
+	}
+}
 
-	if err == nil || !strings.Contains(err.Error(), "RPC call already in flight") {
-		t.Fatalf("expected already in flight error, got: %v", err)
+// TestRerun_G1R11_IndependentRPCCallsRunConcurrently checks that two calls
+// with the same label (for example GetWallet for two different wallets) do
+// not block each other.
+func TestRerun_G1R11_IndependentRPCCallsRunConcurrently(t *testing.T) {
+	origTimeout := reservationRPCRequestTimeout
+	reservationRPCRequestTimeout = time.Second
+	defer func() { reservationRPCRequestTimeout = origTimeout }()
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := rpcCallWithTimeout(func() (int, error) {
+			close(firstStarted)
+			<-releaseFirst
+			return 1, nil
+		}, "GetWallet")
+		firstDone <- err
+	}()
+	<-firstStarted
+
+	value, err := rpcCallWithTimeout(func() (int, error) {
+		return 2, nil
+	}, "GetWallet")
+	if err != nil || value != 2 {
+		t.Fatalf("second call blocked by the first: value=%d err=%v", value, err)
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first call failed: %v", err)
 	}
 }
 
@@ -1845,5 +1891,20 @@ func TestRerun_G1R29_RevealLookupCentersOnChainHeadTime(t *testing.T) {
 	err = action.execute()
 	if err == nil || err.Error() != "invalid proposal expiry block" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The reveal is 10 minutes before the chain head, so a lookup centered
+	// on chain time finds it in the first window. A lookup centered on the
+	// host clock (here, years later) starts far from block 299990.
+	queries := chain.reveals.queries
+	if len(queries) == 0 {
+		t.Fatal("expected at least one reveal lookup query")
+	}
+	if first := queries[0]; first[0] > 299990 || first[1] < 299990 {
+		t.Errorf(
+			"first lookup window [%d, %d] does not contain the reveal block 299990",
+			first[0],
+			first[1],
+		)
 	}
 }

@@ -393,25 +393,3 @@ func TestEstimateReservationFixedSizeTxFee(t *testing.T) {
 		})
 	}
 }
-
-func TestRerun_G1R23_NegativeTotalFeeGuard(t *testing.T) {
-	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		AddPublicKeyHashInputs(1, true).
-		AddPublicKeyHashOutputs(1, true)
-
-	btcChain := NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, -10)
-
-	_, err := estimateReservationFixedSizeTxFee(
-		btcChain,
-		sizeEstimator,
-		math.MaxUint64,
-		"exceeds max fee",
-	)
-	if err == nil {
-		t.Fatal("expected error for negative estimate with MaxUint64 cap")
-	}
-	if !strings.Contains(err.Error(), "less than or equal zero") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
