@@ -226,7 +226,7 @@ func estimateCappedFee(
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
 	}
 
-	if totalFee < 0 || uint64(totalFee) > maxTotalFee {
+	if uint64(totalFee) > maxTotalFee {
 		return 0, feeTooHighErr
 	}
 
@@ -269,7 +269,7 @@ func estimateReservationFixedSizeTxFee(
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
 	}
 
-	if totalFee < 0 || uint64(totalFee) > txMaxFee {
+	if uint64(totalFee) > txMaxFee {
 		return 0, fmt.Errorf("%s", exceedsMaxErrMsg)
 	}
 
