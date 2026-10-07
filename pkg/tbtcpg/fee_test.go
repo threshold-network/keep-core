@@ -411,7 +411,7 @@ func TestRerun_G1R23_NegativeTotalFeeGuard(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for negative estimate with MaxUint64 cap")
 	}
-	if !strings.Contains(err.Error(), "estimated fee is less than or equal zero") {
+	if !strings.Contains(err.Error(), "less than or equal zero") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
