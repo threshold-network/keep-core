@@ -227,18 +227,23 @@ func warnIfProposedWalletTxFeeBelowBareFloor(
 	if txVsize <= 0 {
 		return
 	}
+	// big.Int product: an extreme operator floor must not wrap int64 and
+	// hide the warning.
+	bareFloorFee := new(big.Int).Mul(
+		big.NewInt(satPerVByteFloor),
+		big.NewInt(txVsize),
+	)
 	if proposedFee == nil {
 		logger.Warnf(
 			"%s proposal has no tx fee set; expected at least the "+
-				"operator's bare floor minimum [%d * %d vByte = %d sat]",
+				"operator's bare floor minimum [%d * %d vByte = %v sat]",
 			actionLabel,
 			satPerVByteFloor,
 			txVsize,
-			satPerVByteFloor*txVsize,
+			bareFloorFee,
 		)
 		return
 	}
-	bareFloorFee := big.NewInt(satPerVByteFloor * txVsize)
 	if proposedFee.Cmp(bareFloorFee) < 0 {
 		logger.Warnf(
 			"proposed %s tx fee [%v] is below the operator's bare floor "+
