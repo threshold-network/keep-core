@@ -3,6 +3,7 @@ package ethereum
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"time"
@@ -537,5 +538,14 @@ func decryptKey(config ethereum.Config) (*keystore.Key, error) {
 // caused the calls to run out of gas before reimbursement completed.
 func gasEstimateWithMargin(gasEstimate uint64) uint64 {
 	const marginPercent = 20
-	return gasEstimate + (gasEstimate*marginPercent+99)/100
+	// For estimates whose +20% product or sum would overflow uint64,
+	// saturate at math.MaxUint64 to avoid a wrapped low limit.
+	if gasEstimate > (math.MaxUint64-99)/marginPercent {
+		return math.MaxUint64
+	}
+	margin := (gasEstimate*marginPercent + 99) / 100
+	if gasEstimate > math.MaxUint64-margin {
+		return math.MaxUint64
+	}
+	return gasEstimate + margin
 }

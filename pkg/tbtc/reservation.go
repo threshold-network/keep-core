@@ -3,6 +3,7 @@ package tbtc
 import (
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,21 +29,40 @@ const (
 // time-sensitive on-chain reads.
 var reservationRPCRequestTimeout = 30 * time.Second
 
-// rpcCallWithTimeout wraps a chain method call with a timeout. If the call
-// does not return within reservationRPCRequestTimeout, it returns an error
-// describing the timeout. This prevents a hung RPC endpoint from freezing
-// every signing action for a wallet indefinitely; the dispatcher lock is
-// released when execute returns.
+var (
+	reservationRPCInFlightMutex sync.Mutex
+	reservationRPCInFlight      = make(map[string]struct{})
+)
+
+// rpcCallWithTimeout wraps a chain method call with a timeout and an in-flight
+// registry. If a call with the same key is already in flight (e.g. a prior
+// attempt timed out and is still running in the background), it returns an error
+// immediately rather than spawning a duplicate goroutine, bounding parked
+// goroutines to at most one per distinct query key.
 func rpcCallWithTimeout[T any](
 	call func() (T, error),
 	label string,
 ) (T, error) {
+	reservationRPCInFlightMutex.Lock()
+	if _, busy := reservationRPCInFlight[label]; busy {
+		reservationRPCInFlightMutex.Unlock()
+		var zero T
+		return zero, fmt.Errorf("%s: RPC call already in flight", label)
+	}
+	reservationRPCInFlight[label] = struct{}{}
+	reservationRPCInFlightMutex.Unlock()
+
 	type result struct {
 		val T
 		err error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
+		defer func() {
+			reservationRPCInFlightMutex.Lock()
+			delete(reservationRPCInFlight, label)
+			reservationRPCInFlightMutex.Unlock()
+		}()
 		val, err := call()
 		resultCh <- result{val, err}
 	}()
@@ -60,19 +80,29 @@ func rpcCallWithTimeout[T any](
 }
 
 // rpcCallWithTimeoutErr wraps a chain method call that returns only an error
-// with a timeout. If the call does not return within reservationRPCRequestTimeout,
-// it returns an error describing the timeout. This prevents a hung RPC endpoint
-// from freezing every signing action for a wallet indefinitely; the dispatcher
-// lock is released when execute returns.
+// with a timeout and in-flight deduplication.
 func rpcCallWithTimeoutErr(
 	call func() error,
 	label string,
 ) error {
+	reservationRPCInFlightMutex.Lock()
+	if _, busy := reservationRPCInFlight[label]; busy {
+		reservationRPCInFlightMutex.Unlock()
+		return fmt.Errorf("%s: RPC call already in flight", label)
+	}
+	reservationRPCInFlight[label] = struct{}{}
+	reservationRPCInFlightMutex.Unlock()
+
 	type result struct {
 		err error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
+		defer func() {
+			reservationRPCInFlightMutex.Lock()
+			delete(reservationRPCInFlight, label)
+			reservationRPCInFlightMutex.Unlock()
+		}()
 		resultCh <- result{call()}
 	}()
 	select {
@@ -616,6 +646,20 @@ func (raa *reservationAnchorAction) execute() error {
 		averageBlockTime = timedChain.AverageBlockTime()
 	}
 
+	// Center the reveal-lookup window on the chain head timestamp rather
+	// than the host clock, mirroring the re-anchor age gate.
+	headTimestamp, err := func() (time.Time, error) {
+		return rpcCallWithTimeout(
+			func() (time.Time, error) {
+				return raa.chain.GetLatestBlockTimestamp()
+			},
+			"GetLatestBlockTimestamp",
+		)
+	}()
+	if err != nil {
+		return fmt.Errorf("cannot get chain head timestamp for reveal lookup: [%v]", err)
+	}
+
 	// Bound the event scan: PastDepositRevealedEvents is the RPC call inside
 	// FindDepositRevealedEventByRevealTime.
 	var matchingEvent *DepositRevealedEvent
@@ -626,7 +670,7 @@ func (raa *reservationAnchorAction) execute() error {
 				raa.chain,
 				walletPublicKeyHash,
 				depositRequest.RevealedAt,
-				time.Now(),
+				headTimestamp,
 				raa.startBlock,
 				averageBlockTime,
 				func(event *DepositRevealedEvent) bool {

@@ -846,7 +846,7 @@ func (tc *TbtcChain) RequestReservationReanchor(
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.RequestReservationReanchor(
 		reservationKey,
@@ -899,7 +899,7 @@ func (tc *TbtcChain) SubmitReservationAcceptanceProof(
 	// which performs a non-trivial amount of storage I/O. Apply a 20%
 	// margin, mirroring the existing pattern in
 	// SubmitRedemptionProofWithReimbursement (tbtc_redemption.go).
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.SubmitReservationAcceptanceProof(
 		abiTxInfo,
@@ -950,7 +950,7 @@ func (tc *TbtcChain) SubmitReservationReanchorProof(
 	}
 
 	// See the margin rationale on SubmitReservationAcceptanceProof above.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.SubmitReservationReanchorProof(
 		abiTxInfo,
@@ -978,7 +978,7 @@ func (tc *TbtcChain) NotifyReservationActionTimeout(
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.NotifyReservationActionTimeout(
 		reservationKey,
@@ -1003,7 +1003,7 @@ func (tc *TbtcChain) NotifyStaleReservedDeposit(
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.NotifyStaleReservedDeposit(
 		depositKey,
@@ -1028,7 +1028,7 @@ func (tc *TbtcChain) NotifyReservationStranded(
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.NotifyReservationStranded(
 		reservationKey,
@@ -1167,7 +1167,7 @@ func (tc *TbtcChain) NotifyReservationAcceptanceTimedOut(
 	}
 
 	// Here we add a 20% margin to overcome the gas problems.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.reservationRouter.NotifyReservationAcceptanceTimedOut(
 		reservationKey,
@@ -1209,7 +1209,7 @@ func (tc *TbtcChain) NotifyMovingFundsBelowDust(
 
 	// Here we add a 20% margin to overcome the gas problems, mirroring the
 	// other reservation notify calls in this file.
-	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
+	gasEstimateWithMargin := gasEstimateWithMargin(gasEstimate)
 
 	_, err = tc.bridge.NotifyMovingFundsBelowDust(
 		walletPublicKeyHash,
