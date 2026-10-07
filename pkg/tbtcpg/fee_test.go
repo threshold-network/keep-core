@@ -362,4 +362,3 @@ func TestEstimateReservationFixedSizeTxFee(t *testing.T) {
 		})
 	}
 }
-
