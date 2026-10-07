@@ -1,6 +1,9 @@
 package ethereum
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestGasEstimateWithMargin(t *testing.T) {
 	tests := map[string]struct {
@@ -30,5 +33,11 @@ func TestGasEstimateWithMargin(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRerun_G5R58_GasEstimateWithMarginSaturates(t *testing.T) {
+	if got := gasEstimateWithMargin(math.MaxUint64); got != math.MaxUint64 {
+		t.Fatalf("expected MaxUint64 on overflow, got %d", got)
 	}
 }
