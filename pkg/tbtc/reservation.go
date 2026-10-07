@@ -3,7 +3,6 @@ package tbtc
 import (
 	"fmt"
 	"math/big"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -29,85 +28,60 @@ const (
 // time-sensitive on-chain reads.
 var reservationRPCRequestTimeout = 30 * time.Second
 
-var (
-	reservationRPCInFlightMutex sync.Mutex
-	reservationRPCInFlight      = make(map[string]struct{})
-)
+// reservationRPCSlots bounds the reservation RPC calls that run at the same
+// time, including calls whose caller already gave up on a timeout. The chain
+// and Electrum methods take no context, so a timed-out call keeps its
+// goroutine until the backend answers. The bound keeps a hung backend from
+// piling up goroutines without limit, and lets independent calls (other
+// wallets, other queries) run concurrently. A package var so tests can
+// shrink it.
+var reservationRPCSlots = make(chan struct{}, 64)
 
-// rpcCallWithTimeout wraps a chain method call with a timeout and an in-flight
-// registry. If a call with the same key is already in flight (e.g. a prior
-// attempt timed out and is still running in the background), it returns an error
-// immediately rather than spawning a duplicate goroutine, bounding parked
-// goroutines to at most one per distinct query key.
+// rpcCallWithTimeout runs call with the reservationRPCRequestTimeout
+// deadline. It fails at once when every slot in reservationRPCSlots is
+// held, which happens only when the backend is hung broadly.
 func rpcCallWithTimeout[T any](
 	call func() (T, error),
 	label string,
 ) (T, error) {
-	reservationRPCInFlightMutex.Lock()
-	if _, busy := reservationRPCInFlight[label]; busy {
-		reservationRPCInFlightMutex.Unlock()
+	var val T
+	err := rpcCallWithTimeoutErr(func() error {
+		var callErr error
+		val, callErr = call()
+		return callErr
+	}, label)
+	if err != nil {
 		var zero T
-		return zero, fmt.Errorf("%s: RPC call already in flight", label)
+		return zero, err
 	}
-	reservationRPCInFlight[label] = struct{}{}
-	reservationRPCInFlightMutex.Unlock()
-
-	type result struct {
-		val T
-		err error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		defer func() {
-			reservationRPCInFlightMutex.Lock()
-			delete(reservationRPCInFlight, label)
-			reservationRPCInFlightMutex.Unlock()
-		}()
-		val, err := call()
-		resultCh <- result{val, err}
-	}()
-	select {
-	case r := <-resultCh:
-		return r.val, r.err
-	case <-time.After(reservationRPCRequestTimeout):
-		var zero T
-		return zero, fmt.Errorf(
-			"%s: RPC call timed out after %v",
-			label,
-			reservationRPCRequestTimeout,
-		)
-	}
+	return val, nil
 }
 
-// rpcCallWithTimeoutErr wraps a chain method call that returns only an error
-// with a timeout and in-flight deduplication.
+// rpcCallWithTimeoutErr is rpcCallWithTimeout for calls that return only an
+// error.
 func rpcCallWithTimeoutErr(
 	call func() error,
 	label string,
 ) error {
-	reservationRPCInFlightMutex.Lock()
-	if _, busy := reservationRPCInFlight[label]; busy {
-		reservationRPCInFlightMutex.Unlock()
-		return fmt.Errorf("%s: RPC call already in flight", label)
+	select {
+	case reservationRPCSlots <- struct{}{}:
+	default:
+		return fmt.Errorf(
+			"%s: too many reservation RPC calls in flight [%d]",
+			label,
+			cap(reservationRPCSlots),
+		)
 	}
-	reservationRPCInFlight[label] = struct{}{}
-	reservationRPCInFlightMutex.Unlock()
 
-	type result struct {
-		err error
-	}
-	resultCh := make(chan result, 1)
+	slots := reservationRPCSlots
+	resultCh := make(chan error, 1)
 	go func() {
-		defer func() {
-			reservationRPCInFlightMutex.Lock()
-			delete(reservationRPCInFlight, label)
-			reservationRPCInFlightMutex.Unlock()
-		}()
-		resultCh <- result{call()}
+		defer func() { <-slots }()
+		resultCh <- call()
 	}()
 	select {
-	case r := <-resultCh:
-		return r.err
+	case err := <-resultCh:
+		return err
 	case <-time.After(reservationRPCRequestTimeout):
 		return fmt.Errorf(
 			"%s: RPC call timed out after %v",
