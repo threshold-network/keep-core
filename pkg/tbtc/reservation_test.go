@@ -1742,3 +1742,108 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 		}
 	})
 }
+
+func TestRerun_G1R11_RPCCallInFlightDeduplication(t *testing.T) {
+	origTimeout := reservationRPCRequestTimeout
+	reservationRPCRequestTimeout = 50 * time.Millisecond
+	defer func() { reservationRPCRequestTimeout = origTimeout }()
+
+	blocker := make(chan struct{})
+	defer close(blocker)
+
+	key := "testInFlightDeduplicationKey"
+
+	go func() {
+		_, _ = rpcCallWithTimeout(func() (int, error) {
+			<-blocker
+			return 42, nil
+		}, key)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	_, err := rpcCallWithTimeout(func() (int, error) {
+		return 100, nil
+	}, key)
+
+	if err == nil || !strings.Contains(err.Error(), "RPC call already in flight") {
+		t.Fatalf("expected already in flight error, got: %v", err)
+	}
+}
+
+func TestRerun_G1R29_RevealLookupCentersOnChainHeadTime(t *testing.T) {
+	btcChain := newLocalBitcoinChain()
+	custodyWallet := reservationTestWallet(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)
+
+	depositForScript := &Deposit{
+		Depositor:           "0x0000000000000000000000000000000000000001",
+		WalletPublicKeyHash: walletPublicKeyHash,
+	}
+	depositScript, err := depositForScript.Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptHash := sha256.Sum256(depositScript)
+	fundingOutputScript, err := bitcoin.PayToWitnessScriptHash(scriptHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTx := &bitcoin.Transaction{
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           100000,
+			PublicKeyScript: fundingOutputScript,
+		}},
+	}
+	if err := btcChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+	fundingTxHash := fundingTx.Hash()
+
+	chainHeadTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	revealedAt := chainHeadTime.Add(-10 * time.Minute)
+
+	chain := newRangeRevealChain(&DepositRevealedEvent{
+		BlockNumber:         299990,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		Amount:              100000,
+		Depositor:           "0x0000000000000000000000000000000000000001",
+	})
+	chain.SetLatestBlockTimestamp(chainHeadTime)
+	chain.setDepositRequest(fundingTxHash, 0, &DepositChainRequest{
+		Amount:     100000,
+		RevealedAt: revealedAt,
+	})
+	chain.setReservationAction(&ReservationAction{
+		ActionType:                ReservationActionTypeAcceptance,
+		State:                     ReservationActionStatePending,
+		TargetWalletPublicKeyHash: walletPublicKeyHash,
+		TxMaxFee:                  2000,
+	})
+
+	action := newReservationAnchorAction(
+		zap.NewNop().Sugar(),
+		chain,
+		btcChain,
+		custodyWallet,
+		nil,
+		&ReservationAnchorProposal{
+			DepositFundingTxHash:      fundingTxHash,
+			DepositFundingOutputIndex: 0,
+			RequestNonce:              1,
+			AnchorTxFee:               big.NewInt(1500),
+		},
+		300000,
+		10,
+		nil,
+		nil,
+	)
+
+	err = action.execute()
+	if err == nil || err.Error() != "invalid proposal expiry block" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
