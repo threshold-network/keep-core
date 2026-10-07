@@ -1892,4 +1892,19 @@ func TestRerun_G1R29_RevealLookupCentersOnChainHeadTime(t *testing.T) {
 	if err == nil || err.Error() != "invalid proposal expiry block" {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// The reveal is 10 minutes before the chain head, so a lookup centered
+	// on chain time finds it in the first window. A lookup centered on the
+	// host clock (here, years later) starts far from block 299990.
+	queries := chain.reveals.queries
+	if len(queries) == 0 {
+		t.Fatal("expected at least one reveal lookup query")
+	}
+	if first := queries[0]; first[0] > 299990 || first[1] < 299990 {
+		t.Errorf(
+			"first lookup window [%d, %d] does not contain the reveal block 299990",
+			first[0],
+			first[1],
+		)
+	}
 }
