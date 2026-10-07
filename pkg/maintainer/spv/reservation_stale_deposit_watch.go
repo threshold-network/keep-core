@@ -254,6 +254,16 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	refundDeadline uint32,
 	now uint32,
 ) (StaleDepositResolution, error) {
+	headTime := reservationChainHeadTime(rsdw.spvChain)
+	return rsdw.checkStaleReservedDeposit(depositKey, refundDeadline, now, headTime)
+}
+
+func (rsdw *ReservationStaleDepositWatcher) checkStaleReservedDeposit(
+	depositKey *big.Int,
+	refundDeadline uint32,
+	now uint32,
+	headTime time.Time,
+) (StaleDepositResolution, error) {
 	if depositKey == nil {
 		return StaleDepositResolutionUnknown, fmt.Errorf("deposit key must not be nil")
 	}
@@ -269,7 +279,6 @@ func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	// the notifiedAt stamp. When the head time cannot be read the deadline
 	// decision is skipped for this call - the deposit is kept tracked
 	// rather than notified or evicted on a guess.
-	headTime := reservationChainHeadTime(rsdw.spvChain)
 	if headTime.IsZero() {
 		return StaleDepositResolutionKeep, nil
 	}
@@ -589,15 +598,17 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 	// whole tracked set every tick (G2-F3). A deposit this watcher
 	// notified recently is not re-read before the renotify interval
 	// elapses: the notification needs time to land.
+	headTime := reservationChainHeadTime(rsdw.spvChain)
+	headNow := uint32(max(headTime.Unix(), 0))
 	checksLeft := reservationStaleDepositMaxChecksPerTick
-	rsdw.checkCursor = ""
+	exhaustedBudget := false
 	for _, key := range rsdw.nextCheckOrder() {
 		tracked, ok := rsdw.pending[key]
 		if !ok {
 			continue
 		}
 
-		if now >= tracked.refundDeadline {
+		if !headTime.IsZero() && headNow >= tracked.refundDeadline {
 			if at, notified := rsdw.notifiedAt[key]; notified &&
 				now >= at &&
 				now-at < uint32(actionTimeoutRenotifyInterval.Seconds()) {
@@ -605,16 +616,18 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 			}
 			if checksLeft == 0 {
 				rsdw.checkCursor = key
+				exhaustedBudget = true
 				break
 			}
 			checksLeft--
 		}
 
 		depositKey := tracked.depositKey
-		resolution, err := rsdw.CheckStaleReservedDeposit(
+		resolution, err := rsdw.checkStaleReservedDeposit(
 			depositKey,
 			tracked.refundDeadline,
 			now,
+			headTime,
 		)
 		if err != nil {
 			reservationWiringLogger.Errorf(
@@ -637,7 +650,9 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 			// clears on-chain.
 		}
 	}
-
+	if !exhaustedBudget {
+		rsdw.checkCursor = ""
+	}
 	return len(rsdw.pending), scanOK
 }
 
