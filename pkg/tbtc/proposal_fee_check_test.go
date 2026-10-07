@@ -426,6 +426,31 @@ func TestWarnIfProposedWalletTxFeeBelowBareFloor(t *testing.T) {
 	}
 }
 
+// TestWarnIfProposedWalletTxFeeBelowBareFloor_LargeFloorDoesNotWrap guards
+// the bare-floor product: an operator floor whose product with the vsize
+// exceeds int64 must still warn on a small fee. With int64 multiplication
+// the product wraps to a negative value and every fee looks above it.
+func TestWarnIfProposedWalletTxFeeBelowBareFloor_LargeFloorDoesNotWrap(t *testing.T) {
+	const vsize = 200
+	floor := int64(math.MaxInt64/vsize) + 1
+
+	logger := &capturingFeeCheckLogger{}
+	warnIfProposedWalletTxFeeBelowBareFloor(
+		logger,
+		floor,
+		vsize,
+		big.NewInt(1000),
+		"test",
+	)
+	if len(logger.warnings) == 0 {
+		t.Errorf(
+			"expected a warning for fee 1000 below floor %d * %d vByte",
+			floor,
+			vsize,
+		)
+	}
+}
+
 // TestRejectIfProposedWalletTxFeeBelowProtocolMin_AnchorReanchorSizeBoundaries
 // applies the per-path vsize values computed from the btcd weight model to
 // lock in the reject thresholds for the reservation anchor and re-anchor paths.

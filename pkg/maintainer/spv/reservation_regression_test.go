@@ -737,3 +737,204 @@ func TestG2F5_LateReanchorProofSurvivesNewerWalletTransactions(t *testing.T) {
 		)
 	}
 }
+
+func TestRerun_G2_R1_StaleDepositCursorPreservedAcrossTicks(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &staleReadCountingChain{Chain: inner}
+
+	const currentBlock = uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	inner.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	const totalDeposits = 75
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	for i := range totalDeposits {
+		fundingTxHash := bitcoin.Hash{byte(i + 1)}
+		fundingOutputIndex := uint32(0)
+		depositKey := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+		if err := inner.addPastDepositRevealedEvent(
+			&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+			&tbtc.DepositRevealedEvent{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: fundingOutputIndex,
+				Vault:              &vault,
+				RefundLocktime:     locktimeForDeadline(100),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		wallet := walletPKHAt(byte(0x80 + i))
+		inner.setReservedDeposit(depositKey, wallet, true)
+		inner.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+		inner.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+		inner.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStatePending,
+			TimeoutAt: 10_000,
+		})
+	}
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	inner.setLatestBlockTimestamp(time.Unix(5_000, 0))
+
+	trackedCount, ok := watcher.pollTick(5_000)
+	if !ok {
+		t.Fatal("pollTick failed")
+	}
+	if trackedCount != totalDeposits {
+		t.Fatalf("expected %d tracked deposits, got %d", totalDeposits, trackedCount)
+	}
+	if spvChain.reservedDepositWalletCalls != 50 {
+		t.Fatalf("expected 50 wallet reads on tick 1, got %d", spvChain.reservedDepositWalletCalls)
+	}
+	if watcher.checkCursor == "" {
+		t.Fatalf("expected non-empty checkCursor after tick 1 hitting budget limit")
+	}
+
+	spvChain.reservedDepositWalletCalls = 0
+	cursorBeforeTick2 := watcher.checkCursor
+	trackedCount, ok = watcher.pollTick(5_000)
+	if !ok {
+		t.Fatal("pollTick failed")
+	}
+	if spvChain.reservedDepositWalletCalls != 50 {
+		t.Fatalf("expected 50 wallet reads on tick 2, got %d", spvChain.reservedDepositWalletCalls)
+	}
+	if watcher.checkCursor == cursorBeforeTick2 {
+		t.Fatalf("checkCursor did not advance across ticks; still %s", watcher.checkCursor)
+	}
+}
+
+type g2HeadTimeCountingChain struct {
+	Chain
+	getLatestBlockTimestampCalls int
+}
+
+func (c *g2HeadTimeCountingChain) GetLatestBlockTimestamp() (time.Time, error) {
+	c.getLatestBlockTimestampCalls++
+	return c.Chain.GetLatestBlockTimestamp()
+}
+
+func TestRerun_G2_R2_StaleDepositWatcherSingleHeadTimePerTick(t *testing.T) {
+	inner := newLocalChain()
+	headCountingChain := &g2HeadTimeCountingChain{Chain: inner}
+
+	const currentBlock = uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	inner.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	const depositCount = 30
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	for i := range depositCount {
+		fundingTxHash := bitcoin.Hash{byte(i + 1)}
+		fundingOutputIndex := uint32(0)
+		depositKey := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+		if err := inner.addPastDepositRevealedEvent(
+			&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+			&tbtc.DepositRevealedEvent{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: fundingOutputIndex,
+				Vault:              &vault,
+				RefundLocktime:     locktimeForDeadline(100),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		wallet := walletPKHAt(byte(0x80 + i))
+		inner.setReservedDeposit(depositKey, wallet, true)
+		inner.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+		inner.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+		inner.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStatePending,
+			TimeoutAt: 10_000,
+		})
+	}
+
+	watcher := NewReservationStaleDepositWatcher(headCountingChain, common.Address{}, 0)
+	inner.setLatestBlockTimestamp(time.Unix(5_000, 0))
+
+	headCountingChain.getLatestBlockTimestampCalls = 0
+	_, ok := watcher.pollTick(5_000)
+	if !ok {
+		t.Fatal("pollTick failed")
+	}
+
+	if headCountingChain.getLatestBlockTimestampCalls > 1 {
+		t.Fatalf(
+			"expected at most 1 GetLatestBlockTimestamp call per pollTick, got %d",
+			headCountingChain.getLatestBlockTimestampCalls,
+		)
+	}
+}
+
+func TestRerun_G2_R6_StaleDepositPollTickBudgetUsesChainHeadTime(t *testing.T) {
+	inner := newLocalChain()
+	spvChain := &staleReadCountingChain{Chain: inner}
+
+	const currentBlock = uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	inner.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	inner.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	const totalDeposits = 60
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	for i := range totalDeposits {
+		fundingTxHash := bitcoin.Hash{byte(i + 1)}
+		fundingOutputIndex := uint32(0)
+		depositKey := inner.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+		if err := inner.addPastDepositRevealedEvent(
+			&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+			&tbtc.DepositRevealedEvent{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: fundingOutputIndex,
+				Vault:              &vault,
+				RefundLocktime:     locktimeForDeadline(500),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		wallet := walletPKHAt(byte(0x80 + i))
+		inner.setReservedDeposit(depositKey, wallet, true)
+		inner.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+		inner.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+		inner.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStatePending,
+			TimeoutAt: 10_000,
+		})
+	}
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	inner.setLatestBlockTimestamp(time.Unix(600, 0))
+
+	_, ok := watcher.pollTick(400)
+	if !ok {
+		t.Fatal("pollTick failed")
+	}
+
+	if spvChain.reservedDepositWalletCalls != 50 {
+		t.Fatalf(
+			"expected budget to cap checks at 50 based on chain head time, got %d reads",
+			spvChain.reservedDepositWalletCalls,
+		)
+	}
+}
