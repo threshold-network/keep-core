@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"time"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"sync"
+	"time"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 
@@ -36,6 +36,25 @@ var reservationWiringLogger = log.Logger("keep-maintainer-spv-reservations")
 // Changing one does not require changing the other.
 const DefaultReservationStaleDepositPollInterval = 1 * time.Minute
 
+// reservationWiringMutex synchronizes access to test-settable duration variables.
+var reservationWiringMutex sync.RWMutex
+
+// reservationStaleDepositPollInterval is the poll interval
+// WireReservationWatchers passes to the stale-deposit watcher's Run loop.
+var reservationStaleDepositPollInterval = DefaultReservationStaleDepositPollInterval
+
+func getReservationStaleDepositPollInterval() time.Duration {
+	reservationWiringMutex.RLock()
+	defer reservationWiringMutex.RUnlock()
+	return reservationStaleDepositPollInterval
+}
+
+func setReservationStaleDepositPollInterval(d time.Duration) {
+	reservationWiringMutex.Lock()
+	defer reservationWiringMutex.Unlock()
+	reservationStaleDepositPollInterval = d
+}
+
 // DefaultReservationActionTimeoutPollInterval is the default, fixed poll
 // interval for the action-timeout watcher's Run loop - the background
 // loop WireReservationWatchers starts and the only way the watcher is
@@ -57,6 +76,40 @@ const DefaultReservationActionTimeoutPollInterval = 1 * time.Minute
 // without waiting on the real one-minute interval.
 var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollInterval
 
+func getReservationActionTimeoutPollInterval() time.Duration {
+	reservationWiringMutex.RLock()
+	defer reservationWiringMutex.RUnlock()
+	return reservationActionTimeoutPollInterval
+}
+
+func setReservationActionTimeoutPollInterval(d time.Duration) {
+	reservationWiringMutex.Lock()
+	defer reservationWiringMutex.Unlock()
+	reservationActionTimeoutPollInterval = d
+}
+
+// DefaultReservationWatcherRestartBackoff is the default backoff delay before
+// restarting a crashed watcher poll loop.
+const DefaultReservationWatcherRestartBackoff = 10 * time.Second
+
+// reservationWatcherRestartBackoff is the backoff delay before restarting a
+// crashed watcher poll loop. Defaults to
+// DefaultReservationWatcherRestartBackoff; declared as a var so tests in this
+// package can shrink it.
+var reservationWatcherRestartBackoff = DefaultReservationWatcherRestartBackoff
+
+func getReservationWatcherRestartBackoff() time.Duration {
+	reservationWiringMutex.RLock()
+	defer reservationWiringMutex.RUnlock()
+	return reservationWatcherRestartBackoff
+}
+
+func setReservationWatcherRestartBackoff(d time.Duration) {
+	reservationWiringMutex.Lock()
+	defer reservationWiringMutex.Unlock()
+	reservationWatcherRestartBackoff = d
+}
+
 // reservationWatcherPanicRecovered runs at the end of a watcher
 // goroutine's recovered-panic path, right after
 // recordReservationWatcherDeath. It does nothing in production; declared
@@ -64,8 +117,19 @@ var reservationActionTimeoutPollInterval = DefaultReservationActionTimeoutPollIn
 // finished.
 var reservationWatcherPanicRecovered = func() {}
 
+func getReservationWatcherPanicRecovered() func() {
+	reservationWiringMutex.RLock()
+	defer reservationWiringMutex.RUnlock()
+	return reservationWatcherPanicRecovered
+}
+
+func setReservationWatcherPanicRecovered(f func()) {
+	reservationWiringMutex.Lock()
+	defer reservationWiringMutex.Unlock()
+	reservationWatcherPanicRecovered = f
+}
+
 // reservationDefaultLookBackBlocks bounds the stranding startup scan of
-// wallet registrations (see scanReservationStrandingStartupRegistrations):
 // 30 days at 12s/block. The reservation event scans are not bounded by it;
 // they start at the reservation activation block (see
 // reservationScanRange).
@@ -388,14 +452,20 @@ func WireReservationWatchers(
 	// pre-mining state.
 	actionTimeoutWatcher := NewReservationActionTimeoutWatcher(
 		spvChain,
-		reservationActionTimeoutPollInterval,
+		getReservationActionTimeoutPollInterval(),
 		operatorAddress,
 		strandingWatcher,
 		activationBlock,
 		metricsRecorder,
 	)
 
-	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)
+	subscription := subscribeReservationWalletClosed(
+		ctx,
+		walletClosedChain,
+		spvChain,
+		strandingWatcher,
+		actionTimeoutWatcher,
+	)
 	go func() {
 		<-ctx.Done()
 		subscription.Unsubscribe()
@@ -441,48 +511,60 @@ func WireReservationWatchers(
 	go func() {
 		result := scanResult{name: "stale-deposit"}
 		resultSent := false
-		defer func() {
-			if r := recover(); r != nil {
+
+		runOnce := func() (shouldRestart bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					reservationWiringLogger.Errorf(
+						"reservation stale-deposit watcher crashed (recovered panic: [%v]); "+
+							"restarting with backoff",
+						r,
+					)
+					recordReservationWatcherDeath(metricsRecorder)
+					if fn := getReservationWatcherPanicRecovered(); fn != nil {
+						fn()
+					}
+					shouldRestart = true
+				}
+				if !resultSent {
+					resultCh <- result
+					resultSent = true
+				}
+			}()
+
+			if !resultSent {
+				initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
+				result = scanResult{
+					name:   "stale-deposit",
+					count:  initialCount,
+					scanOK: initialOK,
+				}
+				resultCh <- result
+				resultSent = true
+			}
+
+			if err := staleDepositWatcher.Run(ctx, getReservationStaleDepositPollInterval()); err != nil {
 				reservationWiringLogger.Errorf(
-					"reservation stale-deposit watcher crashed and is "+
-						"no longer running (recovered panic: [%v]); "+
-						"stale reserved deposit notifications are silently "+
-						"unmonitored until process restart",
-					r,
+					"reservation stale-deposit watcher is not running: [%v]; "+
+						"restarting with backoff",
+					err,
 				)
 				recordReservationWatcherDeath(metricsRecorder)
-				reservationWatcherPanicRecovered()
+				return true
 			}
-			if !resultSent {
-				resultCh <- result
-			}
-		}()
-
-		initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
-		result = scanResult{
-			name:   "stale-deposit",
-			count:  initialCount,
-			scanOK: initialOK,
+			return false
 		}
-		resultCh <- result
-		resultSent = true
 
-		if err := staleDepositWatcher.Run(ctx, DefaultReservationStaleDepositPollInterval); err != nil {
-			// Run only returns non-nil on the interval misconfiguration
-			// guard at loop start (per-tick errors are logged and the loop
-			// continues), so reaching this branch means the watcher is
-			// not running at all. Log at distinct severity rather than
-			// Fatalf-ing: WireReservationWatchers is called from two
-			// callers (cmd/start.go's client process AND spv.go's maintainer
-			// process), and the caller decides process-level fatality, not
-			// this shared helper.
-			reservationWiringLogger.Errorf(
-				"reservation stale-deposit watcher is not running: [%v]; "+
-					"stale reserved deposit notifications are silently "+
-					"unmonitored until process restart",
-				err,
-			)
-			recordReservationWatcherDeath(metricsRecorder)
+		for {
+			shouldRestart := runOnce()
+			if !shouldRestart || ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(getReservationWatcherRestartBackoff()):
+			}
 		}
 	}()
 
@@ -492,47 +574,66 @@ func WireReservationWatchers(
 	go func() {
 		result := scanResult{name: "action-timeout"}
 		resultSent := false
-		defer func() {
-			if r := recover(); r != nil {
+
+		runOnce := func() (shouldRestart bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					reservationWiringLogger.Errorf(
+						"reservation action-timeout watcher crashed (recovered panic: [%v]); "+
+							"restarting with backoff",
+						r,
+					)
+					recordReservationWatcherDeath(metricsRecorder)
+					if fn := getReservationWatcherPanicRecovered(); fn != nil {
+						fn()
+					}
+					shouldRestart = true
+				}
+				if !resultSent {
+					resultCh <- result
+					resultSent = true
+				}
+			}()
+
+			if !resultSent {
+				initialErr := actionTimeoutWatcher.pollPendingActions()
+				if initialErr != nil {
+					reservationWiringLogger.Errorf(
+						"action-timeout watcher initial poll failed: [%v]",
+						initialErr,
+					)
+				}
+				result = scanResult{
+					name:   "action-timeout",
+					count:  len(actionTimeoutWatcher.pendingActions),
+					scanOK: initialErr == nil,
+				}
+				resultCh <- result
+				resultSent = true
+			}
+
+			if err := actionTimeoutWatcher.Run(ctx); err != nil {
 				reservationWiringLogger.Errorf(
-					"reservation action-timeout watcher crashed and is "+
-						"no longer running (recovered panic: [%v]); "+
-						"reservation action timeouts are silently "+
-						"unmonitored until process restart",
-					r,
+					"reservation action-timeout watcher is not running: [%v]; "+
+						"restarting with backoff",
+					err,
 				)
 				recordReservationWatcherDeath(metricsRecorder)
-				reservationWatcherPanicRecovered()
+				return true
 			}
-			if !resultSent {
-				resultCh <- result
-			}
-		}()
-		initialErr := actionTimeoutWatcher.pollPendingActions()
-		if initialErr != nil {
-			reservationWiringLogger.Errorf(
-				"action-timeout watcher initial poll failed: [%v]",
-				initialErr,
-			)
+			return false
 		}
-		result = scanResult{
-			name:   "action-timeout",
-			count:  len(actionTimeoutWatcher.pendingActions),
-			scanOK: initialErr == nil,
-		}
-		resultCh <- result
-		resultSent = true
 
-		if err := actionTimeoutWatcher.Run(ctx); err != nil {
-			// See the identical rationale on the stale-deposit watcher
-			// launch above.
-			reservationWiringLogger.Errorf(
-				"reservation action-timeout watcher is not running: [%v]; "+
-					"reservation action timeouts are silently unmonitored "+
-					"until process restart",
-				err,
-			)
-			recordReservationWatcherDeath(metricsRecorder)
+		for {
+			shouldRestart := runOnce()
+			if !shouldRestart || ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(getReservationWatcherRestartBackoff()):
+			}
 		}
 	}()
 
@@ -726,12 +827,15 @@ func retryReservationStrandingStartupScan(
 // the chain's wallet close / termination events. Each event dispatches a
 // worker goroutine that resolves the closed wallet's ECDSA wallet ID (the
 // only identifier WalletClosedEvent carries) to its public key hash and
-// runs the watcher's stranding check for that wallet.
+// runs the watcher's stranding check for that wallet. If the check fails or
+// leaves work for a later pass, the wallet is requeued on the action-timeout
+// watcher's stranding recheck queue for periodic retry.
 func subscribeReservationWalletClosed(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
 	spvChain Chain,
 	watcher *reservationStrandingWatcher,
+	actionTimeoutWatcher *ReservationActionTimeoutWatcher,
 ) subscription.EventSubscription {
 	return walletClosedChain.OnWalletClosed(func(event *tbtc.WalletClosedEvent) {
 		go func() {
@@ -740,9 +844,17 @@ func subscribeReservationWalletClosed(
 				return
 			default:
 			}
-			walletPublicKeyHash, err := resolveWalletPublicKeyHash(
-				spvChain,
-				event.WalletID,
+			var walletPublicKeyHash [20]byte
+			err := watcher.withStrandingRetry(
+				fmt.Sprintf("resolve public key hash for closed wallet ID [0x%x]", event.WalletID),
+				func() error {
+					var resolveErr error
+					walletPublicKeyHash, resolveErr = resolveWalletPublicKeyHash(
+						spvChain,
+						event.WalletID,
+					)
+					return resolveErr
+				},
 			)
 			if err != nil {
 				reservationWiringLogger.Errorf(
@@ -754,9 +866,10 @@ func subscribeReservationWalletClosed(
 				return
 			}
 
-			if _, err := watcher.checkReservationStrandingForWallet(
+			recheck, err := watcher.checkReservationStrandingForWallet(
 				walletPublicKeyHash,
-			); err != nil {
+			)
+			if err != nil {
 				reservationWiringLogger.Errorf(
 					"failed to check reservation stranding for closed "+
 						"wallet [0x%x] (ID [0x%x]): [%v]",
@@ -764,6 +877,9 @@ func subscribeReservationWalletClosed(
 					event.WalletID,
 					err,
 				)
+			}
+			if (err != nil || recheck) && actionTimeoutWatcher != nil {
+				actionTimeoutWatcher.ScheduleStrandingRecheck(walletPublicKeyHash)
 			}
 		}()
 	})

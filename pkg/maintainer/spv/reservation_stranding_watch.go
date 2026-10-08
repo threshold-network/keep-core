@@ -3,6 +3,7 @@ package spv
 import (
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -16,11 +17,31 @@ import (
 // retries in reservation_wiring.go.
 const reservationStrandingRetryAttempts = 3
 
-// reservationStrandingRetryDelay is the default fixed pause between retry
+// DefaultReservationStrandingRetryDelay is the default fixed pause between retry
 // attempts, giving a transient RPC failure time to clear before the next
-// attempt. Tests override the watcher's retryDelay field directly to keep
-// the suite fast.
-const reservationStrandingRetryDelay = 2 * time.Second
+// attempt.
+const DefaultReservationStrandingRetryDelay = 2 * time.Second
+
+// reservationStrandingMutex synchronizes access to reservationStrandingRetryDelay.
+var reservationStrandingMutex sync.RWMutex
+
+// reservationStrandingRetryDelay is the pause between retry attempts
+// newReservationStrandingWatcher sets. Defaults to
+// DefaultReservationStrandingRetryDelay; declared as a var so tests in this
+// package can shrink it.
+var reservationStrandingRetryDelay = DefaultReservationStrandingRetryDelay
+
+func getReservationStrandingRetryDelay() time.Duration {
+	reservationStrandingMutex.RLock()
+	defer reservationStrandingMutex.RUnlock()
+	return reservationStrandingRetryDelay
+}
+
+func setReservationStrandingRetryDelay(d time.Duration) {
+	reservationStrandingMutex.Lock()
+	defer reservationStrandingMutex.Unlock()
+	reservationStrandingRetryDelay = d
+}
 
 // reservationStrandingWatcher observes wallet close/termination events and
 // notifies the Bridge of any reservation whose anchor is now stranded.
@@ -46,7 +67,7 @@ type reservationStrandingWatcher struct {
 func newReservationStrandingWatcher(spvChain Chain) *reservationStrandingWatcher {
 	return &reservationStrandingWatcher{
 		spvChain:   spvChain,
-		retryDelay: reservationStrandingRetryDelay,
+		retryDelay: getReservationStrandingRetryDelay(),
 	}
 }
 

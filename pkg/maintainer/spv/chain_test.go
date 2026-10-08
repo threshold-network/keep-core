@@ -1153,7 +1153,8 @@ func (lc *localChain) GetReservationAction(
 	if !ok {
 		return &tbtc.ReservationAction{}, nil
 	}
-	return action, nil
+	actionCopy := *action
+	return &actionCopy, nil
 }
 
 // setReservationAction installs a reservation action for GetReservationAction
@@ -1492,6 +1493,13 @@ func (lc *localChain) setPastNewWalletRegisteredEventsErr(err error) {
 	defer lc.mutex.Unlock()
 
 	lc.pastNewWalletRegisteredEventsErr = err
+}
+
+func (lc *localChain) setWalletReservationsErr(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.walletReservationsErr = err
 }
 
 // BuildDepositKey is a test-double implementation independent of the

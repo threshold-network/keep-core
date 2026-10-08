@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -701,9 +702,9 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 // stranded. reservationActionTimeoutPollInterval is temporarily
 // shrunk so the test does not wait on the real one-minute default.
 func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *testing.T) {
-	originalInterval := reservationActionTimeoutPollInterval
-	reservationActionTimeoutPollInterval = 50 * time.Millisecond
-	defer func() { reservationActionTimeoutPollInterval = originalInterval }()
+	originalInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalInterval) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1147,9 +1148,9 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 // replaces it.
 func awaitReservationWatcherPanicRecoveries(t *testing.T, count int) func() {
 	recovered := make(chan struct{}, count)
-	previous := reservationWatcherPanicRecovered
-	reservationWatcherPanicRecovered = func() { recovered <- struct{}{} }
-	t.Cleanup(func() { reservationWatcherPanicRecovered = previous })
+	previous := getReservationWatcherPanicRecovered()
+	setReservationWatcherPanicRecovered(func() { recovered <- struct{}{} })
+	t.Cleanup(func() { setReservationWatcherPanicRecovered(previous) })
 
 	return func() {
 		t.Helper()
@@ -1421,5 +1422,285 @@ func TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet(t *tes
 				t.Fatalf("expected no stranding notification, got %d", len(calls))
 			}
 		})
+	}
+}
+
+// TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck
+// verifies that when the live OnWalletClosed event handler encounters a
+// transient failure during its stranding check (e.g. an RPC error reading the
+// closed wallet's reservations), the closed wallet is requeued into the
+// stranding recheck queue and retried by the action-timeout watcher's poll
+// tick rather than dropped permanently.
+func TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck(t *testing.T) {
+	originalInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalInterval) }()
+
+	originalRetryDelay := getReservationStrandingRetryDelay()
+	setReservationStrandingRetryDelay(5 * time.Millisecond)
+	defer func() { setReservationStrandingRetryDelay(originalRetryDelay) }()
+
+	t.Run("requeues on transient check error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x88)
+		key := reservationKey(0xCC01)
+		walletID := [32]byte{0x88, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// Inject a transient failure on WalletReservations so the initial
+		// check in OnWalletClosed fails.
+		spvChain.setWalletReservationsErr(fmt.Errorf("rpc unavailable"))
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run and fail the initial check.
+		time.Sleep(50 * time.Millisecond)
+
+		// Clear the transient error so the subsequent recheck can succeed.
+		spvChain.setWalletReservationsErr(nil)
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+
+	t.Run("requeues when stranding check requests a recheck", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x89)
+		key := reservationKey(0xCC02)
+		walletID := [32]byte{0x89, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		// Initially the reservation is ActionPending, so checkReservationStrandingForWallet
+		// defers it and returns recheck=true.
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActionPending,
+		})
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run, skip the ActionPending reservation,
+		// and requeue the wallet.
+		time.Sleep(50 * time.Millisecond)
+
+		// Transition the reservation to Active (e.g. after action timeout).
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+}
+
+// panicOnceAcceptanceScanChain wraps a *localChain and panics on its first
+// PastReservationAcceptanceRequestedEvents call, then succeeds on subsequent
+// calls, simulating a transient panic during an action-timeout watcher scan.
+type panicOnceAcceptanceScanChain struct {
+	*localChain
+	hasPanicked bool
+	mutex       sync.Mutex
+}
+
+func (c *panicOnceAcceptanceScanChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	c.mutex.Lock()
+	if !c.hasPanicked {
+		c.hasPanicked = true
+		c.mutex.Unlock()
+		panic("action-timeout watcher transient panic")
+	}
+	c.mutex.Unlock()
+	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+// TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRelease
+// verifies that if the action-timeout watcher encounters a recovered panic in
+// WireReservationWatchers, it restarts with backoff so that a pending
+// acceptance action is eventually timed out, unblocking the stale-deposit
+// watcher to notify and release the associated stale reserved deposit.
+func TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRelease(t *testing.T) {
+	originalTimeoutInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalTimeoutInterval) }()
+
+	originalStaleInterval := getReservationStaleDepositPollInterval()
+	setReservationStaleDepositPollInterval(50 * time.Millisecond)
+	defer func() { setReservationStaleDepositPollInterval(originalStaleInterval) }()
+
+	originalBackoff := getReservationWatcherRestartBackoff()
+	setReservationWatcherRestartBackoff(20 * time.Millisecond)
+	defer func() { setReservationWatcherRestartBackoff(originalBackoff) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	// Chain head time is past both the deposit refund deadline and the action timeout.
+	headTime := time.Unix(5000, 0)
+	spvChain.setLatestBlockTimestamp(headTime)
+
+	wallet := walletPKHAt(0x91)
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault: vault,
+	})
+	fundingTxHash := bitcoin.Hash{0x99}
+	fundingOutputIndex := uint32(0)
+	endBlock := uint64(1000)
+
+	// Seed deposit revealed with refund deadline 1000 (< headTime 2000).
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:        500,
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(1000),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	spvChain.setReservedDeposit(depositKey, wallet, true)
+	spvChain.setReservation(depositKey, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+	})
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeAcceptance,
+		State:      tbtc.ReservationActionStatePending,
+		TimeoutAt:  1500,
+	})
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      depositKey,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet,
+		BlockNumber:         500,
+	})
+
+	panickingChain := &panicOnceAcceptanceScanChain{localChain: spvChain}
+
+	if err := WireReservationWatchers(ctx, &mockWalletClosedChain{}, panickingChain, true, nil, ethereum.Developer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Under the old behavior, the action-timeout watcher dies on the first panic
+	// and never restarts; the acceptance action remains Pending forever and the
+	// timeout notification is never submitted.
+	// Under the new behavior, the action-timeout watcher restarts with backoff,
+	// discovers the overdue pending acceptance, and calls NotifyReservationAcceptanceTimedOut.
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedAcceptanceTimeouts()) == 1
+		},
+	)
+
+	timeouts := spvChain.getSubmittedAcceptanceTimeouts()
+	if len(timeouts) != 1 || timeouts[0].Cmp(depositKey) != 0 {
+		t.Fatalf("expected acceptance timeout notification for [%v], got %v", depositKey, timeouts)
+	}
+
+	// Simulate the acceptance timeout transaction mining on-chain.
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeAcceptance,
+		State:      tbtc.ReservationActionStateTimedOut,
+		TimeoutAt:  1500,
+	})
+
+	// The stale-deposit watcher can now observe that the action is no longer
+	// Pending, allowing it to notify and release the stale reserved deposit.
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedStaleReservedDeposits()) == 1
+		},
+	)
+
+	submitted := spvChain.getSubmittedStaleReservedDeposits()
+	if len(submitted) != 1 || submitted[0].Cmp(depositKey) != 0 {
+		t.Fatalf("expected stale deposit notification for [%v], got %v", depositKey, submitted)
 	}
 }
