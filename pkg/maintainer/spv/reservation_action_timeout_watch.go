@@ -394,7 +394,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 
 		// A notification was submitted for this generation yet it is still
 		// Pending long after its deadline: further notices evidently do not
-		// land, so stop re-reading it every tick (G2-L10). A generation
+		// land, so stop re-reading it every tick. A generation
 		// that was never notified stays tracked so its first notice is
 		// still attempted.
 		if item.notifiedAt != 0 && reservationActionAbandoned(action, headTime) {
@@ -449,7 +449,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 			)
 		}
 
-		// G2-L11: the notify decision is a deadline comparison, so it is
+		// The notify decision is a deadline comparison, so it is
 		// judged on the chain head's block time, not the node's wall clock:
 		// a skewed host clock otherwise fires a notice the Bridge's
 		// block.timestamp check would reject early, or defers it past the
@@ -694,7 +694,7 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 	// A reused preload can be stale even though the nonce still matches:
 	// the action may have settled or timed out between the caller's read
 	// and this call. Re-read it before spending a transaction on the
-	// notification (G2-L9).
+	// notification.
 	if preloadReused {
 		action, err = ratw.spvChain.GetReservationAction(reservationKey, nonce)
 		if err != nil {
@@ -752,7 +752,7 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 		//
 		// Enqueue before the notification: even if the call reverts, the
 		// wallet's stranding must be rechecked once it is Closed or
-		// Terminated (G2-F18). A zero wallet hash cannot be enqueued -
+		// Terminated. A zero wallet hash cannot be enqueued -
 		// drainStrandingRechecks has no reservation key to re-resolve it.
 		if walletPublicKeyHash != ([20]byte{}) && ratw.strandingWatcher != nil {
 			ratw.ScheduleStrandingRecheck(walletPublicKeyHash)
@@ -864,7 +864,7 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 
 		// A timed-out re-anchor can be noticed while the wallet is still
 		// Closing: it is checked through the dissolution-gated form and
-		// requeued until its reservations become eligible (G2-F19). A
+		// requeued until its reservations become eligible. A
 		// wallet in a state that cannot strand a reservation (Live and the
 		// like) is dropped: its later closure fires the OnWalletClosed
 		// subscription, so requeueing it would only poll it forever.

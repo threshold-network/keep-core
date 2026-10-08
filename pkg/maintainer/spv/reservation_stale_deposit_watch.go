@@ -247,7 +247,7 @@ func reverseUint32(locktime [4]byte) uint32 {
 //     reveal, decoded from its DepositRevealed event.
 //   - now:        the node clock, used only for the notifiedAt renotify
 //     backoff. The refund-deadline gate is judged on the chain head's
-//     block time instead (G2-L13). Tests pass an explicit value;
+//     block time instead. Tests pass an explicit value;
 //     production passes time.Now().Unix() cast to uint32.
 func (rsdw *ReservationStaleDepositWatcher) CheckStaleReservedDeposit(
 	depositKey *big.Int,
@@ -271,7 +271,7 @@ func (rsdw *ReservationStaleDepositWatcher) checkStaleReservedDeposit(
 	depositKeyStr := depositKey.String()
 	deadline := refundDeadline
 
-	// G2-L13: the refund-deadline gate is a deadline comparison, so it is
+	// The refund-deadline gate is a deadline comparison, so it is
 	// judged on the chain head's block time, not the node's wall clock: a
 	// skewed host clock otherwise releases a deposit early, or, when it
 	// runs slow, defers the release past the deadline. The node clock
@@ -595,7 +595,7 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 	// Past-deadline deposits cost chain reads, so a tick checks at most
 	// reservationStaleDepositMaxChecksPerTick of them and resumes after the
 	// last one on the next tick (checkCursor), instead of re-reading the
-	// whole tracked set every tick (G2-F3). A deposit this watcher
+	// whole tracked set every tick. A deposit this watcher
 	// notified recently is not re-read before the renotify interval
 	// elapses: the notification needs time to land.
 	headTime := reservationChainHeadTime(rsdw.spvChain)

@@ -688,8 +688,8 @@ func ValidateDepositSweepProposal(
 	//
 	// The soft warning uses the operator's own bare floor
 	// (MinWalletTxSatPerVByteFee * vsize) to catch degraded fees that pass
-	// the protocol minimum but fall short of the configured floor. This
-	// fixes G1-S3: a buffered-floor warning was firing on every honest
+	// the protocol minimum but fall short of the configured floor; the
+	// buffered-floor variant instead fired on every honest
 	// quiet-mempool proposal.
 	//
 	// Keep the size estimator in checkSweepFeeFloor in sync with the

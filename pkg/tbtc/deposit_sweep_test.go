@@ -491,7 +491,7 @@ func (depositSweepFeeCheckChain) ReservationParameters() (*ReservationParameters
 // the protocol minimum threshold validate; the warning fires only below the
 // operator's bare floor (MinWalletTxSatPerVByteFee * vsize), not below the
 // buffered floor, so an honest quiet-mempool proposal that lands exactly on
-// the bare floor does not raise a false alarm (G1-S3).
+// the bare floor does not raise a false alarm.
 func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	sweepTxSize := depositSweepVsize(t, 0)
 	bareFloorFee := MinWalletTxSatPerVByteFee * sweepTxSize

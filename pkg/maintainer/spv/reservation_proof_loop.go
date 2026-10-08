@@ -356,7 +356,7 @@ func runReservationProofLoop(
 
 		// A chunk-fetch error keeps the scan cursor at the last good chunk,
 		// so the next pass resumes there: it is retried after the idle
-		// backoff below instead of the restart backoff (G2-L5).
+		// backoff below instead of the restart backoff.
 		if acceptanceErr != nil {
 			if errors.As(acceptanceErr, new(*chunkScanError)) {
 				logger.Errorf(
@@ -524,7 +524,7 @@ func proveReservationAcceptanceActions(
 			// otherwise stay tracked, and be re-read every pass, for the
 			// life of the process. Once the chain is far past its deadline
 			// the generation is abandoned and left to later passes of
-			// other operators (G2-F16).
+			// other operators.
 			if reservationActionAbandoned(action, headTime) {
 				delete(state.pendingAcceptanceEvents, key)
 				continue
@@ -1004,7 +1004,7 @@ func proveReservationReanchorActions(
 	// The anchor transactions each source wallet's generations spend: the
 	// wallet's history is fetched back to the earliest of them, so a late
 	// re-anchor proof is not pushed out of reach by newer transactions of
-	// the wallet (G2-F5).
+	// the wallet.
 	anchorTransactions := make(map[[20]byte][]bitcoin.Hash)
 	for _, generation := range generations {
 		if anchor := generation.reservation.AnchorUtxo; anchor != nil && anchor.Outpoint != nil {
@@ -1112,7 +1112,7 @@ func proveReservationReanchorActions(
 	// loop above, so its cached transaction list would stay as old as the
 	// backoff and the new-transaction early exit in
 	// reanchorGenerationBackedOff could never fire. Refresh the lists of
-	// those wallets on every pass (G2-L8); walletTransactionsForProof is
+	// those wallets on every pass; walletTransactionsForProof is
 	// cheap while the wallet's transaction hashes are unchanged.
 	for walletPublicKeyHash := range backedOffWallets {
 		if _, fetched := walletCandidates[walletPublicKeyHash]; fetched {
@@ -1279,7 +1279,7 @@ func proveReservationTransaction(
 		)
 		if err != nil {
 			// Continue to the next candidate: a later confirmed RBF
-			// replacement may still be provable (G2-F8).
+			// replacement may still be provable.
 			logger.Warnf(
 				"failed to get proof info for transaction [%s]: [%v]; "+
 					"continuing to next candidate",

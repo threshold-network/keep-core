@@ -686,8 +686,8 @@ func TestResolveCustodiedReservationKeys(t *testing.T) {
 	})
 }
 
-// TestRegistrationScanStartBlock_TransientErrorFailsPass pins G2-F10/G2-F11:
-// a failed registration-block lookup must surface as an error to
+// TestRegistrationScanStartBlock_TransientErrorFailsPass pins that a failed
+// registration-block lookup must surface as an error to
 // WalletReservations and WalletTerminationCause instead of degrading to
 // the chunked block-zero scan.
 func TestRegistrationScanStartBlock_TransientErrorFailsPass(t *testing.T) {
