@@ -32,6 +32,46 @@ func (e *chunkScanError) Unwrap() error {
 	return e.err
 }
 
+// isRetryableReservationRoundError reports whether a reservation proof
+// round error is a transient, retryable one that the loop should retry
+// after the idle backoff instead of propagating it out to the restart
+// loop: either a chunk-scan failure (which keeps the scan cursor at the
+// last good chunk) or a per-item aggregate (where the skipped items were
+// left to the next pass). Any other error is chain-wide and aborts the
+// pass so the outer restart loop can back off.
+func isRetryableReservationRoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := err.(spvItemErrors); ok {
+		return true
+	}
+	var chunkErr *chunkScanError
+	return errors.As(err, &chunkErr)
+}
+
+// mergeSpvPassErrors combines a reservation proof pass's scan error with the
+// per-item errors it accumulated while proving the generations already
+// tracked. When the event scan failed (scanErr is non-nil) the scan error
+// dominates and is returned as-is: it leaves the scan cursor at the last
+// good chunk so the next pass resumes there, and every generation tracked
+// before the failure was still proved, with its per-item error logged as it
+// happened. Otherwise, when the scan was clean but some items failed, the
+// per-item aggregate is returned so the caller can idle-back off and retry
+// the skipped items on the next pass instead of restarting the loop - a
+// single failed item is not a chain-wide failure.
+func mergeSpvPassErrors(scanErr error, itemErrs []error) error {
+	if scanErr != nil {
+		return scanErr
+	}
+
+	if len(itemErrs) > 0 {
+		return spvItemErrors(itemErrs)
+	}
+
+	return nil
+}
+
 // reservationProofScanState persists the incremental event-scan cursor and
 // the set of still-settleable action-request events across successive
 // passes of runReservationProofLoop, so proveReservationAcceptanceActions
@@ -354,11 +394,17 @@ func runReservationProofLoop(
 		// see evictStaleWalletTransactionCacheEntries.
 		evictStaleWalletTransactionCacheEntries(state)
 
-		// A chunk-fetch error keeps the scan cursor at the last good chunk,
-		// so the next pass resumes there: it is retried after the idle
-		// backoff below instead of the restart backoff.
+		// A chunk-fetch error keeps the scan cursor at the last good
+		// chunk, so the next pass resumes there: it is retried after the
+		// idle backoff below instead of the restart backoff. A per-item
+		// error (a single reservation's proof failing to assemble or
+		// submit while the rest of the round made progress) is the same
+		// kind of failure: it is not chain-wide, so it too is retried
+		// after the idle backoff rather than restarting the loop -
+		// without this, one failed proof would throw the whole
+		// reservation round out and restart it from its backoff.
 		if acceptanceErr != nil {
-			if errors.As(acceptanceErr, new(*chunkScanError)) {
+			if isRetryableReservationRoundError(acceptanceErr) {
 				logger.Errorf(
 					"error while proving reservation acceptance actions: "+
 						"[%v]; resuming after the idle backoff",
@@ -372,7 +418,7 @@ func runReservationProofLoop(
 			}
 		}
 		if reanchorErr != nil {
-			if errors.As(reanchorErr, new(*chunkScanError)) {
+			if isRetryableReservationRoundError(reanchorErr) {
 				logger.Errorf(
 					"error while proving reservation re-anchor actions: "+
 						"[%v]; resuming after the idle backoff",
@@ -420,7 +466,14 @@ func proveReservationAcceptanceActions(
 	// A scan error does not stop this pass: the chunks fetched before it
 	// are already tracked, and every tracked generation is still proved
 	// below. The error is returned once the pass is done.
+	//
+	// A per-item error (one tracked generation's proof cannot be
+	// assembled or submitted) likewise does not stop the pass: the
+	// remaining generations are still proved, and the skipped items are
+	// left to the next pass. Both are collected here and returned
+	// together once the pass is done.
 	var scanErr error
+	var itemErrs []error
 	if scan {
 		if err := fetchPastEventsInChunks(
 			func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
@@ -625,17 +678,29 @@ func proveReservationAcceptanceActions(
 			submittedReservations[reservationKey] = struct{}{}
 		}
 		if err != nil {
+			// A single failed generation does not stop the pass: log it,
+			// record it, and keep proving the remaining generations. It
+			// is left to the next pass.
 			logger.Errorf(
 				"failed to prove reservation acceptance transaction "+
 					"for reservation [%v]: [%v]",
 				event.ReservationKey,
 				err,
 			)
+			itemErrs = append(
+				itemErrs,
+				fmt.Errorf(
+					"failed to prove reservation acceptance transaction "+
+						"for reservation [%v]: [%v]",
+					event.ReservationKey,
+					err,
+				),
+			)
 			continue
 		}
 	}
 
-	return scanErr
+	return mergeSpvPassErrors(scanErr, itemErrs)
 }
 
 func isMatchingReservationAcceptanceTransaction(
@@ -899,6 +964,11 @@ func proveReservationReanchorActions(
 	// See proveReservationAcceptanceActions: a scan error is returned
 	// after the already-tracked generations have been proved.
 	var scanErr error
+	// A single failed re-anchor generation does not stop the pass: the
+	// remaining generations are still proved, and the skipped items are
+	// left to the next pass. Collected here and returned together with
+	// any scan error once the pass is done.
+	var itemErrs []error
 	if scan {
 		if err := fetchPastEventsInChunks(
 			func(chunkStart, chunkEnd uint64) ([]*tbtc.ReservationReanchorRequestedEvent, error) {
@@ -1092,11 +1162,23 @@ func proveReservationReanchorActions(
 			submittedReservations[reservationKey] = struct{}{}
 		}
 		if err != nil {
+			// A single failed generation does not stop the pass: log it,
+			// record it, and keep proving the remaining generations. It
+			// is left to the next pass.
 			logger.Errorf(
 				"failed to prove reservation re-anchor transaction "+
 					"for reservation [%v]: [%v]",
 				event.ReservationKey,
 				err,
+			)
+			itemErrs = append(
+				itemErrs,
+				fmt.Errorf(
+					"failed to prove reservation re-anchor transaction "+
+						"for reservation [%v]: [%v]",
+					event.ReservationKey,
+					err,
+				),
 			)
 			continue
 		}
@@ -1133,7 +1215,7 @@ func proveReservationReanchorActions(
 		}
 	}
 
-	return scanErr
+	return mergeSpvPassErrors(scanErr, itemErrs)
 }
 
 // reservationChainHeadTime returns the chain head's block time, or the zero
