@@ -1444,19 +1444,19 @@ func assertPostActivationSafety(
 	if !slices.Contains(checklist, ActionMovedFundsSweep) {
 		t.Error(
 			"ActionMovedFundsSweep must be present " +
- 				"in every post-activation window",
- 		)
- 	}
+				"in every post-activation window",
+		)
+	}
 
- 	// ActionMovingFunds must NOT appear on non-4th windows. This is
- 	// the key invariant protecting against excessive chain scans.
- 	if !is4thWindow && slices.Contains(checklist, ActionMovingFunds) {
- 		t.Error(
- 			"ActionMovingFunds must not appear " +
- 				"on non-4th windows post-activation",
- 		)
- 	}
- }
+	// ActionMovingFunds must NOT appear on non-4th windows. This is
+	// the key invariant protecting against excessive chain scans.
+	if !is4thWindow && slices.Contains(checklist, ActionMovingFunds) {
+		t.Error(
+			"ActionMovingFunds must not appear " +
+				"on non-4th windows post-activation",
+		)
+	}
+}
 
 // assertChecklistOrdering verifies that actions appear in the canonical
 // priority order, which depends on the window index: on windows where
@@ -1467,20 +1467,20 @@ func assertPostActivationSafety(
 // MovingFunds < ReservationAnchor < ReservationReanchor < Heartbeat).
 // Each consecutive pair of actions must have strictly increasing priority
 // values.
- func assertChecklistOrdering(
- 	t *testing.T,
- 	checklist []WalletActionType,
+func assertChecklistOrdering(
+	t *testing.T,
+	checklist []WalletActionType,
 	windowIndex uint64,
- ) {
- 	t.Helper()
+) {
+	t.Helper()
 
- 	actionPriority := map[WalletActionType]int{
- 		ActionMovedFundsSweep:     2,
- 		ActionMovingFunds:         3,
- 		ActionReservationAnchor:   4,
- 		ActionReservationReanchor: 5,
- 		ActionHeartbeat:           6,
- 	}
+	actionPriority := map[WalletActionType]int{
+		ActionMovedFundsSweep:     2,
+		ActionMovingFunds:         3,
+		ActionReservationAnchor:   4,
+		ActionReservationReanchor: 5,
+		ActionHeartbeat:           6,
+	}
 
 	if windowIndex%depositSweepLeadPeriodWindows == 1 {
 		actionPriority[ActionDepositSweep] = 0
