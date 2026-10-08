@@ -1213,20 +1213,28 @@ func TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActi
 }
 
 // TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations
-// verifies that a post-activation window where DepositSweep leads (windowIndex%3 == 1)
-// contains both ActionReservationAnchor and ActionReservationReanchor when reservations
-// are active, and neither when reservations are inactive.
+// verifies that on a post-activation 4th coordination window where
+// DepositSweep leads the checklist (windowIndex%3 == 1 and
+// windowIndex%4 == 0, i.e. window 27292), both reservation actions are
+// present when reservations are active (ethereum.Developer), and absent
+// when they are not (ethereum.Mainnet, which falls through to
+// ReservationsActivationBlock == MaxUint64 and never activates).
+//
+// If the leading-action alternation is undone and the code reverts to
+// always appending ActionDepositSweep after ActionRedemption, the
+// expected full checklists below will no longer match because
+// DepositSweep will be at index 1 instead of index 0.
 func TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations(t *testing.T) {
-	// Window 27289 is post DepositSweepEveryWindowActivationBlock (24559289)
-	// and 27289 % 3 == 1, so DepositSweep leads.
-	coordinationBlock := uint64(24560100)
-	windowIndex := uint64(27289)
+	// Window 27292: 27292 % 3 == 1 (DepositSweep leads post-activation)
+	// and 27292 % 4 == 0 (MovingFunds is frequency-gated in).
+	coordinationBlock := uint64(24562800) // = 27292 * 900
+	windowIndex := uint64(27292)
 
 	seed := sha256.Sum256(
 		big.NewInt(int64(coordinationBlock) + 2).Bytes(),
 	)
 
-	t.Run("post-activation with reservations active", func(t *testing.T) {
+	t.Run("reservations active (ethereum.Developer)", func(t *testing.T) {
 		executor := &coordinationExecutor{
 			ethereumNetwork: ethereum.Developer,
 		}
@@ -1237,19 +1245,21 @@ func TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservat
 			coordinationBlock,
 		)
 
-		if len(checklist) < 2 || checklist[0] != ActionDepositSweep {
-			t.Fatalf("expected ActionDepositSweep at index 0, got %v", checklist)
+		expected := []WalletActionType{
+			ActionDepositSweep,
+			ActionRedemption,
+			ActionMovedFundsSweep,
+			ActionMovingFunds,
+			ActionReservationAnchor,
+			ActionReservationReanchor,
 		}
 
-		if !slices.Contains(checklist, ActionReservationAnchor) {
-			t.Errorf("expected ActionReservationAnchor in checklist %v", checklist)
-		}
-		if !slices.Contains(checklist, ActionReservationReanchor) {
-			t.Errorf("expected ActionReservationReanchor in checklist %v", checklist)
+		if diff := deep.Equal(checklist, expected); diff != nil {
+			t.Errorf("checklist mismatch: %v\nactual:   %v\nexpected: %v", diff, checklist, expected)
 		}
 	})
 
-	t.Run("post-activation with reservations inactive", func(t *testing.T) {
+	t.Run("reservations inactive (ethereum.Mainnet)", func(t *testing.T) {
 		executor := &coordinationExecutor{
 			ethereumNetwork: ethereum.Mainnet,
 		}
@@ -1260,15 +1270,15 @@ func TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservat
 			coordinationBlock,
 		)
 
-		if len(checklist) < 2 || checklist[0] != ActionDepositSweep {
-			t.Fatalf("expected ActionDepositSweep at index 0, got %v", checklist)
+		expected := []WalletActionType{
+			ActionDepositSweep,
+			ActionRedemption,
+			ActionMovedFundsSweep,
+			ActionMovingFunds,
 		}
 
-		if slices.Contains(checklist, ActionReservationAnchor) {
-			t.Errorf("unexpected ActionReservationAnchor in checklist %v", checklist)
-		}
-		if slices.Contains(checklist, ActionReservationReanchor) {
-			t.Errorf("unexpected ActionReservationReanchor in checklist %v", checklist)
+		if diff := deep.Equal(checklist, expected); diff != nil {
+			t.Errorf("checklist mismatch: %v\nactual:   %v\nexpected: %v", diff, checklist, expected)
 		}
 	})
 }
