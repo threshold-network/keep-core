@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -126,6 +127,7 @@ type ReservationActionTimeoutWatcher struct {
 	// so a single stranding check runs once per wallet per drain
 	// regardless of how many of that wallet's reservations timed out
 	// in the same tick.
+	strandingRecheckMutex   sync.Mutex
 	strandingRecheckWallets map[[20]byte]struct{}
 
 	// operatorAddress identifies this process for
@@ -753,7 +755,7 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 		// Terminated (G2-F18). A zero wallet hash cannot be enqueued -
 		// drainStrandingRechecks has no reservation key to re-resolve it.
 		if walletPublicKeyHash != ([20]byte{}) && ratw.strandingWatcher != nil {
-			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			ratw.ScheduleStrandingRecheck(walletPublicKeyHash)
 		}
 
 		// The action-timeout watcher is the permissionless path that must
@@ -796,6 +798,21 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 	}
 }
 
+// ScheduleStrandingRecheck adds a wallet to the stranding recheck queue so
+// it is re-evaluated for stranded reservations on the next poll tick.
+func (ratw *ReservationActionTimeoutWatcher) ScheduleStrandingRecheck(
+	walletPublicKeyHash [20]byte,
+) {
+	if ratw == nil || walletPublicKeyHash == ([20]byte{}) {
+		return
+	}
+
+	ratw.strandingRecheckMutex.Lock()
+	defer ratw.strandingRecheckMutex.Unlock()
+
+	ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+}
+
 // drainStrandingRechecks runs the deferred stranding recheck (see the
 // strandingRecheckWallets field doc for why this is deferred rather
 // than run synchronously at notify time) for every wallet recorded
@@ -815,12 +832,15 @@ func (ratw *ReservationActionTimeoutWatcher) checkReservationActionTimeout(
 // reassign a new one), so no re-resolution via GetReservation is
 // needed here.
 func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
+	ratw.strandingRecheckMutex.Lock()
 	if len(ratw.strandingRecheckWallets) == 0 {
+		ratw.strandingRecheckMutex.Unlock()
 		return
 	}
 
 	wallets := ratw.strandingRecheckWallets
 	ratw.strandingRecheckWallets = make(map[[20]byte]struct{})
+	ratw.strandingRecheckMutex.Unlock()
 
 	for walletPublicKeyHash := range wallets {
 		wallet, err := ratw.spvChain.GetWallet(walletPublicKeyHash)
@@ -838,7 +858,7 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 				walletPublicKeyHash,
 				err,
 			)
-			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			ratw.ScheduleStrandingRecheck(walletPublicKeyHash)
 			continue
 		}
 
@@ -862,7 +882,7 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 				walletPublicKeyHash,
 				err,
 			)
-			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			ratw.ScheduleStrandingRecheck(walletPublicKeyHash)
 			continue
 		}
 
@@ -870,7 +890,7 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 		// action that may return to Active, a reservation read that
 		// failed, or a Closing wallet not yet dissolution-eligible).
 		if recheck {
-			ratw.strandingRecheckWallets[walletPublicKeyHash] = struct{}{}
+			ratw.ScheduleStrandingRecheck(walletPublicKeyHash)
 		}
 	}
 }

@@ -1423,3 +1423,143 @@ func TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet(t *tes
 		})
 	}
 }
+
+// TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck
+// verifies that when the live OnWalletClosed event handler encounters a
+// transient failure during its stranding check (e.g. an RPC error reading the
+// closed wallet's reservations), the closed wallet is requeued into the
+// stranding recheck queue and retried by the action-timeout watcher's poll
+// tick rather than dropped permanently.
+func TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck(t *testing.T) {
+	originalInterval := reservationActionTimeoutPollInterval
+	reservationActionTimeoutPollInterval = 50 * time.Millisecond
+	defer func() { reservationActionTimeoutPollInterval = originalInterval }()
+
+	originalRetryDelay := reservationStrandingRetryDelay
+	reservationStrandingRetryDelay = 5 * time.Millisecond
+	defer func() { reservationStrandingRetryDelay = originalRetryDelay }()
+
+	t.Run("requeues on transient check error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x88)
+		key := reservationKey(0xCC01)
+		walletID := [32]byte{0x88, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// Inject a transient failure on WalletReservations so the initial
+		// check in OnWalletClosed fails.
+		spvChain.setWalletReservationsErr(fmt.Errorf("rpc unavailable"))
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run and fail the initial check.
+		time.Sleep(50 * time.Millisecond)
+
+		// Clear the transient error so the subsequent recheck can succeed.
+		spvChain.setWalletReservationsErr(nil)
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+
+	t.Run("requeues when stranding check requests a recheck", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x89)
+		key := reservationKey(0xCC02)
+		walletID := [32]byte{0x89, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		// Initially the reservation is ActionPending, so checkReservationStrandingForWallet
+		// defers it and returns recheck=true.
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActionPending,
+		})
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run, skip the ActionPending reservation,
+		// and requeue the wallet.
+		time.Sleep(50 * time.Millisecond)
+
+		// Transition the reservation to Active (e.g. after action timeout).
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+}

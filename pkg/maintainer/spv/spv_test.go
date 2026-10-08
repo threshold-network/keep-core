@@ -739,32 +739,32 @@ func TestUniqueWalletPublicKeyHashes(t *testing.T) {
 	}
 
 	events := []*tbtc.DepositRevealedEvent{
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"4cc32253cc0bcd0cf9cfc79ed7b21d10df207f0d",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"ddbd706d13dbd06038519c7621ac5de167bd3fd6",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"4cc32253cc0bcd0cf9cfc79ed7b21d10df207f0d",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"1016a8ff380e8907c82a88158019917e65c16ac4",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"1016a8ff380e8907c82a88158019917e65c16ac4",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"2c35ed9921fa35482c3cb3ae1190d87ede65dfd8",
 			),

@@ -16,11 +16,16 @@ import (
 // retries in reservation_wiring.go.
 const reservationStrandingRetryAttempts = 3
 
-// reservationStrandingRetryDelay is the default fixed pause between retry
+// DefaultReservationStrandingRetryDelay is the default fixed pause between retry
 // attempts, giving a transient RPC failure time to clear before the next
-// attempt. Tests override the watcher's retryDelay field directly to keep
-// the suite fast.
-const reservationStrandingRetryDelay = 2 * time.Second
+// attempt.
+const DefaultReservationStrandingRetryDelay = 2 * time.Second
+
+// reservationStrandingRetryDelay is the pause between retry attempts
+// newReservationStrandingWatcher sets. Defaults to
+// DefaultReservationStrandingRetryDelay; declared as a var so tests in this
+// package can shrink it.
+var reservationStrandingRetryDelay = DefaultReservationStrandingRetryDelay
 
 // reservationStrandingWatcher observes wallet close/termination events and
 // notifies the Bridge of any reservation whose anchor is now stranded.

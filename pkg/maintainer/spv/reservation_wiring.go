@@ -395,7 +395,13 @@ func WireReservationWatchers(
 		metricsRecorder,
 	)
 
-	subscription := subscribeReservationWalletClosed(ctx, walletClosedChain, spvChain, strandingWatcher)
+	subscription := subscribeReservationWalletClosed(
+		ctx,
+		walletClosedChain,
+		spvChain,
+		strandingWatcher,
+		actionTimeoutWatcher,
+	)
 	go func() {
 		<-ctx.Done()
 		subscription.Unsubscribe()
@@ -726,12 +732,15 @@ func retryReservationStrandingStartupScan(
 // the chain's wallet close / termination events. Each event dispatches a
 // worker goroutine that resolves the closed wallet's ECDSA wallet ID (the
 // only identifier WalletClosedEvent carries) to its public key hash and
-// runs the watcher's stranding check for that wallet.
+// runs the watcher's stranding check for that wallet. If the check fails or
+// leaves work for a later pass, the wallet is requeued on the action-timeout
+// watcher's stranding recheck queue for periodic retry.
 func subscribeReservationWalletClosed(
 	ctx context.Context,
 	walletClosedChain WalletClosedChain,
 	spvChain Chain,
 	watcher *reservationStrandingWatcher,
+	actionTimeoutWatcher *ReservationActionTimeoutWatcher,
 ) subscription.EventSubscription {
 	return walletClosedChain.OnWalletClosed(func(event *tbtc.WalletClosedEvent) {
 		go func() {
@@ -740,9 +749,17 @@ func subscribeReservationWalletClosed(
 				return
 			default:
 			}
-			walletPublicKeyHash, err := resolveWalletPublicKeyHash(
-				spvChain,
-				event.WalletID,
+			var walletPublicKeyHash [20]byte
+			err := watcher.withStrandingRetry(
+				fmt.Sprintf("resolve public key hash for closed wallet ID [0x%x]", event.WalletID),
+				func() error {
+					var resolveErr error
+					walletPublicKeyHash, resolveErr = resolveWalletPublicKeyHash(
+						spvChain,
+						event.WalletID,
+					)
+					return resolveErr
+				},
 			)
 			if err != nil {
 				reservationWiringLogger.Errorf(
@@ -754,9 +771,10 @@ func subscribeReservationWalletClosed(
 				return
 			}
 
-			if _, err := watcher.checkReservationStrandingForWallet(
+			recheck, err := watcher.checkReservationStrandingForWallet(
 				walletPublicKeyHash,
-			); err != nil {
+			)
+			if err != nil {
 				reservationWiringLogger.Errorf(
 					"failed to check reservation stranding for closed "+
 						"wallet [0x%x] (ID [0x%x]): [%v]",
@@ -764,6 +782,9 @@ func subscribeReservationWalletClosed(
 					event.WalletID,
 					err,
 				)
+			}
+			if (err != nil || recheck) && actionTimeoutWatcher != nil {
+				actionTimeoutWatcher.ScheduleStrandingRecheck(walletPublicKeyHash)
 			}
 		}()
 	})
