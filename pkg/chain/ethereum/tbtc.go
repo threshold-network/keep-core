@@ -89,6 +89,7 @@ type TbtcChain struct {
 	bridge                  *tbtccontract.Bridge
 	maintainerProxy         *tbtccontract.MaintainerProxy
 	walletRegistry          *ecdsacontract.WalletRegistry
+	admission               tbtcAdmissionReader
 	sortitionPool           *ecdsacontract.EcdsaSortitionPool
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
@@ -116,6 +117,20 @@ type TbtcChain struct {
 	ecdsaDkgValidatorAddress common.Address
 
 	sweptDepositsCache *cache.GenericTimeCache[*tbtc.DepositChainRequest]
+}
+
+// tbtcAdmissionReader narrows the WalletRegistry down to the two reads the
+// admission predicate decides on. *ecdsacontract.WalletRegistry satisfies it as
+// it stands; the indirection exists so the predicate can be exercised without a
+// chain behind it.
+//
+// EligibleStake is not admission's alone, though: TbtcChain.EligibleStake is
+// routed through this same seam, and the heartbeat path reads a staking
+// provider's stake through that accessor to decide whether the operator is
+// unstaking. A reader substituted here is therefore answering both.
+type tbtcAdmissionReader interface {
+	OperatorToStakingProvider(operator common.Address) (common.Address, error)
+	EligibleStake(stakingProvider common.Address) (*big.Int, error)
 }
 
 // NewTbtcChain construct a new instance of the TBTC-specific Ethereum
@@ -327,6 +342,7 @@ func newTbtcChain(
 		bridge:                   bridge,
 		maintainerProxy:          maintainerProxy,
 		walletRegistry:           walletRegistry,
+		admission:                walletRegistry,
 		sortitionPool:            sortitionPool,
 		walletProposalValidator:  walletProposalValidator,
 		redemptionWatchtower:     redemptionWatchtower,

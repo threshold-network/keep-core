@@ -1,0 +1,345 @@
+package ethereum
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+
+	"github.com/keep-network/keep-core/internal/ethtest"
+	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain"
+	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
+	"github.com/keep-network/keep-core/pkg/firewall"
+	"github.com/keep-network/keep-core/pkg/operator"
+)
+
+var _ firewall.Application = (*TbtcChain)(nil)
+
+// connectAdmissionFixture builds both production chain handles through the
+// public Connect path against a deterministic endpoint serving the fixed
+// admission table. Nothing between the JSON-RPC boundary and the predicate is
+// substituted: the generated bindings, the chain handle constructors and the
+// production admission adapter are the code under test.
+func connectAdmissionFixture(t *testing.T) (
+	*ethtest.Backend,
+	*BeaconChain,
+	*TbtcChain,
+) {
+	t.Helper()
+
+	backend := ethtest.New(t, ethtest.AdmissionState(t))
+
+	beaconChain, tbtcChain, _, _, _, err := Connect(
+		context.Background(),
+		backend.ChainConfig(t),
+	)
+	if err != nil {
+		t.Fatalf("failed to connect to the fixture: %v", err)
+	}
+
+	// What connecting costs, before anything is forgotten. Construction
+	// resolves the addresses it needs and nothing else; in particular it reads
+	// no admission state, so no later assertion is looking at a read that was
+	// already served.
+	backend.AssertTrace(
+		t,
+		"construction reads",
+		ethtest.Read(ethtest.RandomBeaconContract, "sortitionPool"),
+		ethtest.Read(ethtest.BridgeContract, "contractReferences"),
+		ethtest.Read(ethtest.WalletRegistryContract, "sortitionPool"),
+		ethtest.Read(ethtest.BridgeContract, "getRedemptionWatchtower"),
+		ethtest.Read(ethtest.RandomBeaconContract, "staking"),
+		ethtest.Read(ethtest.WalletRegistryContract, "staking"),
+	)
+	backend.AssertNoUnexpectedCalls(t)
+	backend.ResetCalls()
+
+	return backend, beaconChain, tbtcChain
+}
+
+// caseOperatorKey returns the operator public key of one admission table
+// identity, derived with the same conversion the client applies to its own
+// key. See ethtest.Key for what those keys are and why deriving identities
+// from them costs nothing here.
+func caseOperatorKey(
+	t *testing.T,
+	admissionCase ethtest.AdmissionCase,
+) *operator.PublicKey {
+	t.Helper()
+
+	_, operatorPublicKey, err := ChainPrivateKeyToOperatorKeyPair(
+		ethtest.Key(t, admissionCase.OperatorKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return operatorPublicKey
+}
+
+// TestTbtcChain_IsRecognized_ProductionAdapter drives the admission table
+// through the WalletRegistry binding newTbtcChain installs as the admission
+// reader.
+func TestTbtcChain_IsRecognized_ProductionAdapter(t *testing.T) {
+	backend, _, tbtcChain := connectAdmissionFixture(t)
+
+	walletRegistry, ok := tbtcChain.admission.(*ecdsacontract.WalletRegistry)
+	if !ok {
+		t.Fatalf(
+			"tBTC admission is served by [%T], not the wallet registry",
+			tbtcChain.admission,
+		)
+	}
+	if walletRegistry != tbtcChain.walletRegistry {
+		t.Error("tBTC admission reads a different WalletRegistry binding")
+	}
+
+	for _, admissionCase := range ethtest.AdmissionCases() {
+		t.Run(admissionCase.Name, func(t *testing.T) {
+			backend.ResetCalls()
+
+			isRecognized, err := tbtcChain.IsRecognized(
+				caseOperatorKey(t, admissionCase),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testutils.AssertBoolsEqual(
+				t,
+				"tbtc recognition",
+				admissionCase.TbtcRecognizes,
+				isRecognized,
+			)
+
+			backend.AssertTrace(
+				t,
+				"tbtc recognition reads",
+				admissionCase.TbtcReads(t)...,
+			)
+			backend.AssertNoUnexpectedCalls(t)
+		})
+	}
+}
+
+// TestBeaconChain_DoesNotImplementFirewallApplication keeps beacon operations
+// available without allowing the chain handle to become an admission source.
+func TestBeaconChain_DoesNotImplementFirewallApplication(t *testing.T) {
+	var candidate interface{} = (*BeaconChain)(nil)
+	if _, ok := candidate.(firewall.Application); ok {
+		t.Fatal("the beacon chain implements firewall.Application")
+	}
+}
+
+// TestTbtcChain_IsRecognized_AtMinimumAuthorization verifies the plumbing
+// (seed-write-read roundtrip) through the production adapter when seeding
+// eligible stake at the minimum authorization level read from the registry.
+//
+// Note: This test only verifies adapter plumbing, not actual contract-level
+// floor enforcement. Actual floor enforcement (authorized minus pending less
+// than minimum implies zero) is verified by the mainnet-pinned integration test
+// TestMainnetChainState_EligibleStakeAtMinimumAuthorization in
+// ethereum_integration_test.go.
+func TestTbtcChain_IsRecognized_AtMinimumAuthorization(t *testing.T) {
+	backend, _, tbtcChain := connectAdmissionFixture(t)
+
+	minimumAuthorization, err := tbtcChain.walletRegistry.MinimumAuthorization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutils.AssertBigIntNonZero(
+		t,
+		"minimum authorization",
+		minimumAuthorization,
+	)
+	backend.AssertTrace(
+		t,
+		"minimum authorization read",
+		ethtest.Read(ethtest.WalletRegistryContract, "minimumAuthorization"),
+	)
+
+	// An identity the table leaves unauthorized, brought up to the floor and
+	// no further.
+	atTheFloor := ethtest.AdmissionCaseNamed(t, "registered_unauthorized")
+	stakingProvider := atTheFloor.StakingProvider(t)
+	backend.SetEligibleStake(stakingProvider, minimumAuthorization)
+
+	eligibleStake, err := tbtcChain.EligibleStake(
+		chainAddress(stakingProvider),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutils.AssertBigIntsEqual(
+		t,
+		"eligible stake",
+		minimumAuthorization,
+		eligibleStake,
+	)
+
+	backend.ResetCalls()
+
+	isRecognized, err := tbtcChain.IsRecognized(caseOperatorKey(t, atTheFloor))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBoolsEqual(
+		t,
+		"recognition at the minimum authorization",
+		true,
+		isRecognized,
+	)
+
+	backend.AssertTrace(
+		t,
+		"recognition reads at the floor",
+		atTheFloor.TbtcReads(t)...,
+	)
+	backend.AssertNoUnexpectedCalls(t)
+}
+
+// TestAdmission_ProductionConstruction asserts that the public construction
+// path supplies the production WalletRegistry binding used for admission.
+func TestAdmission_ProductionConstruction(t *testing.T) {
+	backend, beaconChain, tbtcChain := connectAdmissionFixture(t)
+
+	if beaconChain.baseChain != tbtcChain.baseChain {
+		t.Error("the two chain handles were given different base chains")
+	}
+	if tbtcChain.admission != tbtcAdmissionReader(tbtcChain.walletRegistry) {
+		t.Error("tBTC admission is not the constructed WalletRegistry binding")
+	}
+
+	allowList := firewall.EmptyAllowList()
+	policy := firewall.AnyApplicationPolicy(
+		[]firewall.Application{tbtcChain},
+		allowList,
+	)
+
+	for _, admissionCase := range ethtest.AdmissionCases() {
+		t.Run(admissionCase.Name, func(t *testing.T) {
+			operatorPublicKey := caseOperatorKey(t, admissionCase)
+
+			// The static allow list production builds is empty, so it decides
+			// nothing and every identity below is settled by a chain read.
+			if allowList.Contains(operatorPublicKey) {
+				t.Fatal("the production allow list is not empty")
+			}
+
+			backend.ResetCalls()
+
+			err := policy.Validate(operatorPublicKey)
+
+			if admissionCase.Admitted {
+				if err != nil {
+					t.Fatalf("expected the peer to be admitted: %v", err)
+				}
+			} else {
+				testutils.AssertErrorsSame(t, firewall.ErrNotRecognized, err)
+			}
+
+			// Only WalletRegistry reads are expected, so neither the static
+			// allow list nor legacy beacon state settled this identity.
+			backend.AssertTrace(
+				t,
+				"admission reads",
+				admissionCase.AdmissionReads(t)...,
+			)
+			backend.AssertNoUnexpectedCalls(t)
+		})
+	}
+}
+
+// TestBaseChain_RolesOf_ProductionBinding pins the TokenStaking read behind
+// the exported RolesOf accessor. No production code path calls it after the
+// beacon admission predicate was removed; it is retained as a guard against a
+// real misrouting bug rather than for any current caller -- pointing this
+// read at the Allowlist instead, a separate deployment holding its own role
+// mapping, would silently answer a different question. See the misrouting
+// check later in this test.
+func TestBaseChain_RolesOf_ProductionBinding(t *testing.T) {
+	backend, beaconChain, _ := connectAdmissionFixture(t)
+
+	delegated := ethtest.AdmissionCaseNamed(t, "beacon_only")
+	stakingProvider := delegated.StakingProvider(t)
+
+	backend.ResetCalls()
+
+	owner, beneficiary, authorizer, hasStake, err := beaconChain.RolesOf(
+		chainAddress(stakingProvider),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBoolsEqual(t, "stake delegation", true, hasStake)
+	testutils.AssertStringsEqual(
+		t,
+		"owner",
+		ethtest.Address(t, delegated.StakingProviderKey+100).Hex(),
+		owner.String(),
+	)
+	testutils.AssertStringsEqual(
+		t,
+		"beneficiary",
+		ethtest.Address(t, delegated.StakingProviderKey+200).Hex(),
+		beneficiary.String(),
+	)
+	testutils.AssertStringsEqual(
+		t,
+		"authorizer",
+		ethtest.Address(t, delegated.StakingProviderKey+300).Hex(),
+		authorizer.String(),
+	)
+
+	backend.AssertTrace(
+		t,
+		"roles lookup reads",
+		ethtest.Read(ethtest.TokenStakingContract, "rolesOf", stakingProvider),
+	)
+	backend.AssertNoUnexpectedCalls(t)
+
+	// The address discipline above is only evidence if the fixture would
+	// actually notice a read landing on the allowlist. Point a base chain at
+	// the allowlist and confirm it does.
+	misroutedConfig := backend.ChainConfig(t)
+	misroutedConfig.SetContractAddress(
+		TokenStakingContractName,
+		ethtest.AllowlistAddress.Hex(),
+	)
+
+	client, err := ethclient.Dial(backend.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	misrouted, err := newBaseChain(context.Background(), misroutedConfig, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, _, _, err := misrouted.RolesOf(
+		chainAddress(stakingProvider),
+	); err == nil {
+		t.Fatal("a rolesOf read sent to the allowlist was answered")
+	}
+
+	misrouteReported := false
+	for _, unexpected := range backend.UnexpectedCalls() {
+		if strings.Contains(unexpected, ethtest.AllowlistAddress.Hex()) {
+			misrouteReported = true
+		}
+	}
+	if !misrouteReported {
+		t.Error("the fixture did not report the misrouted rolesOf read")
+	}
+}
+
+// chainAddress renders a chain address the way the roles lookup expects it.
+func chainAddress(address common.Address) chain.Address {
+	return chain.Address(address.Hex())
+}

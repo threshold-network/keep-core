@@ -19,6 +19,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	netlocal "github.com/keep-network/keep-core/pkg/net/local"
@@ -306,8 +307,9 @@ type coordinationReport struct {
 // goroutines -- the trailing protocolLatch.IsExecuting() == false assertion
 // in each caller verifies all three balanced their Lock/Unlock) the same
 // way a real node would have each operator drive its own executor in a
-// separate process. Fails the test if not every operator reports within the
-// 30-second deadline.
+// separate process. If recorders is non-nil, executor i gets recorders[i],
+// so a caller can check which operator counted a proposal. Fails the test
+// if not every operator reports within the 30-second deadline.
 func runCoordinationRound(
 	t *testing.T,
 	operators []*coordinationOperatorFixture,
@@ -316,6 +318,7 @@ func runCoordinationRound(
 	membershipValidator *group.MembershipValidator,
 	protocolLatch *generator.ProtocolLatch,
 	window *coordinationWindow,
+	recorders []*countingMetricsRecorder,
 ) []*coordinationReport {
 	t.Helper()
 
@@ -335,6 +338,9 @@ func runCoordinationRound(
 				protocolLatch,
 				op.waitForBlockHeight,
 			)
+			if recorders != nil {
+				executor.setMetricsRecorder(recorders[operatorIndex-1])
+			}
 
 			result, err := executor.coordinate(window)
 
@@ -473,6 +479,13 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 
 	window := newCoordinationWindow(coordinationBlock)
 
+	// One recorder per executor: only the leader may count a proposal.
+	recorders := []*countingMetricsRecorder{
+		newCountingMetricsRecorder(),
+		newCountingMetricsRecorder(),
+		newCountingMetricsRecorder(),
+	}
+
 	reports := runCoordinationRound(
 		t,
 		operators,
@@ -481,6 +494,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 		membershipValidator,
 		protocolLatch,
 		window,
+		recorders,
 	)
 
 	expectedResult := &coordinationResult{
@@ -521,6 +535,17 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 		false,
 		protocolLatch.IsExecuting(),
 	)
+
+	// operator2 is the leader and proposed a redemption, not a noop.
+	for i, expectedProposals := range []float64{0, 1, 0} {
+		recorder := recorders[i]
+		if got := recorder.GetCounterValue(clientinfo.MetricCoordinationLeaderProposalsTotal); got != expectedProposals {
+			t.Errorf("operator%d leader proposals: expected %v, got %v", i+1, expectedProposals, got)
+		}
+		if got := recorder.GetCounterValue(clientinfo.MetricCoordinationLeaderNoopProposalsTotal); got != 0 {
+			t.Errorf("operator%d leader noop proposals: expected 0, got %v", i+1, got)
+		}
+	}
 }
 
 // TestCoordinationExecutor_Coordinate_ReservationProposals is the
@@ -635,6 +660,7 @@ func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 				membershipValidator,
 				protocolLatch,
 				window,
+				nil,
 			)
 
 			expectedResult := &coordinationResult{
