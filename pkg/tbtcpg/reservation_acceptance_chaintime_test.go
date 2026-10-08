@@ -13,9 +13,7 @@ import (
 // minimum-age gate uses the chain head timestamp. When the host clock runs
 // ahead of the chain, the old code's wall-clock min-age check matures a
 // deposit the chain would not yet accept, causing a proposal the validator
-// rejects. The new code's chain-time check correctly skips such a deposit.
-//
-// G1-S2.
+// rejects. The chain-time check skips such a deposit.
 func TestReservationAcceptanceTask_MinAgeGateUsesChainTime(t *testing.T) {
 	walletPublicKeyHash := [20]byte{
 		0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,

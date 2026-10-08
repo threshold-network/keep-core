@@ -1,6 +1,6 @@
 package spv
 
-// Regression tests for the G2 go-spv-chain audit findings of the reservation
+// Regression tests for the go-spv-chain hardening of the reservation
 // proof loop and stranding watcher, in the package's local-chain style.
 
 import (
@@ -20,17 +20,17 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// g2ConfirmationsFailingChain is the G2F8 double: a full localBitcoinChain
-// whose GetTransactionConfirmations fails for one specific transaction
-// hash (simulating a per-tick Electrum blip) and delegates every other read
-// to the embedded chain. The hash's real body still fetches, so only the
-// confirmations read is what breaks.
-type g2ConfirmationsFailingChain struct {
+// confirmationsFailingLocalBitcoinChain is a full localBitcoinChain
+// double whose GetTransactionConfirmations fails for one specific
+// transaction hash (simulating a per-tick Electrum blip) and delegates
+// every other read to the embedded chain. The hash's real body still
+// fetches, so only the confirmations read is what breaks.
+type confirmationsFailingLocalBitcoinChain struct {
 	*localBitcoinChain
 	failingHash *bitcoin.Hash
 }
 
-func (c *g2ConfirmationsFailingChain) GetTransactionConfirmations(
+func (c *confirmationsFailingLocalBitcoinChain) GetTransactionConfirmations(
 	_ context.Context,
 	transactionHash bitcoin.Hash,
 ) (uint, error) {
@@ -68,17 +68,18 @@ func reanchorFixtureAnchorTxHash(
 	return (bitcoin.Hash{})
 }
 
-// g2PerKeyGetReservationFailingChain fails GetReservation for one specific
+// perKeyGetReservationFailingChain fails GetReservation for one specific
 // reservation key and delegates every other key to the embedded chain. It
-// backs G2F22: checkReservationStrandingForWallet's per-key retry-then-skip
-// (withStrandingRetry around GetReservation) only drops the failing key,
-// unlike G2F9's whole-wallet abort at the ethereum chain layer.
-type g2PerKeyGetReservationFailingChain struct {
+// backs the per-key retry-then-skip in
+// checkReservationStrandingForWallet (withStrandingRetry around
+// GetReservation): only the failing key is dropped, unlike a transient
+// ethereum chain read error that aborts the whole-wallet scan.
+type perKeyGetReservationFailingChain struct {
 	*localChain
 	failingKey *big.Int
 }
 
-func (c *g2PerKeyGetReservationFailingChain) GetReservation(
+func (c *perKeyGetReservationFailingChain) GetReservation(
 	reservationKey *big.Int,
 ) (*tbtc.Reservation, error) {
 	if c.failingKey != nil && reservationKey.Cmp(c.failingKey) == 0 {
@@ -87,11 +88,13 @@ func (c *g2PerKeyGetReservationFailingChain) GetReservation(
 	return c.localChain.GetReservation(reservationKey)
 }
 
-// TestG2F8_EarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement pins
-// G2F8: when the first matching candidate's proof-info read fails
+// TestEarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement pins
+// that when the first matching candidate's proof-info read fails
 // transiently, the pass still examines the later, already-confirmed
 // replacement and proves it.
-func TestG2F8_EarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement(t *testing.T) {
+func TestEarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement(
+	t *testing.T,
+) {
 	const proofStart = 790270
 	diff := func(d int64) *big.Int { return big.NewInt(d) }
 
@@ -148,7 +151,7 @@ func TestG2F8_EarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement(t *t
 
 	// The blip chain: the earlier candidate's confirmations read fails.
 	pendingEarlierHash := pendingEarlier.Hash()
-	blip := &g2ConfirmationsFailingChain{
+	blip := &confirmationsFailingLocalBitcoinChain{
 		localBitcoinChain: healthy,
 		failingHash:       &pendingEarlierHash,
 	}
@@ -181,12 +184,12 @@ func TestG2F8_EarlierCandidateConfirmationsErrorDoesNotHideLaterReplacement(t *t
 	}
 }
 
-// TestG2F15_FailedSubmissionDoesNotBlockSiblingGeneration pins G2F15: two
+// TestFailedSubmissionDoesNotBlockSiblingGeneration pins that when two
 // settleable generations of the same reservation - a Pending one and a
-// TimedOut one - where the Pending generation's proof submission fails.
-// The failed submit must not claim the reservation key: the TimedOut
-// generation is still proved in the same pass.
-func TestG2F15_FailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
+// TimedOut one - are in flight and the Pending generation's proof
+// submission fails, the failed submit must not claim the reservation key:
+// the TimedOut generation is still proved in the same pass.
+func TestFailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
 
 	// A second, Pending generation of the same reservation, re-requested at
@@ -253,12 +256,11 @@ func TestG2F15_FailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	}
 }
 
-// TestG2F17_FailedReanchorSubmissionDoesNotBlockSiblingGeneration pins
-// G2F17, the re-anchor counterpart of G2F15: a failed submission of one
-// generation's proof must not claim the reservation key, so a later,
-// independently settleable sibling generation is still proved in the same
-// pass.
-func TestG2F17_FailedReanchorSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
+// TestFailedReanchorSubmissionDoesNotBlockSiblingGeneration pins the
+// re-anchor counterpart: a failed submission of one generation's proof
+// must not claim the reservation key, so a later, independently
+// settleable sibling generation is still proved in the same pass.
+func TestFailedReanchorSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
 
 	// A second, Pending reanchor generation of the same reservation,
@@ -332,18 +334,18 @@ func TestG2F17_FailedReanchorSubmissionDoesNotBlockSiblingGeneration(t *testing.
 	}
 }
 
-// TestG2F22_SingleReservationReadFailureFlagsWalletForRecheck pins G2F22:
-// a reservation whose read fails after the retries is skipped without
-// starving the wallet's other reservations, and the check reports that the
-// wallet needs another pass; the action-timeout watcher's drain then keeps
-// the wallet queued instead of dropping the unread key.
-func TestG2F22_SingleReservationReadFailureFlagsWalletForRecheck(t *testing.T) {
+// TestSingleReservationReadFailureFlagsWalletForRecheck pins that a
+// reservation whose read fails after the retries is skipped without
+// starving the wallet's other reservations, and the check reports that
+// the wallet needs another pass; the action-timeout watcher's drain then
+// keeps the wallet queued instead of dropping the unread key.
+func TestSingleReservationReadFailureFlagsWalletForRecheck(t *testing.T) {
 	wallet := walletPKHAt(0x22)
 	failingKey := reservationKey(0x2201)
 	healthyKey := reservationKey(0x2202)
 
-	newChain := func() *g2PerKeyGetReservationFailingChain {
-		failing := &g2PerKeyGetReservationFailingChain{
+	newChain := func() *perKeyGetReservationFailingChain {
+		failing := &perKeyGetReservationFailingChain{
 			localChain: newLocalChain(),
 			failingKey: failingKey,
 		}
@@ -394,14 +396,14 @@ func (f *timedOutReanchorFixture) reanchorProofScript() (bitcoin.Script, error) 
 	return authorizedWalletScript(f.sourceWalletPKH, encodingP2WPKH)
 }
 
-// g2FilterRecordingChain records the StartBlock of every
+// filterRecordingChain records the StartBlock of every
 // PastNewWalletRegisteredEvents filter it sees.
-type g2FilterRecordingChain struct {
+type filterRecordingChain struct {
 	*localChain
 	pastNewWalletRegisteredStartBlocks []uint64
 }
 
-func (c *g2FilterRecordingChain) PastNewWalletRegisteredEvents(
+func (c *filterRecordingChain) PastNewWalletRegisteredEvents(
 	filter *tbtc.NewWalletRegisteredEventFilter,
 ) ([]*tbtc.NewWalletRegisteredEvent, error) {
 	c.pastNewWalletRegisteredStartBlocks = append(
@@ -412,9 +414,10 @@ func (c *g2FilterRecordingChain) PastNewWalletRegisteredEvents(
 }
 
 // actionReadCountingChain wraps a Chain and counts GetReservationAction
-// calls, since localChain itself keeps no such counter. It backs G2F16 and
-// G2L10: both claim a still-Pending generation/action is re-read once per
-// pass/tick with no age bound, which this wrapper measures directly.
+// calls, since localChain itself keeps no such counter. It backs two
+// claims - that a still-Pending acceptance generation and a tracked
+// action-timeout entry are each re-read once per pass/tick with no age
+// bound - which this wrapper measures directly.
 type actionReadCountingChain struct {
 	*localChain
 	getReservationActionCalls int
@@ -428,11 +431,12 @@ func (c *actionReadCountingChain) GetReservationAction(
 	return c.localChain.GetReservationAction(reservationKey, requestNonce)
 }
 
-// TestG2F3_StaleDepositPollTickReadsAreBoundedPerTick pins G2F3: a poll
-// tick re-checks at most reservationStaleDepositMaxChecksPerTick past-deadline
-// deposits, resuming after the last one on the next tick, and a deposit this
-// watcher just notified is not re-read until the renotify interval elapses.
-func TestG2F3_StaleDepositPollTickReadsAreBoundedPerTick(t *testing.T) {
+// TestStaleDepositPollTickReadsAreBoundedPerTick pins that a poll
+// tick re-checks at most reservationStaleDepositMaxChecksPerTick
+// past-deadline deposits, resuming after the last one on the next tick,
+// and a deposit this watcher just notified is not re-read until the
+// renotify interval elapses.
+func TestStaleDepositPollTickReadsAreBoundedPerTick(t *testing.T) {
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(200000)
@@ -445,7 +449,7 @@ func TestG2F3_StaleDepositPollTickReadsAreBoundedPerTick(t *testing.T) {
 	// now is past the deadline and past the maximum operator stagger
 	// offset, so the first-check stagger gate holds no deposit back.
 	now := deadline + 601
-	// The stagger gate is judged on the chain head's block time (G2-L13),
+	// The stagger gate is judged on the chain head's block time,
 	// so the head sits at the same point.
 	spvChain.setLatestBlockTimestamp(time.Unix(int64(now), 0))
 
@@ -516,12 +520,12 @@ func TestG2F3_StaleDepositPollTickReadsAreBoundedPerTick(t *testing.T) {
 	}
 }
 
-// TestG2F16_AbandonedPendingAcceptanceGenerationIsEvicted pins G2F16: a
+// TestAbandonedPendingAcceptanceGenerationIsEvicted pins that a
 // Pending acceptance generation is tracked until the chain head passes
-// TimeoutAt + 4 * (TimeoutAt - RequestedAt) of its action, then evicted, so
-// a generation whose timeout notice never lands is not re-read for the life
-// of the process.
-func TestG2F16_AbandonedPendingAcceptanceGenerationIsEvicted(t *testing.T) {
+// TimeoutAt + 4 * (TimeoutAt - RequestedAt) of its action, then evicted,
+// so a generation whose timeout notice never lands is not re-read for
+// the life of the process.
+func TestAbandonedPendingAcceptanceGenerationIsEvicted(t *testing.T) {
 	spvChain := newLocalChain()
 	btcChain := newReservationProofBitcoinChain()
 
@@ -592,12 +596,13 @@ func TestG2F16_AbandonedPendingAcceptanceGenerationIsEvicted(t *testing.T) {
 	}
 }
 
-// TestG2L10_StuckNotifiedPendingActionIsEvicted pins G2L10: a tracked
-// action whose timeout notice was submitted but which stays Pending past
-// TimeoutAt + 4 * (TimeoutAt - RequestedAt) of chain time is evicted instead
-// of being re-read on every tick for the life of the process. An action
-// that was never notified stays tracked so its first notice is attempted.
-func TestG2L10_StuckNotifiedPendingActionIsEvicted(t *testing.T) {
+// TestStuckNotifiedPendingActionIsEvicted pins that a tracked
+// action whose timeout notice was submitted but which stays Pending
+// past TimeoutAt + 4 * (TimeoutAt - RequestedAt) of chain time is
+// evicted instead of being re-read on every tick for the life of the
+// process. An action that was never notified stays tracked so its
+// first notice is attempted.
+func TestStuckNotifiedPendingActionIsEvicted(t *testing.T) {
 	newFixture := func(notifiedAt uint32) (*ReservationActionTimeoutWatcher, *actionReadCountingChain, *localChain, string) {
 		spvChain := newLocalChain()
 		blockCounter := newMockBlockCounter()
@@ -680,12 +685,12 @@ func TestG2L10_StuckNotifiedPendingActionIsEvicted(t *testing.T) {
 	})
 }
 
-// TestG2F5_LateReanchorProofSurvivesNewerWalletTransactions pins G2F5: a
-// TimedOut re-anchor generation whose re-anchor transaction is no longer
-// among the wallet's newest config.TransactionLimit transactions is still
-// proved, because the wallet's history is fetched back to the anchor
-// transaction the generation spends.
-func TestG2F5_LateReanchorProofSurvivesNewerWalletTransactions(t *testing.T) {
+// TestLateReanchorProofSurvivesNewerWalletTransactions pins that a
+// TimedOut re-anchor generation whose re-anchor transaction is no
+// longer among the wallet's newest config.TransactionLimit transactions
+// is still proved, because the wallet's history is fetched back to the
+// anchor transaction the generation spends.
+func TestLateReanchorProofSurvivesNewerWalletTransactions(t *testing.T) {
 	const fillerCount = 25
 	const defaultLimit = 20
 
@@ -738,7 +743,7 @@ func TestG2F5_LateReanchorProofSurvivesNewerWalletTransactions(t *testing.T) {
 	}
 }
 
-func TestRerun_G2_R1_StaleDepositCursorPreservedAcrossTicks(t *testing.T) {
+func TestStaleDepositCursorPreservedAcrossTicks(t *testing.T) {
 	inner := newLocalChain()
 	spvChain := &staleReadCountingChain{Chain: inner}
 
@@ -811,19 +816,19 @@ func TestRerun_G2_R1_StaleDepositCursorPreservedAcrossTicks(t *testing.T) {
 	}
 }
 
-type g2HeadTimeCountingChain struct {
+type headTimeCountingChain struct {
 	Chain
 	getLatestBlockTimestampCalls int
 }
 
-func (c *g2HeadTimeCountingChain) GetLatestBlockTimestamp() (time.Time, error) {
+func (c *headTimeCountingChain) GetLatestBlockTimestamp() (time.Time, error) {
 	c.getLatestBlockTimestampCalls++
 	return c.Chain.GetLatestBlockTimestamp()
 }
 
-func TestRerun_G2_R2_StaleDepositWatcherSingleHeadTimePerTick(t *testing.T) {
+func TestStaleDepositWatcherSingleHeadTimePerTick(t *testing.T) {
 	inner := newLocalChain()
-	headCountingChain := &g2HeadTimeCountingChain{Chain: inner}
+	headCountingChain := &headTimeCountingChain{Chain: inner}
 
 	const currentBlock = uint64(1000)
 	blockCounter := newMockBlockCounter()
@@ -880,7 +885,7 @@ func TestRerun_G2_R2_StaleDepositWatcherSingleHeadTimePerTick(t *testing.T) {
 	}
 }
 
-func TestRerun_G2_R6_StaleDepositPollTickBudgetUsesChainHeadTime(t *testing.T) {
+func TestStaleDepositPollTickBudgetUsesChainHeadTime(t *testing.T) {
 	inner := newLocalChain()
 	spvChain := &staleReadCountingChain{Chain: inner}
 

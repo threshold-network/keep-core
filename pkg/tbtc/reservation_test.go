@@ -1743,11 +1743,11 @@ func TestReservationReanchorAction_Execute(t *testing.T) {
 	})
 }
 
-// TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded checks that calls whose
-// caller timed out keep their slot until the backend answers, and that a new
-// call fails at once when every slot is held, instead of parking one more
-// goroutine.
-func TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded(t *testing.T) {
+// TestRPCCallsParkedAfterTimeoutAreBounded checks that calls whose
+// caller timed out keep their slot until the backend answers, and that a
+// new call fails at once when every slot is held, instead of parking one
+// more goroutine.
+func TestRPCCallsParkedAfterTimeoutAreBounded(t *testing.T) {
 	origTimeout := reservationRPCRequestTimeout
 	origSlots := reservationRPCSlots
 	reservationRPCRequestTimeout = 20 * time.Millisecond
@@ -1783,10 +1783,10 @@ func TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded(t *testing.T) {
 	}
 }
 
-// TestRerun_G1R11_IndependentRPCCallsRunConcurrently checks that two calls
-// with the same label (for example GetWallet for two different wallets) do
-// not block each other.
-func TestRerun_G1R11_IndependentRPCCallsRunConcurrently(t *testing.T) {
+// TestIndependentRPCCallsRunConcurrently checks that two calls
+// with the same label (for example GetWallet for two different wallets)
+// do not block each other.
+func TestIndependentRPCCallsRunConcurrently(t *testing.T) {
 	origTimeout := reservationRPCRequestTimeout
 	reservationRPCRequestTimeout = time.Second
 	defer func() { reservationRPCRequestTimeout = origTimeout }()
@@ -1817,7 +1817,7 @@ func TestRerun_G1R11_IndependentRPCCallsRunConcurrently(t *testing.T) {
 	}
 }
 
-func TestRerun_G1R29_RevealLookupCentersOnChainHeadTime(t *testing.T) {
+func TestRevealLookupCentersOnChainHeadTime(t *testing.T) {
 	btcChain := newLocalBitcoinChain()
 	custodyWallet := reservationTestWallet(t)
 	walletPublicKeyHash := bitcoin.PublicKeyHash(custodyWallet.publicKey)

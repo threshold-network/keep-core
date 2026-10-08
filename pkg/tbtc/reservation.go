@@ -714,7 +714,7 @@ func (raa *reservationAnchorAction) execute() error {
 	// (ProtocolMinWalletTxSatPerVByteFee = 5); see
 	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
 	// soft warning uses the operator's bare floor
-	// (MinWalletTxSatPerVByteFee * vsize) to fix G1-S3.
+	// (MinWalletTxSatPerVByteFee * vsize) instead.
 	if anchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
 		AddScriptHashInputs(1, DepositScriptByteSize, true).
 		AddPublicKeyHashOutputs(1, true).
@@ -951,7 +951,7 @@ func (rra *reservationReanchorAction) execute() error {
 	// (ProtocolMinWalletTxSatPerVByteFee = 5); see
 	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
 	// soft warning uses the operator's bare floor
-	// (MinWalletTxSatPerVByteFee * vsize) to fix G1-S3.
+	// (MinWalletTxSatPerVByteFee * vsize) instead.
 	if reanchorTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true).

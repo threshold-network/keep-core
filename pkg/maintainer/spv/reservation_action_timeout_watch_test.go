@@ -645,7 +645,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RetainsEntryAcrossLo
 	// gate never masks the recovery notification this test asserts.
 	currentNow := uint32(900)
 	ratw.nowFn = func() uint32 { return currentNow }
-	// The notify decision is judged on the chain head's block time (G2-L11),
+	// The notify decision is judged on the chain head's block time,
 	// not on the node clock above. 900 is past TimeoutAt plus the stagger.
 	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
@@ -726,7 +726,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	// actionTimeoutRenotifyInterval, 600s) so the FIRST-attempt stagger
 	// gate never masks the notifications this test asserts.
 	ratw.nowFn = func() uint32 { return 900 }
-	// The deadline decision uses the chain head time (G2-L11); 900 is past
+	// The deadline decision uses the chain head time; 900 is past
 	// every seeded TimeoutAt plus the stagger and inside key2's abandonment
 	// bound (200 + 4*200).
 	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
@@ -852,7 +852,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	// possible reservationOperatorStaggerOffset (see the identical
 	// comment in RunLoop_IncrementalTracking above).
 	ratw.nowFn = func() uint32 { return 900 }
-	// Chain head time (G2-L11): past TimeoutAt (100) plus the stagger, but
+	// Chain head time: past TimeoutAt (100) plus the stagger, but
 	// not past the abandonment bound (100 + 4*100), so the notified entry
 	// stays tracked.
 	spvChain.setLatestBlockTimestamp(time.Unix(200, 0))
@@ -966,7 +966,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 		defer nowMutex.Unlock()
 		return currentNow
 	}
-	// Chain head time (G2-L11): past TimeoutAt (100) plus this key's stagger
+	// Chain head time: past TimeoutAt (100) plus this key's stagger
 	// offset and not past the abandonment bound (100 + 4*100), so the entry
 	// stays tracked until the re-notification.
 	spvChain.setLatestBlockTimestamp(time.Unix(500, 0))
@@ -1096,7 +1096,7 @@ func TestReservationActionTimeoutWatcher_FirstScanStartsAtActivation(t *testing.
 		// now is comfortably beyond TimeoutAt plus the maximum
 		// reservationOperatorStaggerOffset.
 		ratw.nowFn = func() uint32 { return 900 }
-		// The deadline decision uses the chain head time (G2-L11).
+		// The deadline decision uses the chain head time.
 		spvChain.setLatestBlockTimestamp(time.Unix(300, 0))
 		return spvChain, ratw
 	}
@@ -1323,7 +1323,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 	// tracked keys (see the identical comment in
 	// RunLoop_IncrementalTracking above).
 	ratw.nowFn = func() uint32 { return 900 }
-	// The deadline decision uses the chain head time (G2-L11).
+	// The deadline decision uses the chain head time.
 	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	wallet := walletPKH()
@@ -1356,7 +1356,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_BoundsRPCVolumePerTi
 	}
 
 	// Every checked action is overdue, so each costs its batch read plus
-	// one re-read right before its notification (G2-L9): still bounded by
+	// one re-read right before its notification: still bounded by
 	// the per-tick batch cap, not by the tracked count.
 	expectedReads := 2 * reservationActionTimeoutMaxChecksPerTick
 	if wrapped.getReservationActionCalls != expectedReads {
@@ -1595,14 +1595,13 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotR
 	}
 }
 
-// TestG2F2_ZeroWalletPendingAcceptance_SendsAcceptanceTimeoutNotice pins
-// G2F2: the zero-wallet early return in checkReservationActionTimeout
-// suppressed the acceptance timeout notice for every first-generation
-// reservation (wallet hash is zero until settled at
-// ReservationProofs.sol:563). The notice needs only the reservation key,
-// so the early return was incorrect; the fix removes it and forwards the
-// zero-wallet pending acceptance to the Bridge.
-func TestG2F2_ZeroWalletPendingAcceptance_SendsAcceptanceTimeoutNotice(t *testing.T) {
+// TestActionTimeoutZeroWalletPendingAcceptance_SendsTimeoutNotice checks
+// that the zero-wallet early return in checkReservationActionTimeout no
+// longer suppresses the acceptance timeout notice: the wallet hash stays
+// zero until it is settled on-chain (ReservationProofs.sol:563), and the
+// notice needs only the reservation key, so the pending first-generation
+// acceptance is forwarded to the Bridge.
+func TestActionTimeoutZeroWalletPendingAcceptance_SendsTimeoutNotice(t *testing.T) {
 	spvChain := newLocalChain()
 	key := reservationKey(0xC0F2)
 
@@ -1644,13 +1643,13 @@ func TestG2F2_ZeroWalletPendingAcceptance_SendsAcceptanceTimeoutNotice(t *testin
 	}
 }
 
-// TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck pins
-// G2F18: the stranding requeue in the reanchor branch was inside the
+// TestActionTimeoutFailedReanchorNotice_EnqueuesStrandingRecheck pins
+// that the stranding requeue in the reanchor branch was inside the
 // NotifyReservationActionTimeout success path. A reverted or
 // transiently-failed notice silently lost the deferred stranding
 // recheck. The fix moves the requeue before the call and gates it on
 // a non-zero wallet hash.
-func TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck(t *testing.T) {
+func TestActionTimeoutFailedReanchorNotice_EnqueuesStrandingRecheck(t *testing.T) {
 	spvChain := newLocalChain()
 	wallet := walletPKHAt(0x48)
 	key := reservationKey(0xC0F8)
@@ -1688,7 +1687,7 @@ func TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck(t *testing.T
 	}
 
 	// The wallet must be enqueued for stranding recheck regardless of
-	// the notice outcome (G2F18); a zero wallet is skipped since
+	// the notice outcome; a zero wallet is skipped since
 	// drainStrandingRechecks has no reservation key to re-resolve it.
 	if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
 		t.Fatalf(
@@ -1698,11 +1697,13 @@ func TestG2F18_FailedReanchorTimeoutNotice_EnqueuesStrandingRecheck(t *testing.T
 	}
 }
 
-// TestG2F19_DrainRequeuesNonTerminalWalletAndCleanPendingSkip pins G2F19:
-// drainStrandingRechecks requeues a wallet on the non-terminal branch and
-// when the stranding check cleanly skips a non-Active reservation,
-// instead of silently dropping the deferred recheck.
-func TestG2F19_DrainRequeuesNonTerminalWalletAndCleanPendingSkip(t *testing.T) {
+// TestDrainStrandingRechecksRequeuesNonTerminalWalletAndCleanPendingSkip
+// pins that drainStrandingRechecks requeues a wallet on the non-terminal
+// branch and when the stranding check cleanly skips a non-Active
+// reservation, instead of silently dropping the deferred recheck.
+func TestDrainStrandingRechecksRequeuesNonTerminalWalletAndCleanPendingSkip(
+	t *testing.T,
+) {
 	t.Run(
 		"a non-terminal wallet is requeued until Closed or Terminated",
 		func(t *testing.T) {
@@ -1807,14 +1808,16 @@ func TestG2F19_DrainRequeuesNonTerminalWalletAndCleanPendingSkip(t *testing.T) {
 	)
 }
 
-// TestG2L9_StalePreloadNonceMatchWithStaleState_FallsBackToFreshRead
+// TestActionTimeoutStalePreloadNonceMatchWithStaleState_FallsBackToFreshRead
 // extends TestReservationActionTimeoutWatcher_StalePreloadNonceMismatchFallsBackToFreshRead
 // to cover the nonce-match-but-stale case: the reservation's RequestNonce
 // matches the preloaded nonce, but the preloaded action state is stale
 // (e.g. the action moved from Pending to Settled between the caller's
 // read and this call). Even with a matching nonce the preloaded state
-// must not be trusted; the fix always re-reads the action.
-func TestG2L9_StalePreloadNonceMatchWithStaleState_FallsBackToFreshRead(t *testing.T) {
+// must not be trusted; the check always re-reads the action.
+func TestActionTimeoutStalePreloadNonceMatchWithStaleState_FallsBackToFreshRead(
+	t *testing.T,
+) {
 	spvChain := newLocalChain()
 	wallet := walletPKH()
 	key := reservationKey(0xC0F5)

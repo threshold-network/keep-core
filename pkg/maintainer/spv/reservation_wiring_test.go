@@ -110,7 +110,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 	})
 
 	t.Run("recent registration is found in the first bounded window", func(t *testing.T) {
-		recording := &g2FilterRecordingChain{localChain: newChain()}
+		recording := &filterRecordingChain{localChain: newChain()}
 		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
 			EcdsaWalletID:       walletID,
 			WalletPublicKeyHash: expectedPKH,
@@ -131,7 +131,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 	})
 
 	t.Run("old registration is found by widening the window, never by a genesis scan first", func(t *testing.T) {
-		recording := &g2FilterRecordingChain{localChain: newChain()}
+		recording := &filterRecordingChain{localChain: newChain()}
 		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
 			EcdsaWalletID:       walletID,
 			WalletPublicKeyHash: expectedPKH,
@@ -250,7 +250,7 @@ func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
 				State: test.actionState,
 			})
 			watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-			// G2-L13: the refund-deadline gate now runs on the chain head's
+			// The refund-deadline gate now runs on the chain head's
 			// block time, so drive it to the case's `now` and keep the node
 			// clock at `now` for the renotify backoff.
 			spvChain.setLatestBlockTimestamp(time.Unix(int64(test.now), 0))
@@ -581,8 +581,8 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
-	// Deadline decisions are judged on the chain head's block time (G2-L11,
-	// G2-L13), not on the wall clock: put the head past every seeded
+	// Deadline decisions are judged on the chain head's block time,
+	// not on the wall clock: put the head past every seeded
 	// deadline plus the maximum stagger offset.
 	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
@@ -714,7 +714,7 @@ func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *test
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
-	// The notify decision is judged on the chain head's block time (G2-L11).
+	// The notify decision is judged on the chain head's block time.
 	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
 
 	wallet := walletPKHAt(0x70)
@@ -1059,7 +1059,7 @@ func TestRunStaleDepositPollTick_EvictsOnClearedWallet(t *testing.T) {
 	spvChain.setReservedDeposit(depositKey, [20]byte{}, true)
 
 	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
-	// G2-L13: the refund-deadline gate now runs on the chain head's block
+	// The refund-deadline gate now runs on the chain head's block
 	// time; drive it to the tick's now so the post-deadline check reads
 	// the record and evicts the cleared deposit.
 	spvChain.setLatestBlockTimestamp(time.Unix(1_000, 0))
@@ -1087,8 +1087,8 @@ func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(currentBlock)
 	spvChain.setBlockCounter(blockCounter)
-	// The refund-deadline gate is judged on the chain head's block time
-	// (G2-L13): 5_000 is past deadline (100) plus any stagger offset.
+	// The refund-deadline gate is judged on the chain head's block time:
+	// 5_000 is past deadline (100) plus any stagger offset.
 	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
 
 	vault := chain.Address("0xVault")
@@ -1344,12 +1344,14 @@ func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
 	}
 }
 
-// TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet pins
-// G2F24: the startup stranding scan's retry pass forwarded only Closed and
-// Terminated wallets, so a Closing wallet whose reservation term had passed
-// its DissolutionEligibleAt was never checked. Eligibility is judged against
-// the chain head time, not the wall clock.
-func TestG2F24_StartupStrandingScanChecksDissolutionEligibleClosingWallet(t *testing.T) {
+// TestStartupStrandingScanChecksDissolutionEligibleClosingWallet pins
+// that the startup stranding scan's retry pass forwards Closing, Closed
+// and Terminated wallets: a Closing wallet whose reservation term had
+// passed its DissolutionEligibleAt is checked. Eligibility is judged
+// against the chain head time, not the wall clock.
+func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
+	t *testing.T,
+) {
 	headTime := time.Unix(2_000_000, 0)
 
 	tests := map[string]struct {

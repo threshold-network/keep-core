@@ -11,17 +11,19 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// The G2 chain-time tests below pin that reservation deadline decisions are
+// The chain-time tests below pin that reservation deadline decisions are
 // judged on the chain head's block time, not on the node's wall clock. The
 // node clock is kept only for the renotify backoff and notifiedAt stamps,
 // and an unreadable head time skips the decision (no notify, no evict).
 
-// TestG2L7_TimedOutGenerationKeptWhileChainHeadInsideLateWindow pins that
-// the late-settlement window of a TimedOut acceptance generation is judged
-// on the chain head: the fixture's generation stays settleable through
-// timeoutAt (1000) + termSeconds (100) = 1100 in chain time, while the
-// node's wall clock is billions of seconds past that bound.
-func TestG2L7_TimedOutGenerationKeptWhileChainHeadInsideLateWindow(t *testing.T) {
+// TestProveReservationAcceptanceActions_KeepsTimedOutGenerationInsideLateWindowOnChainTime
+// pins that the late-settlement window of a TimedOut acceptance generation
+// is judged on the chain head: the fixture's generation stays settleable
+// through timeoutAt (1000) + termSeconds (100) = 1100 in chain time, while
+// the node's wall clock is billions of seconds past that bound.
+func TestProveReservationAcceptanceActions_KeepsTimedOutGenerationInsideLateWindowOnChainTime(
+	t *testing.T,
+) {
 	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
 	fixture.spvChain.setLatestBlockTimestamp(time.Unix(1050, 0))
 
@@ -52,10 +54,13 @@ func TestG2L7_TimedOutGenerationKeptWhileChainHeadInsideLateWindow(t *testing.T)
 	}
 }
 
-// TestG2L7_UnreadableHeadTimeDoesNotEvictTimedOutGeneration pins that when
-// the chain head time cannot be read the late-window eviction is skipped:
-// the generation is kept even though the node clock is far past the bound.
-func TestG2L7_UnreadableHeadTimeDoesNotEvictTimedOutGeneration(t *testing.T) {
+// TestProveReservationAcceptanceActions_UnreadableHeadTimeKeepsTimedOutGeneration
+// pins that when the chain head time cannot be read the late-window
+// eviction is skipped: the generation is kept even though the node clock
+// is far past the bound.
+func TestProveReservationAcceptanceActions_UnreadableHeadTimeKeepsTimedOutGeneration(
+	t *testing.T,
+) {
 	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
 	fixture.spvChain.latestBlockTimestampErr = errors.New("head unavailable")
 
@@ -77,10 +82,10 @@ func TestG2L7_UnreadableHeadTimeDoesNotEvictTimedOutGeneration(t *testing.T) {
 	}
 }
 
-// newG2L11Watcher returns an action-timeout watcher tracking one Pending
-// reanchor generation with timeoutAt 1000, and the node clock the watcher
-// reads from nodeNow.
-func newG2L11Watcher(
+// newPendingReanchorActionWatcher returns an action-timeout watcher
+// tracking one Pending reanchor generation with timeoutAt 1000, and the
+// node clock the watcher reads from nodeNow.
+func newPendingReanchorActionWatcher(
 	t *testing.T,
 	nodeNow *uint32,
 ) (*localChain, *ReservationActionTimeoutWatcher) {
@@ -120,14 +125,14 @@ func newG2L11Watcher(
 	return spvChain, ratw
 }
 
-// TestG2L11_NotifyGateJudgedOnChainTime pins that the action-timeout notify
-// decision compares the action's timeoutAt with the chain head time and not
-// with the node clock. A head time past timeoutAt plus the maximum stagger
-// offset (600s) always opens the gate.
-func TestG2L11_NotifyGateJudgedOnChainTime(t *testing.T) {
+// TestActionTimeoutNotifyGateJudgedOnChainHeadTime pins that the
+// action-timeout notify decision compares the action's timeoutAt with the
+// chain head time and not with the node clock. A head time past timeoutAt
+// plus the maximum stagger offset (600s) always opens the gate.
+func TestActionTimeoutNotifyGateJudgedOnChainHeadTime(t *testing.T) {
 	t.Run("node clock past timeoutAt but chain head before it does not notify", func(t *testing.T) {
 		nodeNow := uint32(1_000_000)
-		spvChain, ratw := newG2L11Watcher(t, &nodeNow)
+		spvChain, ratw := newPendingReanchorActionWatcher(t, &nodeNow)
 		spvChain.setLatestBlockTimestamp(time.Unix(500, 0))
 
 		if err := ratw.pollPendingActions(); err != nil {
@@ -148,7 +153,7 @@ func TestG2L11_NotifyGateJudgedOnChainTime(t *testing.T) {
 
 	t.Run("chain head past timeoutAt with node clock before it notifies", func(t *testing.T) {
 		nodeNow := uint32(10)
-		spvChain, ratw := newG2L11Watcher(t, &nodeNow)
+		spvChain, ratw := newPendingReanchorActionWatcher(t, &nodeNow)
 		spvChain.setLatestBlockTimestamp(time.Unix(1000+601, 0))
 
 		if err := ratw.pollPendingActions(); err != nil {
@@ -161,13 +166,13 @@ func TestG2L11_NotifyGateJudgedOnChainTime(t *testing.T) {
 	})
 }
 
-// TestG2L11_UnreadableHeadTimeNeitherNotifiesNorEvicts pins that an
-// unreadable head time skips the notify decision and evicts nothing: a
+// TestActionTimeoutUnreadableHeadTimeNeitherNotifiesNorEvicts pins that
+// an unreadable head time skips the notify decision and evicts nothing: a
 // generation that was already notified stays tracked and is not renotified
 // even though the node clock is far past the renotify backoff.
-func TestG2L11_UnreadableHeadTimeNeitherNotifiesNorEvicts(t *testing.T) {
+func TestActionTimeoutUnreadableHeadTimeNeitherNotifiesNorEvicts(t *testing.T) {
 	nodeNow := uint32(1_000_000)
-	spvChain, ratw := newG2L11Watcher(t, &nodeNow)
+	spvChain, ratw := newPendingReanchorActionWatcher(t, &nodeNow)
 
 	// First pass with a readable head far past the deadline: notifies.
 	spvChain.setLatestBlockTimestamp(time.Unix(1000+601, 0))
@@ -194,10 +199,10 @@ func TestG2L11_UnreadableHeadTimeNeitherNotifiesNorEvicts(t *testing.T) {
 	}
 }
 
-// newG2L13Deposit seeds a reserved deposit whose action generation is
-// TimedOut (so the notification is eligible once the refund deadline has
-// passed) and returns its key.
-func newG2L13Deposit(spvChain *localChain) *big.Int {
+// newTimedOutStaleDeposit seeds a reserved deposit whose action generation
+// is TimedOut (so the notification is eligible once the refund deadline
+// has passed) and returns its key.
+func newTimedOutStaleDeposit(spvChain *localChain) *big.Int {
 	key := reservationDepositKey(0xB013)
 	wallet := walletPKH()
 	spvChain.setReservedDeposit(key, wallet, true)
@@ -211,15 +216,16 @@ func newG2L13Deposit(spvChain *localChain) *big.Int {
 	return key
 }
 
-// TestG2L13_RefundDeadlineGateJudgedOnChainTime pins that the stale-deposit
-// refund-deadline gate compares the deposit's refund deadline with the chain
-// head time and not with the node clock passed as now.
-func TestG2L13_RefundDeadlineGateJudgedOnChainTime(t *testing.T) {
+// TestStaleDepositRefundDeadlineGateJudgedOnChainHeadTime pins that the
+// stale-deposit refund-deadline gate compares the deposit's refund
+// deadline with the chain head time and not with the node clock passed as
+// now.
+func TestStaleDepositRefundDeadlineGateJudgedOnChainHeadTime(t *testing.T) {
 	const refundDeadline = uint32(1000)
 
 	t.Run("node clock past the deadline but chain head before it does not notify", func(t *testing.T) {
 		spvChain := newLocalChain()
-		key := newG2L13Deposit(spvChain)
+		key := newTimedOutStaleDeposit(spvChain)
 		spvChain.setLatestBlockTimestamp(time.Unix(500, 0))
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
@@ -237,7 +243,7 @@ func TestG2L13_RefundDeadlineGateJudgedOnChainTime(t *testing.T) {
 
 	t.Run("chain head past the deadline with node clock before it notifies", func(t *testing.T) {
 		spvChain := newLocalChain()
-		key := newG2L13Deposit(spvChain)
+		key := newTimedOutStaleDeposit(spvChain)
 		spvChain.setLatestBlockTimestamp(time.Unix(int64(refundDeadline)+601, 0))
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
@@ -254,14 +260,14 @@ func TestG2L13_RefundDeadlineGateJudgedOnChainTime(t *testing.T) {
 	})
 }
 
-// TestG2L13_UnreadableHeadTimeNeitherNotifiesNorEvicts pins that an
-// unreadable head time skips the refund-deadline decision: an eligible
-// deposit is not notified, and a deposit whose record is not reserved is not
-// retired, even though the node clock is far past the deadline.
-func TestG2L13_UnreadableHeadTimeNeitherNotifiesNorEvicts(t *testing.T) {
+// TestStaleDepositUnreadableHeadTimeNeitherNotifiesNorEvicts pins that
+// an unreadable head time skips the refund-deadline decision: an eligible
+// deposit is not notified, and a deposit whose record is not reserved is
+// not retired, even though the node clock is far past the deadline.
+func TestStaleDepositUnreadableHeadTimeNeitherNotifiesNorEvicts(t *testing.T) {
 	t.Run("eligible deposit is not notified", func(t *testing.T) {
 		spvChain := newLocalChain()
-		key := newG2L13Deposit(spvChain)
+		key := newTimedOutStaleDeposit(spvChain)
 		spvChain.latestBlockTimestampErr = errors.New("head unavailable")
 
 		watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)

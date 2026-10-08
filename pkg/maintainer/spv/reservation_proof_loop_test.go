@@ -2438,7 +2438,7 @@ func TestRunReservationProofLoop_ResumesScanAfterRestart(t *testing.T) {
 	// First invocation: the re-anchor event scan fails after the
 	// acceptance scan has already completed. A failed chunk keeps the
 	// cursor, so the loop does not abort for a restart: it waits out the
-	// idle backoff and resumes (G2-L5). The context is cancelled from the
+	// idle backoff and resumes. The context is cancelled from the
 	// failing scan, which ends that wait.
 	chain.failReanchorScan = true
 	firstCtx, cancelFirst := context.WithCancel(context.Background())

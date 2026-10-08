@@ -361,7 +361,7 @@ func ValidateMovingFundsProposal(
 	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
 	// soft warning uses the operator's bare floor
 	// (MinWalletTxSatPerVByteFee * vsize): honest leaders never emit below
-	// it, so it fires only on genuinely degraded fees (G1-S3). Keep the size
+	// it, so it fires only on genuinely degraded fees. Keep the size
 	// estimator below in sync with the leader-side estimator in
 	// tbtcpg/moving_funds.go.
 	if movingFundsTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().

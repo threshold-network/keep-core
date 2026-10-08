@@ -12,9 +12,9 @@ import (
 // age gate: a pending re-anchor generation targeting a wallet that has not
 // yet aged out of its creation period is skipped, and no proposal is issued.
 //
-// G1-F2: the leader must not re-anchor to a target that has not aged out
-// of its creation period. The tolerance is 0 (strict), matching the leader's
-// own gate.
+// The leader must not re-anchor to a target that has not aged out of its
+// creation period. The tolerance is 0 (strict), matching the leader's own
+// gate.
 func TestReservationReanchorTask_SkipsYoungResumeTarget(t *testing.T) {
 	tbtcChain, _, _, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, reservationKey :=
 		newInFlightReanchorFixture(t)
@@ -92,8 +92,8 @@ func TestReservationReanchorTask_SkipsYoungResumeTarget(t *testing.T) {
 // TestReanchorTargetSearch_SkipsYoungCandidate verifies that pick excludes
 // candidates that have not yet aged out of their creation period.
 //
-// G1-F12: a candidate wallet must have aged out of its creation period
-// before it can be selected as a re-anchor destination.
+// A candidate wallet must have aged out of its creation period before it
+// can be selected as a re-anchor destination.
 func TestReanchorTargetSearch_SkipsYoungCandidate(t *testing.T) {
 	wall := time.Now()
 	period := uint32(3600) // 1 hour creation period
@@ -266,8 +266,6 @@ func TestReanchorCustodyGate_ChainHeadReadFailureFailsClosed(t *testing.T) {
 // A host clock running ahead of the chain can no longer cause early action
 // that the on-chain validator would revert. Dually, a host clock behind the
 // chain can no longer cause late action that the validator would accept.
-//
-// G1-L28/G1-S1.
 func TestReservationReanchorTask_CooldownGateUsesChainTime(t *testing.T) {
 	_, _, _, task, sourceWalletPublicKeyHash, _, reservationKey :=
 		newInFlightReanchorFixture(t)

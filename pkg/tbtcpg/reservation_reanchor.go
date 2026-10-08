@@ -317,7 +317,7 @@ reservationLoop:
 				continue reservationLoop
 			}
 
-			// G1-L25: re-read the action state just before proposing. The
+			// Re-read the action state just before proposing. The
 			// generation may have advanced (e.g. another party's proposal
 			// was mined) in the window since the pass-start read; proposing
 			// against a stale pending action would revert. The on-chain
@@ -352,7 +352,7 @@ reservationLoop:
 				continue reservationLoop
 			}
 
-			// G1-F2/G1-F12: a target wallet must have aged out of its
+			// A target wallet must have aged out of its
 			// creation period before it can be a re-anchor destination.
 			targetData, err := rrt.chain.GetWallet(freshAction.TargetWalletPublicKeyHash)
 			if err != nil {
@@ -1086,8 +1086,8 @@ func (s *reanchorTargetSearch) exclude(target [20]byte) {
 
 // pick returns the first candidate, starting at index from, with headroom
 // for anchorValue. A candidate whose count cap is reached is excluded for
-// the rest of the pass. G1-F12: a candidate that has not aged out of its
-// creation period is also excluded.
+// the rest of the pass, as is a candidate that has not aged out of its
+// creation period.
 func (s *reanchorTargetSearch) pick(
 	anchorValue uint64,
 	from int,
@@ -1097,7 +1097,7 @@ func (s *reanchorTargetSearch) pick(
 			continue
 		}
 
-		// G1-F12: the target must have aged out of its creation period.
+		// The target must have aged out of its creation period.
 		if !tbtc.IsReanchorTargetAged(
 			s.createdAt[candidate],
 			s.creationPeriod,

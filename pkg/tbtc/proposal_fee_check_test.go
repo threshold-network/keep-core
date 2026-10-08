@@ -307,7 +307,7 @@ func TestRejectIfProposedWalletTxFeeBelowProtocolMin_HonestLeaderOutputNeverReje
 }
 
 // TestWarnIfProposedWalletTxFeeBelowBareFloor exercises the follower-side
-// bare-floor soft check (used to fix G1-S3). The warning fires when
+// bare-floor soft check. The warning fires when
 // proposedFee < satPerVByteFloor * txVsize, catching degraded fees that
 // pass the protocol minimum but fall short of the operator's own floor.
 func TestWarnIfProposedWalletTxFeeBelowBareFloor(t *testing.T) {

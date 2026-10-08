@@ -209,8 +209,8 @@ func rejectIfProposedWalletTxFeeBelowProtocolMin(
 // configured floor. Unlike the buffered floor (which adds a 25% safety
 // margin), this comparison uses the bare floor so the warning fires only
 // on genuinely degraded fees and not on honest low-fee proposals that are
-// valid but below the buffer. This fixes G1-S3: the buffered-floor warning
-// was firing on every honest quiet-mempool proposal.
+// valid but below the buffer; the buffered-floor variant instead fired on
+// every honest quiet-mempool proposal.
 //
 // satPerVByteFloor is the operator's configured floor rate (sat/vByte);
 // pass MinWalletTxSatPerVByteFee. txVsize is the estimated transaction
