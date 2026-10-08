@@ -947,9 +947,11 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 // TestCoordinationExecutor_GetActionsChecklist_PostActivation verifies
 // post-activation behavior where DepositSweep and MovedFundsSweep appear
 // on every coordination window, MovingFunds remains gated to every 4th
-// window, and ActionRedemption is always at index 0. Safety invariants
-// are explicitly asserted beyond simple checklist comparison to guard
-// against regressions that a full-list deep-equal alone might miss.
+// window, and the leading action rotates: DepositSweep leads on windows
+// where windowIndex%depositSweepLeadPeriodWindows == 1 and Redemption leads
+// on all other windows. Safety invariants are explicitly asserted beyond
+// simple checklist comparison to guard against regressions that a
+// full-list deep-equal alone might miss.
 //
 // All coordination blocks used here are above
 // DepositSweepEveryWindowActivationBlock to exercise the post-activation
@@ -960,13 +962,13 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		expectedChecklist []WalletActionType
 		is4thWindow       bool
 	}{
-		// Non-4th window (window 27289): DepositSweep and
-		// MovedFundsSweep present, MovingFunds absent (frequency-gated).
+		// Non-4th window (window 27289, 27289%3 == 1): DepositSweep
+		// leads, MovedFundsSweep present, MovingFunds absent.
 		"post-activation non-4th window 27289": {
 			coordinationBlock: 24560100,
 			expectedChecklist: []WalletActionType{
-				ActionRedemption,
 				ActionDepositSweep,
+				ActionRedemption,
 				ActionMovedFundsSweep,
 			},
 			is4thWindow: false,
@@ -989,14 +991,14 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			},
 			is4thWindow: false,
 		},
-		// 4th window (window 27292, divisible by 4): MovingFunds
-		// appears (frequency-gated). Heartbeat is NOT triggered for
-		// this seed.
+		// 4th window (window 27292, divisible by 4, 27292%3 == 1):
+		// DepositSweep leads and MovingFunds appears. Heartbeat is NOT
+		// triggered for this seed.
 		"post-activation 4th window 27292 no heartbeat": {
 			coordinationBlock: 24562800,
 			expectedChecklist: []WalletActionType{
-				ActionRedemption,
 				ActionDepositSweep,
+				ActionRedemption,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
 			},
@@ -1011,22 +1013,21 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			},
 			is4thWindow: false,
 		},
-		// Non-4th window (window 27310) with heartbeat triggered by
-		// seed, verifying heartbeat works independently of the 4th-
-		// window gate.
+		// Non-4th window (window 27310, 27310%3 == 1) with heartbeat
+		// triggered by seed, verifying heartbeat works independently of
+		// the 4th-window gate and stays last on a DepositSweep-led window.
 		"post-activation non-4th window 27310 with heartbeat": {
 			coordinationBlock: 24579000,
 			expectedChecklist: []WalletActionType{
-				ActionRedemption,
 				ActionDepositSweep,
+				ActionRedemption,
 				ActionMovedFundsSweep,
 				ActionHeartbeat,
 			},
 			is4thWindow: false,
 		},
 		// 4th window (window 27320, divisible by 4): MovingFunds
-		// appears (frequency-gated). Heartbeat is also triggered for
-		// this seed.
+		// appears. Heartbeat is also triggered for this seed.
 		"post-activation 4th window 27320 with heartbeat": {
 			coordinationBlock: 24588000,
 			expectedChecklist: []WalletActionType{
@@ -1039,9 +1040,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: true,
 		},
 		// 4th window (window 27296, divisible by 4): MovingFunds
-		// appears (frequency-gated). Heartbeat is NOT triggered,
-		// verifying that 4th-window behavior works independently of
-		// heartbeat.
+		// appears. Heartbeat is NOT triggered, verifying that
+		// 4th-window behavior works independently of heartbeat.
 		"post-activation 4th window 27296 no heartbeat": {
 			coordinationBlock: 24566400,
 			expectedChecklist: []WalletActionType{
@@ -1098,12 +1098,179 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				assertPostActivationSafety(
 					t,
 					checklist,
+					window.index(),
 					test.is4thWindow,
 				)
-				assertChecklistOrdering(t, checklist)
+				assertChecklistOrdering(t, checklist, window.index())
 			},
 		)
 	}
+}
+
+// TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActivation
+// verifies that the SET of actions in the checklist is invariant under the
+// post-activation order rotation. The membership is what the rollout
+// depends on: because the post-activation order change only permutes the
+// set, and the pre-activation membership was left untouched, old and new
+// nodes compute identical membership sets and therefore accept each
+// other's proposals without a coordinated activation.
+//
+// For every window in a range crossing the activation block, the set must
+// equal:
+//   - post-activation: {Redemption, DepositSweep, MovedFundsSweep}
+//     union {MovingFunds if windowIndex%4==0} union {Heartbeat if drawn}
+//   - pre-activation: {Redemption} union
+//     {DepositSweep, MovedFundsSweep, MovingFunds if windowIndex%4==0}
+//     union {Heartbeat if drawn}
+//
+// Membership must not change without a coordinated activation block because
+// followers reject proposals for actions they do not allow with
+// FaultLeaderMistake.
+func TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActivation(t *testing.T) {
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
+
+	// The activation block 24559289 falls inside window 27288 (starting
+	// block 24559200, still pre-activation); window 27289 (starting
+	// block 24560100) is post-activation. Cover windows 27285-27292 so
+	// the range crosses the activation boundary.
+	firstWindow := uint64(27285)
+	const numWindows = 8
+
+	for i := uint64(0); i < numWindows; i++ {
+		windowIndex := firstWindow + i
+		coordinationBlock := windowIndex * coordinationFrequencyBlocks
+
+		window := newCoordinationWindow(coordinationBlock)
+
+		seed := sha256.Sum256(
+			big.NewInt(int64(window.coordinationBlock) + 2).Bytes(),
+		)
+
+		checklist := executor.getActionsChecklist(
+			window.index(),
+			seed,
+			coordinationBlock,
+		)
+
+		if checklist == nil {
+			t.Fatalf(
+				"window %d: expected non-nil checklist",
+				windowIndex,
+			)
+		}
+
+		// Expected membership set for this window.
+		expected := map[WalletActionType]bool{
+			ActionRedemption: true,
+		}
+
+		if coordinationBlock >= DepositSweepEveryWindowActivationBlock {
+			// Post-activation: DepositSweep and MovedFundsSweep are
+			// present on every window; MovingFunds stays %4-gated.
+			expected[ActionDepositSweep] = true
+			expected[ActionMovedFundsSweep] = true
+
+			if windowIndex%4 == 0 {
+				expected[ActionMovingFunds] = true
+			}
+		} else if windowIndex%4 == 0 {
+			// Pre-activation: all three extras are %4-gated together.
+			expected[ActionDepositSweep] = true
+			expected[ActionMovedFundsSweep] = true
+			expected[ActionMovingFunds] = true
+		}
+
+		// Heartbeat is appended (deterministically) only when the draw
+		// succeeds; if present, it is part of the expected set.
+		if slices.Contains(checklist, ActionHeartbeat) {
+			expected[ActionHeartbeat] = true
+		}
+
+		// Every checklist action must be an expected member.
+		for _, action := range checklist {
+			if !expected[action] {
+				t.Errorf(
+					"window %d: unexpected action %s in checklist %v",
+					windowIndex,
+					action,
+					checklist,
+				)
+			}
+
+			delete(expected, action)
+		}
+
+		// Every expected member must be present.
+		for action := range expected {
+			t.Errorf(
+				"window %d: expected action %s in checklist %v",
+				windowIndex,
+				action,
+				checklist,
+			)
+		}
+	}
+}
+
+// TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations
+// verifies that a post-activation window where DepositSweep leads (windowIndex%3 == 1)
+// contains both ActionReservationAnchor and ActionReservationReanchor when reservations
+// are active, and neither when reservations are inactive.
+func TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations(t *testing.T) {
+	// Window 27289 is post DepositSweepEveryWindowActivationBlock (24559289)
+	// and 27289 % 3 == 1, so DepositSweep leads.
+	coordinationBlock := uint64(24560100)
+	windowIndex := uint64(27289)
+
+	seed := sha256.Sum256(
+		big.NewInt(int64(coordinationBlock) + 2).Bytes(),
+	)
+
+	t.Run("post-activation with reservations active", func(t *testing.T) {
+		executor := &coordinationExecutor{
+			ethereumNetwork: ethereum.Developer,
+		}
+
+		checklist := executor.getActionsChecklist(
+			windowIndex,
+			seed,
+			coordinationBlock,
+		)
+
+		if len(checklist) < 2 || checklist[0] != ActionDepositSweep {
+			t.Fatalf("expected ActionDepositSweep at index 0, got %v", checklist)
+		}
+
+		if !slices.Contains(checklist, ActionReservationAnchor) {
+			t.Errorf("expected ActionReservationAnchor in checklist %v", checklist)
+		}
+		if !slices.Contains(checklist, ActionReservationReanchor) {
+			t.Errorf("expected ActionReservationReanchor in checklist %v", checklist)
+		}
+	})
+
+	t.Run("post-activation with reservations inactive", func(t *testing.T) {
+		executor := &coordinationExecutor{
+			ethereumNetwork: ethereum.Mainnet,
+		}
+
+		checklist := executor.getActionsChecklist(
+			windowIndex,
+			seed,
+			coordinationBlock,
+		)
+
+		if len(checklist) < 2 || checklist[0] != ActionDepositSweep {
+			t.Fatalf("expected ActionDepositSweep at index 0, got %v", checklist)
+		}
+
+		if slices.Contains(checklist, ActionReservationAnchor) {
+			t.Errorf("unexpected ActionReservationAnchor in checklist %v", checklist)
+		}
+		if slices.Contains(checklist, ActionReservationReanchor) {
+			t.Errorf("unexpected ActionReservationReanchor in checklist %v", checklist)
+		}
+	})
 }
 
 // TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
@@ -1226,66 +1393,91 @@ func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 
 // assertPostActivationSafety verifies the safety invariants that must hold
 // for every non-nil post-activation checklist:
-//   - ActionRedemption is at index 0.
-//   - ActionDepositSweep is present.
+//   - ActionDepositSweep is at index 0 and ActionRedemption at index 1 on
+//     windows where windowIndex%depositSweepLeadPeriodWindows == 1.
+//   - ActionRedemption is at index 0 and ActionDepositSweep at index 1 on
+//     all other windows.
 //   - ActionMovedFundsSweep is present.
 //   - ActionMovingFunds is absent on non-4th windows.
 func assertPostActivationSafety(
 	t *testing.T,
 	checklist []WalletActionType,
+	windowIndex uint64,
 	is4thWindow bool,
 ) {
 	t.Helper()
 
-	if checklist[0] != ActionRedemption {
-		t.Errorf(
-			"ActionRedemption must be at index 0, got %s",
-			checklist[0],
+	if len(checklist) < 3 {
+		t.Fatalf(
+			"post-activation checklist must have at least 3 actions, got %v",
+			checklist,
 		)
 	}
 
-	if !slices.Contains(checklist, ActionDepositSweep) {
-		t.Error(
-			"ActionDepositSweep must be present " +
-				"in every post-activation window",
-		)
+	expectedLead := []WalletActionType{ActionRedemption, ActionDepositSweep}
+	if windowIndex%depositSweepLeadPeriodWindows == 1 {
+		expectedLead = []WalletActionType{ActionDepositSweep, ActionRedemption}
+	}
+
+	for i, expected := range expectedLead {
+		if checklist[i] != expected {
+			t.Errorf(
+				"%s must be at index %d on window %d, got %s",
+				expected,
+				i,
+				windowIndex,
+				checklist[i],
+			)
+		}
 	}
 
 	if !slices.Contains(checklist, ActionMovedFundsSweep) {
 		t.Error(
 			"ActionMovedFundsSweep must be present " +
-				"in every post-activation window",
-		)
-	}
+ 				"in every post-activation window",
+ 		)
+ 	}
 
-	// ActionMovingFunds must NOT appear on non-4th windows. This is
-	// the key invariant protecting against excessive chain scans.
-	if !is4thWindow && slices.Contains(checklist, ActionMovingFunds) {
-		t.Error(
-			"ActionMovingFunds must not appear " +
-				"on non-4th windows post-activation",
-		)
-	}
-}
+ 	// ActionMovingFunds must NOT appear on non-4th windows. This is
+ 	// the key invariant protecting against excessive chain scans.
+ 	if !is4thWindow && slices.Contains(checklist, ActionMovingFunds) {
+ 		t.Error(
+ 			"ActionMovingFunds must not appear " +
+ 				"on non-4th windows post-activation",
+ 		)
+ 	}
+ }
 
-// assertChecklistOrdering verifies that actions appear in canonical priority
-// order: Redemption < DepositSweep < MovedFundsSweep < MovingFunds <
-// ReservationAnchor < ReservationReanchor < Heartbeat. Each consecutive pair
-// of actions must have strictly increasing priority values.
-func assertChecklistOrdering(
-	t *testing.T,
-	checklist []WalletActionType,
-) {
-	t.Helper()
+// assertChecklistOrdering verifies that actions appear in the canonical
+// priority order, which depends on the window index: on windows where
+// windowIndex%depositSweepLeadPeriodWindows == 1 DepositSweep leads
+// (DepositSweep < Redemption < MovedFundsSweep < MovingFunds <
+// ReservationAnchor < ReservationReanchor < Heartbeat), and on all other
+// windows Redemption leads (Redemption < DepositSweep < MovedFundsSweep <
+// MovingFunds < ReservationAnchor < ReservationReanchor < Heartbeat).
+// Each consecutive pair of actions must have strictly increasing priority
+// values.
+ func assertChecklistOrdering(
+ 	t *testing.T,
+ 	checklist []WalletActionType,
+	windowIndex uint64,
+ ) {
+ 	t.Helper()
 
-	actionPriority := map[WalletActionType]int{
-		ActionRedemption:          0,
-		ActionDepositSweep:        1,
-		ActionMovedFundsSweep:     2,
-		ActionMovingFunds:         3,
-		ActionReservationAnchor:   4,
-		ActionReservationReanchor: 5,
-		ActionHeartbeat:           6,
+ 	actionPriority := map[WalletActionType]int{
+ 		ActionMovedFundsSweep:     2,
+ 		ActionMovingFunds:         3,
+ 		ActionReservationAnchor:   4,
+ 		ActionReservationReanchor: 5,
+ 		ActionHeartbeat:           6,
+ 	}
+
+	if windowIndex%depositSweepLeadPeriodWindows == 1 {
+		actionPriority[ActionDepositSweep] = 0
+		actionPriority[ActionRedemption] = 1
+	} else {
+		actionPriority[ActionRedemption] = 0
+		actionPriority[ActionDepositSweep] = 1
 	}
 
 	for i := 1; i < len(checklist); i++ {
