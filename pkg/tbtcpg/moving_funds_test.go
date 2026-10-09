@@ -366,8 +366,6 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			tbtcChain := tbtcpg.NewLocalChain()
 
-			task := tbtcpg.NewMovingFundsTask(tbtcChain, nil)
-
 			walletOperators := []chain.Address{}
 			for _, operatorInfo := range test.walletOperators {
 				err := tbtcChain.SetOperatorID(
@@ -380,7 +378,8 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 				walletOperators = append(walletOperators, operatorInfo.Address)
 			}
 
-			memberIDs, operatorPosition, err := task.GetWalletMembersInfo(
+			memberIDs, operatorPosition, err := tbtcpg.GetWalletMembersInfo(
+				tbtcChain,
 				walletOperators,
 				test.executingOperator,
 			)

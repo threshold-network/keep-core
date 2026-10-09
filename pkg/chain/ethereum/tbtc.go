@@ -849,13 +849,24 @@ func parseReservationActionState(value uint8) (tbtc.ReservationActionState, erro
 // RequestReservationReanchor asks the Bridge (via its ReservationRouter
 // delegatecall target) to start a new reservation re-anchor action generation
 // for the given reservation, targeting the given wallet.
+//
+// walletMembersIDs and walletMemberIndex carry the caller's source-wallet
+// member proof: the source wallet signing group's member IDs and this
+// operator's 1-based position within them. A non-empty proof that validates
+// grants the source-wallet-member exemption from the target's third-party
+// re-anchor hold cap; an empty proof makes the request a plain third-party
+// request that is subject to the cap.
 func (tc *TbtcChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
+	walletMembersIDs []uint32,
+	walletMemberIndex uint32,
 ) error {
 	gasEstimate, err := tc.reservationRouter.RequestReservationReanchorGasEstimate(
 		reservationKey,
 		targetWalletPublicKeyHash,
+		walletMembersIDs,
+		big.NewInt(int64(walletMemberIndex)),
 	)
 	if err != nil {
 		return err
@@ -867,6 +878,8 @@ func (tc *TbtcChain) RequestReservationReanchor(
 	_, err = tc.reservationRouter.RequestReservationReanchor(
 		reservationKey,
 		targetWalletPublicKeyHash,
+		walletMembersIDs,
+		big.NewInt(int64(walletMemberIndex)),
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},

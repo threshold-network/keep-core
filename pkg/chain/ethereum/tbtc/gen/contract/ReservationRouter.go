@@ -20,9 +20,10 @@ import (
 
 	"github.com/ipfs/go-log"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/subscription"
+	ethereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	chainutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
+	"github.com/keep-network/keep-core/pkg/subscription"
+
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 )
 
@@ -946,6 +947,8 @@ func (rr *ReservationRouter) RequestReservationAcceptanceGasEstimate(
 func (rr *ReservationRouter) RequestReservationReanchor(
 	arg_reservationKey *big.Int,
 	arg_targetWalletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_walletMemberIndex *big.Int,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
@@ -955,6 +958,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 		fmt.Sprint(
 			arg_reservationKey,
 			arg_targetWalletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_walletMemberIndex,
 		),
 	)
 
@@ -984,6 +989,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 		transactorOptions,
 		arg_reservationKey,
 		arg_targetWalletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_walletMemberIndex,
 	)
 	if err != nil {
 		return transaction, rr.errorResolver.ResolveError(
@@ -993,6 +1000,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 			"requestReservationReanchor",
 			arg_reservationKey,
 			arg_targetWalletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_walletMemberIndex,
 		)
 	}
 
@@ -1020,6 +1029,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 				newTransactorOptions,
 				arg_reservationKey,
 				arg_targetWalletPubKeyHash,
+				arg_walletMembersIDs,
+				arg_walletMemberIndex,
 			)
 			if err != nil {
 				return nil, rr.errorResolver.ResolveError(
@@ -1029,6 +1040,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 					"requestReservationReanchor",
 					arg_reservationKey,
 					arg_targetWalletPubKeyHash,
+					arg_walletMembersIDs,
+					arg_walletMemberIndex,
 				)
 			}
 
@@ -1051,6 +1064,8 @@ func (rr *ReservationRouter) RequestReservationReanchor(
 func (rr *ReservationRouter) CallRequestReservationReanchor(
 	arg_reservationKey *big.Int,
 	arg_targetWalletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_walletMemberIndex *big.Int,
 	blockNumber *big.Int,
 ) error {
 	var result interface{} = nil
@@ -1066,6 +1081,8 @@ func (rr *ReservationRouter) CallRequestReservationReanchor(
 		&result,
 		arg_reservationKey,
 		arg_targetWalletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_walletMemberIndex,
 	)
 
 	return err
@@ -1074,6 +1091,8 @@ func (rr *ReservationRouter) CallRequestReservationReanchor(
 func (rr *ReservationRouter) RequestReservationReanchorGasEstimate(
 	arg_reservationKey *big.Int,
 	arg_targetWalletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_walletMemberIndex *big.Int,
 ) (uint64, error) {
 	var result uint64
 
@@ -1085,6 +1104,8 @@ func (rr *ReservationRouter) RequestReservationReanchorGasEstimate(
 		rr.transactor,
 		arg_reservationKey,
 		arg_targetWalletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_walletMemberIndex,
 	)
 
 	return result, err
@@ -1569,6 +1590,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 	arg_maxReservationsAmountPerWallet uint64,
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
+	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
@@ -1579,6 +1601,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 			arg_maxReservationsAmountPerWallet,
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
+			arg_maxThirdPartyReanchorHoldsPerWallet,
 		),
 	)
 
@@ -1609,6 +1632,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 		arg_maxReservationsAmountPerWallet,
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
+		arg_maxThirdPartyReanchorHoldsPerWallet,
 	)
 	if err != nil {
 		return transaction, rr.errorResolver.ResolveError(
@@ -1619,6 +1643,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 			arg_maxReservationsAmountPerWallet,
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
+			arg_maxThirdPartyReanchorHoldsPerWallet,
 		)
 	}
 
@@ -1647,6 +1672,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 				arg_maxReservationsAmountPerWallet,
 				arg_reservationMaxSingleAmount,
 				arg_maxActiveReservations,
+				arg_maxThirdPartyReanchorHoldsPerWallet,
 			)
 			if err != nil {
 				return nil, rr.errorResolver.ResolveError(
@@ -1657,6 +1683,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 					arg_maxReservationsAmountPerWallet,
 					arg_reservationMaxSingleAmount,
 					arg_maxActiveReservations,
+					arg_maxThirdPartyReanchorHoldsPerWallet,
 				)
 			}
 
@@ -1680,6 +1707,7 @@ func (rr *ReservationRouter) CallUpdateReservationCaps(
 	arg_maxReservationsAmountPerWallet uint64,
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
+	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
 	blockNumber *big.Int,
 ) error {
 	var result interface{} = nil
@@ -1696,6 +1724,7 @@ func (rr *ReservationRouter) CallUpdateReservationCaps(
 		arg_maxReservationsAmountPerWallet,
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
+		arg_maxThirdPartyReanchorHoldsPerWallet,
 	)
 
 	return err
@@ -1705,6 +1734,7 @@ func (rr *ReservationRouter) UpdateReservationCapsGasEstimate(
 	arg_maxReservationsAmountPerWallet uint64,
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
+	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
 ) (uint64, error) {
 	var result uint64
 
@@ -1717,6 +1747,7 @@ func (rr *ReservationRouter) UpdateReservationCapsGasEstimate(
 		arg_maxReservationsAmountPerWallet,
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
+		arg_maxThirdPartyReanchorHoldsPerWallet,
 	)
 
 	return result, err
@@ -2058,6 +2089,49 @@ func (rr *ReservationRouter) PendingReservedDepositsAtBlock(
 	return result, err
 }
 
+func (rr *ReservationRouter) PendingThirdPartyReanchorHolds(
+	arg_walletPubKeyHash [20]byte,
+) (uint32, error) {
+	result, err := rr.contract.PendingThirdPartyReanchorHolds(
+		rr.callerOptions,
+		arg_walletPubKeyHash,
+	)
+
+	if err != nil {
+		return result, rr.errorResolver.ResolveError(
+			err,
+			rr.callerOptions.From,
+			nil,
+			"pendingThirdPartyReanchorHolds",
+			arg_walletPubKeyHash,
+		)
+	}
+
+	return result, err
+}
+
+func (rr *ReservationRouter) PendingThirdPartyReanchorHoldsAtBlock(
+	arg_walletPubKeyHash [20]byte,
+	blockNumber *big.Int,
+) (uint32, error) {
+	var result uint32
+
+	err := chainutil.CallAtBlock(
+		rr.callerOptions.From,
+		blockNumber,
+		nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"pendingThirdPartyReanchorHolds",
+		&result,
+		arg_walletPubKeyHash,
+	)
+
+	return result, err
+}
+
 func (rr *ReservationRouter) ReservationActions(
 	arg_reservationKey *big.Int,
 	arg_requestNonce uint64,
@@ -2155,9 +2229,10 @@ func (rr *ReservationRouter) ReservationByAnchorUtxoAtBlock(
 }
 
 type reservationCaps struct {
-	MaxReservationsAmountPerWallet uint64
-	ReservationMaxSingleAmount     uint64
-	MaxActiveReservations          uint32
+	MaxReservationsAmountPerWallet      uint64
+	ReservationMaxSingleAmount          uint64
+	MaxActiveReservations               uint32
+	MaxThirdPartyReanchorHoldsPerWallet uint32
 }
 
 func (rr *ReservationRouter) ReservationCaps() (reservationCaps, error) {
@@ -3651,6 +3726,7 @@ type reservationRouterReservationCapsUpdatedFunc func(
 	MaxReservationsAmountPerWallet uint64,
 	ReservationMaxSingleAmount uint64,
 	MaxActiveReservations uint32,
+	MaxThirdPartyReanchorHoldsPerWallet uint32,
 	blockNumber uint64,
 )
 
@@ -3670,6 +3746,7 @@ func (rcus *RrReservationCapsUpdatedSubscription) OnEvent(
 					event.MaxReservationsAmountPerWallet,
 					event.ReservationMaxSingleAmount,
 					event.MaxActiveReservations,
+					event.MaxThirdPartyReanchorHoldsPerWallet,
 					event.Raw.BlockNumber,
 				)
 			}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -92,6 +93,14 @@ func newInFlightReanchorFixture(t *testing.T) (
 	})
 	tbtcChain.SetWalletReservations(sourceWalletPublicKeyHash, []*big.Int{reservationKey})
 
+	// A single source-wallet operator so the fresh re-anchor request
+	// carries a valid source-wallet member proof: the running operator is
+	// member 7 of a one-member signing group.
+	sourceOperator := chain.Address("0x00000000000000000000000000000000000000cd")
+	if err := tbtcChain.SetOperatorID(sourceOperator, 7); err != nil {
+		t.Fatal(err)
+	}
+
 	task = NewReservationReanchorTask(tbtcChain, btcChain)
 
 	return
@@ -147,9 +156,7 @@ func TestReservationReanchorTask_UnminedRequest_NextRoundRequestsAgain(t *testin
 	// mined-wait cannot find it and the pass ends without a proposal.
 	tbtcChain.SetNextReservationReanchorRequestPending()
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 1: unexpected error: %v", err)
 	}
@@ -167,9 +174,7 @@ func TestReservationReanchorTask_UnminedRequest_NextRoundRequestsAgain(t *testin
 	// request is issued and mined within the wait.
 	blockCounter.SetCurrentBlock(1900)
 
-	proposal, ok, err = task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err = task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 2: unexpected error: %v", err)
 	}
@@ -212,9 +217,7 @@ func TestReservationReanchorTask_UnminedRequest_MinedBeforeNextRound_Resumes(t *
 
 	tbtcChain.SetNextReservationReanchorRequestPending()
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 1: unexpected error: %v", err)
 	}
@@ -237,9 +240,7 @@ func TestReservationReanchorTask_UnminedRequest_MinedBeforeNextRound_Resumes(t *
 	)
 	blockCounter.SetCurrentBlock(1900)
 
-	proposal, ok, err = task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err = task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 2: unexpected error: %v", err)
 	}
@@ -283,9 +284,7 @@ func TestReservationReanchorTask_ReservationLeftWallet_NotRequestedAgain(t *test
 	tbtcChain, _, blockCounter, task, sourceWalletPublicKeyHash, targetWalletPublicKeyHash, reservationKey :=
 		newInFlightReanchorFixture(t)
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 1: unexpected error: %v", err)
 	}
@@ -309,9 +308,7 @@ func TestReservationReanchorTask_ReservationLeftWallet_NotRequestedAgain(t *test
 	}
 	blockCounter.SetCurrentBlock(1900)
 
-	proposal, ok, err = task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err = task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("round 2: unexpected error: %v", err)
 	}
@@ -354,9 +351,7 @@ func TestReservationReanchorTask_ResumeMarginGate(t *testing.T) {
 			time.Now().Add(7100*time.Second),
 		)
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -389,9 +384,7 @@ func TestReservationReanchorTask_ResumeMarginGate(t *testing.T) {
 			time.Now().Add(7300*time.Second),
 		)
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -436,9 +429,7 @@ func TestReservationReanchorTask_ClosingSource(t *testing.T) {
 			newInFlightReanchorFixture(t)
 		tbtcChain.SetWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{State: tbtc.StateClosing})
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -464,9 +455,7 @@ func TestReservationReanchorTask_ClosingSource(t *testing.T) {
 			time.Now().Add(24*time.Hour),
 		)
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -538,9 +527,7 @@ func TestReservationReanchorTask_FeeAboveCap_SendsNoRequest(t *testing.T) {
 	// About 110 vbytes at 1000 sat/vbyte is well above the 100000 cap.
 	btcChain.SetEstimateSatPerVByteFee(1, 1000)
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -567,9 +554,7 @@ func TestReservationReanchorTask_OneRequestPerPass(t *testing.T) {
 		)
 		tbtcChain.SetNextReservationReanchorRequestPending()
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -601,9 +586,7 @@ func TestReservationReanchorTask_OneRequestPerPass(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -631,8 +614,15 @@ type frontRunReanchorChain struct {
 func (c *frontRunReanchorChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
+	walletMembersIDs []uint32,
+	walletMemberIndex uint32,
 ) error {
-	return c.LocalChain.RequestReservationReanchor(reservationKey, c.frontRunTarget)
+	return c.LocalChain.RequestReservationReanchor(
+		reservationKey,
+		c.frontRunTarget,
+		walletMembersIDs,
+		walletMemberIndex,
+	)
 }
 
 // countingBlockCounter counts WaitForBlockHeight calls.
@@ -665,9 +655,7 @@ func TestReservationReanchorTask_FrontRunRequest_StopsWaiting(t *testing.T) {
 	chain := &frontRunReanchorChain{LocalChain: tbtcChain, frontRunTarget: frontRunTarget}
 	task := NewReservationReanchorTask(chain, btcChain)
 
-	proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-		WalletPublicKeyHash: sourceWalletPublicKeyHash,
-	})
+	proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -696,9 +684,7 @@ func TestReservationReanchorTask_RequestTimeGates(t *testing.T) {
 		tbtcChain, _, _, task, sourceWalletPublicKeyHash, _, reservationKey :=
 			newInFlightReanchorFixture(t)
 
-		if _, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		}); err != nil || !ok {
+		if _, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash)); err != nil || !ok {
 			t.Fatalf("round 1: expected a proposal, got ok=%v err=%v", ok, err)
 		}
 		// The generation is never proven and times out, which starts the
@@ -707,9 +693,7 @@ func TestReservationReanchorTask_RequestTimeGates(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("round 2: unexpected error: %v", err)
 		}
@@ -740,9 +724,7 @@ func TestReservationReanchorTask_RequestTimeGates(t *testing.T) {
 				big.NewInt(7003), bitcoin.Hash{0x73}, test.anchorValue,
 			)
 
-			_, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-				WalletPublicKeyHash: sourceWalletPublicKeyHash,
-			})
+			_, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -818,9 +800,7 @@ func TestReservationReanchorTask_AmountHeadroomPrecheck(t *testing.T) {
 			tbtcChain.SetWalletReservations(filledTarget, []*big.Int{filledKey})
 			tbtcChain.SetReservationCaps(test.amountCap, 0)
 
-			proposal, ok, err := task.Run(&tbtc.CoordinationProposalRequest{
-				WalletPublicKeyHash: sourceWalletPublicKeyHash,
-			})
+			proposal, ok, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
