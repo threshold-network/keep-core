@@ -13,9 +13,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/cmd"
-	"github.com/keep-network/keep-common/pkg/utils/decode"
+	chainutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
+	"github.com/keep-network/keep-core/pkg/cmd"
+
+	"github.com/keep-network/keep-core/pkg/decode"
+
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
 
@@ -54,6 +56,7 @@ func init() {
 		rrActiveReservationsCountCommand(),
 		rrGovernanceCommand(),
 		rrPendingReservedDepositsCommand(),
+		rrPendingThirdPartyReanchorHoldsCommand(),
 		rrReservationActionsCommand(),
 		rrReservationByAnchorUtxoCommand(),
 		rrReservationCapsCommand(),
@@ -69,7 +72,6 @@ func init() {
 		rrNotifyReservationStrandedCommand(),
 		rrNotifyStaleReservedDepositCommand(),
 		rrRequestReservationAcceptanceCommand(),
-		rrRequestReservationReanchorCommand(),
 		rrSubmitReservationAcceptanceProofCommand(),
 		rrSubmitReservationReanchorProofCommand(),
 		rrTransferGovernanceCommand(),
@@ -172,6 +174,49 @@ func rrPendingReservedDeposits(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.PendingReservedDepositsAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func rrPendingThirdPartyReanchorHoldsCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "pending-third-party-reanchor-holds [arg_walletPubKeyHash]",
+		Short:                 "Calls the view method pendingThirdPartyReanchorHolds on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  rrPendingThirdPartyReanchorHolds,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func rrPendingThirdPartyReanchorHolds(c *cobra.Command, args []string) error {
+	contract, err := initializeReservationRouter(c)
+	if err != nil {
+		return err
+	}
+
+	arg_walletPubKeyHash, err := decode.ParseBytes20(args[0])
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_walletPubKeyHash, a bytes20, from passed value %v",
+			args[0],
+		)
+	}
+
+	result, err := contract.PendingThirdPartyReanchorHoldsAtBlock(
+		arg_walletPubKeyHash,
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -961,80 +1006,6 @@ func rrRequestReservationAcceptance(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func rrRequestReservationReanchorCommand() *cobra.Command {
-	c := &cobra.Command{
-		Use:                   "request-reservation-reanchor [arg_reservationKey] [arg_targetWalletPubKeyHash]",
-		Short:                 "Calls the nonpayable method requestReservationReanchor on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(2),
-		RunE:                  rrRequestReservationReanchor,
-		SilenceUsage:          true,
-		DisableFlagsInUseLine: true,
-	}
-
-	c.PreRunE = cmd.NonConstArgsChecker
-	cmd.InitNonConstFlags(c)
-
-	return c
-}
-
-func rrRequestReservationReanchor(c *cobra.Command, args []string) error {
-	contract, err := initializeReservationRouter(c)
-	if err != nil {
-		return err
-	}
-
-	arg_reservationKey, err := hexutil.DecodeBig(args[0])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_reservationKey, a uint256, from passed value %v",
-			args[0],
-		)
-	}
-	arg_targetWalletPubKeyHash, err := decode.ParseBytes20(args[1])
-	if err != nil {
-		return fmt.Errorf(
-			"couldn't parse parameter arg_targetWalletPubKeyHash, a bytes20, from passed value %v",
-			args[1],
-		)
-	}
-
-	var (
-		transaction *types.Transaction
-	)
-
-	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
-		// Do a regular submission. Take payable into account.
-		transaction, err = contract.RequestReservationReanchor(
-			arg_reservationKey,
-			arg_targetWalletPubKeyHash,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput(transaction.Hash())
-	} else {
-		// Do a call.
-		err = contract.CallRequestReservationReanchor(
-			arg_reservationKey,
-			arg_targetWalletPubKeyHash,
-			cmd.BlockFlagValue.Int,
-		)
-		if err != nil {
-			return err
-		}
-
-		cmd.PrintOutput("success")
-
-		cmd.PrintOutput(
-			"the transaction was not submitted to the chain; " +
-				"please add the `--submit` flag",
-		)
-	}
-
-	return nil
-}
-
 func rrSubmitReservationAcceptanceProofCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "submit-reservation-acceptance-proof [arg_txInfo_json] [arg_proof_json] [arg_reservationKey] [arg_requestNonce]",
@@ -1276,9 +1247,9 @@ func rrTransferGovernance(c *cobra.Command, args []string) error {
 
 func rrUpdateReservationCapsCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "update-reservation-caps [arg_maxReservationsAmountPerWallet] [arg_reservationMaxSingleAmount] [arg_maxActiveReservations]",
+		Use:                   "update-reservation-caps [arg_maxReservationsAmountPerWallet] [arg_reservationMaxSingleAmount] [arg_maxActiveReservations] [arg_maxThirdPartyReanchorHoldsPerWallet]",
 		Short:                 "Calls the nonpayable method updateReservationCaps on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(3),
+		Args:                  cmd.ArgCountChecker(4),
 		RunE:                  rrUpdateReservationCaps,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
@@ -1317,6 +1288,13 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			args[2],
 		)
 	}
+	arg_maxThirdPartyReanchorHoldsPerWallet, err := decode.ParseUint[uint32](args[3], 32)
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_maxThirdPartyReanchorHoldsPerWallet, a uint32, from passed value %v",
+			args[3],
+		)
+	}
 
 	var (
 		transaction *types.Transaction
@@ -1328,6 +1306,7 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			arg_maxReservationsAmountPerWallet,
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
+			arg_maxThirdPartyReanchorHoldsPerWallet,
 		)
 		if err != nil {
 			return err
@@ -1340,6 +1319,7 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			arg_maxReservationsAmountPerWallet,
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
+			arg_maxThirdPartyReanchorHoldsPerWallet,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
