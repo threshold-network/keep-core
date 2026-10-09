@@ -41,6 +41,8 @@ type movingFundsCommitmentSubmission struct {
 type reservationReanchorRequestSubmission struct {
 	ReservationKey            *big.Int
 	TargetWalletPublicKeyHash [20]byte
+	WalletMembersIDs          []uint32
+	WalletMemberIndex         uint32
 }
 
 // reservationCapacity is a wallet's reservation count and amount, as in
@@ -1798,6 +1800,8 @@ func buildReservationReanchorProposalValidationKey(
 func (lc *LocalChain) RequestReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
+	walletMembersIDs []uint32,
+	walletMemberIndex uint32,
 ) error {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
@@ -1807,6 +1811,8 @@ func (lc *LocalChain) RequestReservationReanchor(
 		&reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(reservationKey),
 			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+			WalletMembersIDs:          walletMembersIDs,
+			WalletMemberIndex:         walletMemberIndex,
 		},
 	)
 
@@ -1879,6 +1885,8 @@ func (lc *LocalChain) RequestReservationReanchor(
 		&reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(reservationKey),
 			TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
+			WalletMembersIDs:          walletMembersIDs,
+			WalletMemberIndex:         walletMemberIndex,
 		},
 	)
 
@@ -2056,6 +2064,8 @@ func (lc *LocalChain) GetReservationReanchorRequestAttempts() []*reservationRean
 		attempts[i] = &reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(a.ReservationKey),
 			TargetWalletPublicKeyHash: a.TargetWalletPublicKeyHash,
+			WalletMembersIDs:          a.WalletMembersIDs,
+			WalletMemberIndex:         a.WalletMemberIndex,
 		}
 	}
 	return attempts
@@ -2458,7 +2468,46 @@ func (lc *LocalChain) GetReservationReanchorRequestSubmissions() []*reservationR
 		copy[i] = &reservationReanchorRequestSubmission{
 			ReservationKey:            new(big.Int).Set(s.ReservationKey),
 			TargetWalletPublicKeyHash: s.TargetWalletPublicKeyHash,
+			WalletMembersIDs:          s.WalletMembersIDs,
+			WalletMemberIndex:         s.WalletMemberIndex,
 		}
 	}
 	return copy
+}
+
+// reanchorOperatorAddress is the source-wallet operator the re-anchor test
+// fixtures seed: a single-operator signing group, so a fresh re-anchor
+// request carries a valid source-wallet member proof (member 7 of a
+// one-member group at index 1).
+const reanchorOperatorAddress = "0x00000000000000000000000000000000000000cd"
+
+// seedReanchorSourceOperator registers the shared re-anchor operator on the
+// chain (idempotent) and fills the request's WalletOperators/ExecutingOperator
+// so the fresh re-anchor request path carries a source-wallet member proof.
+func seedReanchorSourceOperator(
+	tbtcChain *LocalChain,
+	req *tbtc.CoordinationProposalRequest,
+) {
+	if err := tbtcChain.SetOperatorID(
+		chain.Address(reanchorOperatorAddress),
+		7,
+	); err != nil {
+		panic(err)
+	}
+	req.WalletOperators = []chain.Address{chain.Address(reanchorOperatorAddress)}
+	req.ExecutingOperator = chain.Address(reanchorOperatorAddress)
+}
+
+// reanchorSourceRequest builds a coordination request for the given source
+// wallet carrying the shared re-anchor operator, so Run's fresh request path
+// is exercised with a valid source-wallet member proof.
+func reanchorSourceRequest(
+	tbtcChain *LocalChain,
+	walletPublicKeyHash [20]byte,
+) *tbtc.CoordinationProposalRequest {
+	req := &tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: walletPublicKeyHash,
+	}
+	seedReanchorSourceOperator(tbtcChain, req)
+	return req
 }

@@ -48,9 +48,7 @@ func TestReservationReanchorTask_SkipsYoungResumeTarget(t *testing.T) {
 			t, tbtcChain, targetWalletPublicKeyHash, reservationKey, 4, timeoutAt,
 		)
 
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, shouldExecute, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
@@ -77,9 +75,7 @@ func TestReservationReanchorTask_SkipsYoungResumeTarget(t *testing.T) {
 			t, tbtcChain, targetWalletPublicKeyHash, reservationKey, 5, timeoutAt,
 		)
 
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, shouldExecute, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
@@ -290,9 +286,7 @@ func TestReservationReanchorTask_CooldownGateUsesChainTime(t *testing.T) {
 		reservation.ReanchorCooldownUntil = uint32(chainHead.Add(time.Hour).Unix())
 		tbtcChain.SetReservation(reservationKey, reservation)
 
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, shouldExecute, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
@@ -331,9 +325,7 @@ func TestReservationReanchorTask_CooldownGateUsesChainTime(t *testing.T) {
 		reservation.ReanchorCooldownUntil = uint32(chainHead.Add(-time.Hour).Unix())
 		tbtcChain.SetReservation(reservationKey, reservation)
 
-		proposal, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		proposal, shouldExecute, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
@@ -400,9 +392,7 @@ func TestReservationReanchorTask_WaitingOnAgedTargetGauge(t *testing.T) {
 	)
 
 	run := func() (bool, error) {
-		_, shouldExecute, err := task.Run(&tbtc.CoordinationProposalRequest{
-			WalletPublicKeyHash: sourceWalletPublicKeyHash,
-		})
+		_, shouldExecute, err := task.Run(reanchorSourceRequest(tbtcChain, sourceWalletPublicKeyHash))
 		return shouldExecute, err
 	}
 

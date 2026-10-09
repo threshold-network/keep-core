@@ -599,9 +599,17 @@ type Chain interface {
 type ReservationChain interface {
 	// RequestReservationReanchor requests a reservation re-anchor action
 	// generation for the given reservation, targeting the given wallet.
+	//
+	// walletMembersIDs and walletMemberIndex carry the caller's source-wallet
+	// member proof: the source wallet signing group's member IDs and this
+	// operator's 1-based position within them. A non-empty proof that
+	// validates exempts the request from the target's third-party re-anchor
+	// hold cap; an empty proof is a plain third-party request subject to it.
 	RequestReservationReanchor(
 		reservationKey *big.Int,
 		targetWalletPublicKeyHash [20]byte,
+		walletMembersIDs []uint32,
+		walletMemberIndex uint32,
 	) error
 
 	// SubmitReservationAcceptanceProof submits an SPV proof for the given

@@ -247,6 +247,38 @@ func (rrt *ReservationReanchorTask) Run(
 		walletParameters.CreationPeriod,
 	)
 
+	// Source wallet member proof for the fresh re-anchor request: the
+	// signing group's member IDs and this operator's 1-based position,
+	// built exactly the way the moving funds commitment builds its own
+	// (see GetWalletMembersInfo). A caller that is not a member of the
+	// source wallet cannot claim the exemption from the target's
+	// third-party re-anchor hold cap, so the fresh request path is
+	// skipped for it: the on-chain router rejects a non-empty member
+	// proof that fails registry validation, and an empty proof is just
+	// a third-party request the operator does not own.
+	var sourceWalletMembersIDs []uint32
+	var sourceWalletMemberIndex uint32
+	if len(request.WalletOperators) > 0 {
+		var err error
+		sourceWalletMembersIDs, sourceWalletMemberIndex, err = GetWalletMembersInfo(
+			rrt.chain,
+			request.WalletOperators,
+			request.ExecutingOperator,
+		)
+		if err != nil {
+			if !errors.Is(err, ErrNoExecutingOperator) {
+				return nil, false, fmt.Errorf(
+					"cannot get source wallet members IDs: [%w]",
+					err,
+				)
+			}
+			taskLogger.Infof(
+				"the executing operator is not a member of the source " +
+					"wallet; the reservation re-anchor request will be skipped",
+			)
+		}
+	}
+
 	var waitingOnAgedTarget bool
 
 reservationLoop:
@@ -397,6 +429,8 @@ reservationLoop:
 				reservationKey,
 				freshAction.TargetWalletPublicKeyHash,
 				0,
+				sourceWalletMembersIDs,
+				sourceWalletMemberIndex,
 			)
 			if err != nil {
 				// The resume path issues no chain write of its own (the
@@ -483,7 +517,20 @@ reservationLoop:
 					reservationKey,
 					target,
 					0,
+					sourceWalletMembersIDs,
+					sourceWalletMemberIndex,
 				)
+				if errors.Is(err, errReanchorNotSourceWalletMember) {
+					// This operator is not a member of the source wallet, so
+					// no fresh re-anchor request can be sent for any target:
+					// stop trying targets for this reservation this pass.
+					taskLogger.Infof(
+						"executing operator is not a member of the source "+
+							"wallet, skipping reservation re-anchor for [0x%x]",
+						reservationKey,
+					)
+					continue reservationLoop
+				}
 				if err == nil {
 					// Not waiting; reset the gauge.
 					if rrt.metricsRecorder != nil {
@@ -621,6 +668,8 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 	reservationKey *big.Int,
 	targetWalletPublicKeyHash [20]byte,
 	fee int64,
+	sourceWalletMembersIDs []uint32,
+	sourceWalletMemberIndex uint32,
 ) (*tbtc.ReservationReanchorProposal, error) {
 	if reservationKey == nil {
 		return nil, fmt.Errorf("reservation key is required")
@@ -722,6 +771,15 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		return nil, err
 	}
 
+	// The fresh request carries the source wallet's member proof: the signing
+	// group's member IDs and this operator's 1-based position. An operator
+	// that is not a proven member of the source wallet cannot claim the
+	// exemption from the target's third-party re-anchor hold cap, so no
+	// request is sent at all.
+	if len(sourceWalletMembersIDs) == 0 {
+		return nil, errReanchorNotSourceWalletMember
+	}
+
 	taskLogger.Infof(
 		"requesting reservation re-anchor for [0x%x] to wallet [0x%x]",
 		reservationKey,
@@ -731,6 +789,8 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 	if err := rrt.chain.RequestReservationReanchor(
 		reservationKey,
 		targetWalletPublicKeyHash,
+		sourceWalletMembersIDs,
+		sourceWalletMemberIndex,
 	); err != nil {
 		return nil, fmt.Errorf("cannot request reservation re-anchor: [%w]", err)
 	}
@@ -1044,6 +1104,13 @@ func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 // genuine RPC/chain-read failure and is propagated so the coordinator
 // retries.
 var errNoLiveTargetWallet = errors.New("no live wallet available for re-anchor target")
+
+// errReanchorNotSourceWalletMember signals that this operator is not a
+// proven member of the source wallet, so the fresh re-anchor request is
+// not sent at all (see ProposeReservationReanchor).
+var errReanchorNotSourceWalletMember = errors.New(
+	"operator is not a member of the source wallet",
+)
 
 // find returns a target wallet with headroom for anchorValue, loading more
 // candidates only when the ones already found have none.
