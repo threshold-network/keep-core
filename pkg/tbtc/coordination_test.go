@@ -863,6 +863,7 @@ func TestCoordinationExecutor_Coordinate_ReservationChainedLifecycle(
 			membershipValidator,
 			protocolLatch,
 			window,
+			nil,
 		)
 
 		expectedLeader := leaderForWindow(window)
