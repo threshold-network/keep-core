@@ -156,6 +156,21 @@ type ReservationActionTimeoutWatcher struct {
 	// authoritative signal. It is a constructor parameter, like the
 	// fields above, so a watcher can never be left half-wired.
 	metricsRecorder MetricsRecorder
+
+	// reservationParamsState is the last infeasible-parameter state the
+	// feasibility check observed (see reservationParamsStateKey): an
+	// empty string means the last successful check found the parameters
+	// feasible, a non-empty key means infeasible. The check
+	// compares the new state against it so a distinct bad state is
+	// logged at most once, and a fix flips the log back to the
+	// recovery line.
+	reservationParamsState string
+
+	// reservationParamsReadFailing remembers whether the last
+	// feasibility check's parameter read failed, so a read failure is
+	// logged once per failure stretch rather than once per tick (see
+	// logReservationParamsReadFailure).
+	reservationParamsReadFailing bool
 }
 
 type pendingAction struct {
@@ -303,6 +318,15 @@ func (ratw *ReservationActionTimeoutWatcher) Run(ctx context.Context) error {
 // tick is rechecked before this tick's own batch processing runs.
 func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 	ratw.drainStrandingRechecks()
+
+	// 0. Re-check the on-chain reservation parameters for feasibility
+	// (deposit reveal-ahead window vs. reservation term, amount caps vs.
+	// the deposit dust threshold): an infeasible set makes reserved
+	// deposits impossible network-wide, which operators cannot see
+	// from on-chain activity alone - no reveals succeed. The check is
+	// alarm-only (a log plus clientinfo.MetricReservationParamsInfeasible)
+	// and never blocks the tick below.
+	ratw.checkReservationParamsFeasibility()
 
 	// 1. Scan new acceptance and re-anchor action requests. A scan error
 	// does not skip the timeout checks below: generations found before

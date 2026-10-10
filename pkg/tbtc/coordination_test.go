@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -697,6 +698,247 @@ func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
 			)
 		})
 	}
+}
+
+// TestCoordinationExecutor_Coordinate_ReservationChainedLifecycle drives a
+// single reservation through two consecutive coordination windows on the
+// shared 3-operator, real-broadcast-channel, real-leader-election harness:
+// in window N the generator (as the leader sees it) offers a
+// ReservationAnchorProposal for the reservation and all three operators
+// converge on it; in window N+1 the generator's state has advanced past the
+// accepted anchor, so the same reservation is offered as a
+// ReservationReanchorProposal and all three converge again. The generator
+// state is advanced only after window N's coordination result is observed,
+// mirroring how a real proposal generator would treat an accepted
+// reservation anchor as the prerequisite for offering a re-anchor. The test
+// additionally proves the two proposals refer to the same reservation: the
+// window N+1 ReservationReanchorProposal carries the same ReservationKey
+// (the m1 deposit key the real anchor action would derive from the window N
+// anchor's funding outpoint) as the one reserved in window N.
+func TestCoordinationExecutor_Coordinate_ReservationChainedLifecycle(
+	t *testing.T,
+) {
+	// 900 and 1800 are consecutive coordination windows, both at the
+	// multiples of coordinationFrequencyBlocks coordinate() accepts
+	// (window.index() != 0). Every executor below is constructed with
+	// ethereum.Developer (activation block 0, see runCoordinationRound),
+	// so the reservation actions checklist gate is satisfied at either
+	// height.
+	windowN := newCoordinationWindow(900)
+	windowN1 := newCoordinationWindow(1800)
+
+	channelName := t.Name()
+
+	operator1 := newCoordinationOperator(t, 1, windowN.coordinationBlock, channelName)
+	operator2 := newCoordinationOperator(t, 2, windowN.coordinationBlock, channelName)
+	operator3 := newCoordinationOperator(t, 3, windowN.coordinationBlock, channelName)
+	operators := []*coordinationOperatorFixture{
+		operator1, operator2, operator3,
+	}
+
+	coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
+
+	// The seed in window N+1 is derived from the safe-block hash at
+	// windowN1.coordinationBlock-32, which newCoordinationOperator has not
+	// seeded; without it every operator's coordinate() would fail at
+	// getSeed. The wallet's key hash and this safe-block hash are identical
+	// across every operator in this file, so the derived seed - and hence
+	// the elected leader - is identical on all of them, independent of the
+	// coordinationBlock value.
+	for _, currentOperator := range operators {
+		localChain, ok := currentOperator.chain.(*localChain)
+		if !ok {
+			t.Fatal("operator chain fixture is not a localChain")
+		}
+		localChain.setBlockHashByNumber(
+			windowN1.coordinationBlock-32,
+			"1522996cbcbc38fc924a46f4df5f9064279d3ab43396e58386dac9b87440d64f",
+		)
+	}
+
+	anchorProposal := &ReservationAnchorProposal{
+		DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02, 0x03},
+		DepositFundingOutputIndex: 1,
+		RequestNonce:              7,
+		AnchorTxFee:               big.NewInt(1500),
+	}
+
+	// The m1 identity: a reservation key is its deposit's key, so the
+	// re-anchor must point back to the very same deposit (and hence the
+	// same reservation) the window N anchor reserved. BuildDepositKey is
+	// on the Chain interface, so no type assertion is needed.
+	reservationKey := operator1.chain.BuildDepositKey(
+		anchorProposal.DepositFundingTxHash,
+		anchorProposal.DepositFundingOutputIndex,
+	)
+
+	reanchorProposal := &ReservationReanchorProposal{
+		ReservationKey:            reservationKey,
+		RequestNonce:              8,
+		TargetWalletPublicKeyHash: [20]byte{0xf8, 0x7e, 0xb7},
+		ReanchorTxFee:             big.NewInt(1200),
+	}
+
+	// Stateful generator: before window N's result is observed it offers
+	// the anchor; once window N has run (advancing the generator's state,
+	// the way a real proposal generator would treat an accepted anchor as
+	// the prerequisite for a re-anchor) it offers the re-anchor for the
+	// same reservation instead. The advancement is synchronized with an
+	// atomic, so the generator is safe to share across the three
+	// concurrent leader-routine goroutines that coordinate() spawns, the
+	// same way the harness shares proposalGenerator across every operator.
+	var generatorAdvanced atomic.Bool
+	generatorAdvanced.Store(false)
+
+	proposalGenerator := newMockCoordinationProposalGenerator(
+		func(
+			walletPublicKeyHash [20]byte,
+			actionsChecklist []WalletActionType,
+			_ uint,
+		) (CoordinationProposal, error) {
+			for _, action := range actionsChecklist {
+				if walletPublicKeyHash != publicKeyHash {
+					continue
+				}
+
+				switch {
+				case generatorAdvanced.Load() &&
+					action == ActionReservationReanchor:
+					return reanchorProposal, nil
+				case !generatorAdvanced.Load() &&
+					action == ActionReservationAnchor:
+					return anchorProposal, nil
+				}
+			}
+
+			return &NoopProposal{}, nil
+		},
+	)
+
+	membershipValidator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		coordinatedWallet.signingGroupOperators,
+		Connect().Signing(),
+	)
+
+	protocolLatch := generator.NewProtocolLatch()
+	// leaderForWindow computes the coordinator leader a given operator would
+	// elect for a given window, through the real getSeed/getLeader path.
+	// The seed depends only on the wallet's public key hash and the
+	// safe-block hash the operator's chain fake has been seeded with, so
+	// the leader is identical across every operator for a fixed window;
+	// it need not equal operator2 (the seed here is not fixed to the one
+	// that makes operator2 win, as in TestCoordinationExecutor_Coordinate).
+	leaderForWindow := func(window *coordinationWindow) chain.Address {
+		t.Helper()
+
+		executor := &coordinationExecutor{
+			chain:             operator1.chain,
+			coordinatedWallet: coordinatedWallet,
+		}
+
+		seed, err := executor.getSeed(window.coordinationBlock)
+		if err != nil {
+			t.Fatalf(
+				"failed to compute seed for window [%v]: %v",
+				window.coordinationBlock,
+				err,
+			)
+		}
+
+		return executor.getLeader(seed)
+	}
+
+	runWindow := func(
+		window *coordinationWindow,
+		expectedProposal CoordinationProposal,
+	) []*coordinationReport {
+		t.Helper()
+
+		reports := runCoordinationRound(
+			t,
+			operators,
+			coordinatedWallet,
+			proposalGenerator,
+			membershipValidator,
+			protocolLatch,
+			window,
+		)
+
+		expectedLeader := leaderForWindow(window)
+
+		for _, report := range reports {
+			if report.err != nil {
+				t.Fatalf(
+					"operator %d: unexpected error: %v",
+					report.operatorIndex,
+					report.err,
+				)
+			}
+			if len(report.result.faults) != 0 {
+				t.Fatalf(
+					"operator %d: unexpected faults: %v",
+					report.operatorIndex,
+					report.result.faults,
+				)
+			}
+
+			expectedResult := &coordinationResult{
+				wallet:   coordinatedWallet,
+				window:   window,
+				leader:   expectedLeader,
+				proposal: expectedProposal,
+				faults:   nil,
+			}
+
+			if !reflect.DeepEqual(expectedResult, report.result) {
+				t.Errorf(
+					"operator %d: unexpected result:\n"+
+						"expected: %+v\nactual:   %+v",
+					report.operatorIndex,
+					expectedResult,
+					report.result,
+				)
+			}
+		}
+
+		return reports
+	}
+
+	// Window N: the anchor is offered, all three operators converge on it
+	// with the same leader and no faults.
+	runWindow(windowN, anchorProposal)
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state after window N",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+
+	// Window N's result has been observed: advance the generator's state
+	// so the next window sees the reservation past its accepted anchor.
+	generatorAdvanced.Store(true)
+
+	// Window N+1: the re-anchor for the same reservation is offered, all
+	// three operators converge on it with the same leader and no faults.
+	runWindow(windowN1, reanchorProposal)
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state after window N+1",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+
+	// The re-anchor's ReservationKey must be the very key the window N
+	// anchor reserved - the same reservation identity across both windows.
+	testutils.AssertBigIntsEqual(
+		t,
+		"re-anchor reservation key",
+		reservationKey,
+		reanchorProposal.ReservationKey,
+	)
 }
 
 func TestCoordinationExecutor_GetSeed(t *testing.T) {

@@ -148,6 +148,21 @@ type Chain interface {
 	// reservation parameters.
 	ReservationParameters() (*tbtc.ReservationParameters, error)
 
+	// GetDepositParameters gets the current on-chain value of the Bridge
+	// deposit parameters (dust threshold, treasury fee divisor, tx
+	// max fee, reveal-ahead period).
+	GetDepositParameters() (tbtc.DepositParameters, error)
+
+	// ReservationCaps returns the cap parameters that gate reservation
+	// acceptance via the reservationRouter binding: the maximum
+	// reservation amount a single wallet may custody and the maximum
+	// single-reservation amount.
+	ReservationCaps() (
+		maxReservationsAmountPerWallet uint64,
+		reservationMaxSingleAmount uint64,
+		err error,
+	)
+
 	// WalletReservations returns the reservation keys for all reservations
 	// currently custodied by the given wallet.
 	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)

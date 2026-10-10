@@ -748,6 +748,7 @@ func TestReservationGaugesRegistered(t *testing.T) {
 		MetricReservationWalletReservationsCount,
 		MetricReservationVaultFeeDebtSat,
 		MetricReservationVaultFeeReserveTbtcBaseUnits,
+		MetricReservationParamsInfeasible,
 	}
 
 	for _, name := range reservationGauges {
@@ -795,6 +796,7 @@ func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
 		MetricReservationWalletReservationsCount,
 		MetricReservationVaultFeeDebtSat,
 		MetricReservationVaultFeeReserveTbtcBaseUnits,
+		MetricReservationParamsInfeasible,
 	}
 
 	for _, name := range reservationGauges {
