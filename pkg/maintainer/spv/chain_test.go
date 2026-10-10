@@ -109,6 +109,15 @@ type localChain struct {
 	submittedAcceptanceTimeouts []*big.Int
 	reservationParameters       *tbtc.ReservationParameters
 	reservationAnchorUtxoIndex  map[[36]byte]*big.Int
+
+	// depositParameters is the value GetDepositParameters returns when
+	// installed via setDepositParameters; unset, it defaults to a zero
+	// (feasible) set. reservationCapsPerWallet / reservationCapsSingle
+	// are the ReservationCaps returns installed via setReservationCaps;
+	// unset, they default to zero (caps disabled), which is feasible.
+	depositParameters        tbtc.DepositParameters
+	reservationCapsPerWallet uint64
+	reservationCapsSingle    uint64
 	// walletTerminationCauses is keyed by wallet public key hash; a missing
 	// entry defaults to tbtc.WalletTerminationCauseUnknown, matching the
 	// production zero-value default when no pre-termination event is found.
@@ -1531,4 +1540,54 @@ func TestIsReservedDeposit_PointerIdentity(t *testing.T) {
 	if !isReserved {
 		t.Fatal("expected deposit to be reserved")
 	}
+}
+
+// GetDepositParameters returns the deposit parameters previously
+// installed via setDepositParameters, or the zero-value set if none was
+// set.
+func (lc *localChain) GetDepositParameters() (
+	tbtc.DepositParameters,
+	error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.depositParameters, nil
+}
+
+// setDepositParameters installs deposit parameters for
+// GetDepositParameters to return.
+func (lc *localChain) setDepositParameters(
+	params tbtc.DepositParameters,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.depositParameters = params
+}
+
+// ReservationCaps returns the cap parameters previously installed via
+// setReservationCaps, or zero (caps disabled) if none was set.
+func (lc *localChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.reservationCapsPerWallet, lc.reservationCapsSingle, nil
+}
+
+// setReservationCaps installs cap parameters for ReservationCaps to
+// return.
+func (lc *localChain) setReservationCaps(
+	perWallet uint64,
+	single uint64,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationCapsPerWallet = perWallet
+	lc.reservationCapsSingle = single
 }

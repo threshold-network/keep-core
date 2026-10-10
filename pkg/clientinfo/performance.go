@@ -396,6 +396,7 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 			MetricReservationWalletReservationsCount,
 			MetricReservationVaultFeeDebtSat,
 			MetricReservationVaultFeeReserveTbtcBaseUnits,
+			MetricReservationParamsInfeasible,
 		)
 	}
 
@@ -775,6 +776,17 @@ const (
 	//     treat the gauge as an indicator, not for exact accounting.
 	MetricReservationVaultFeeDebtSat              = "reservation_vault_fee_debt_sat"
 	MetricReservationVaultFeeReserveTbtcBaseUnits = "reservation_vault_fee_reserve_tbtc_base_units"
+
+	// MetricReservationParamsInfeasible is a 0/1 alarm set by the SPV
+	// maintainer's stale-deposit watcher pass when the Bridge's on-chain
+	// parameters make reserved deposits impossible: either the deposit
+	// reveal-ahead period exceeds the reservation term plus the 24h
+	// refund safety margin, or a non-zero reservation amount cap
+	// (per-wallet, single-amount, or max-total) sits below the deposit
+	// dust threshold. 1 means at least one of those infeasibilities is
+	// currently live on-chain, 0 means reserved deposits are feasible.
+	// It is an alarm only: the node keeps running while it is 1.
+	MetricReservationParamsInfeasible = "reservation_params_infeasible"
 )
 
 // Network join request failure reasons. These are the low-cardinality
