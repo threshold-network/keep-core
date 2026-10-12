@@ -183,17 +183,28 @@ func (oko *ReservationKeeperObserver) ObservationPass() error {
 	}
 
 	// 3. Refresh the wallet-state cache on its wall-clock interval.
-	oko.refreshWalletStates()
+	if err := oko.refreshWalletStates(); err != nil {
+		return err
+	}
 
 	// 4. Compute the four value gauges from the current chain state.
+	// Every read a gauge depends on must succeed: skipping a failed
+	// item would publish a lower count with a fresh timestamp, which
+	// reads as healthy.
 	lateProofCount := oko.countLateProofsAtRisk(headNow)
-	noTargetCount := oko.countReanchorsWithoutTarget(
+	noTargetCount, err := oko.countReanchorsWithoutTarget(
 		reservationParameters,
 		walletParameters,
 		headTime,
 	)
-	unrequestedCount, evictedDeposits :=
+	if err != nil {
+		return err
+	}
+	unrequestedCount, evictedDeposits, err :=
 		oko.countUnrequestedDepositsAtRisk(headNow, reservationParameters)
+	if err != nil {
+		return err
+	}
 	for _, key := range evictedDeposits {
 		delete(oko.trackedDeposits, key)
 	}
@@ -453,7 +464,7 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 	reservationParameters *tbtc.ReservationParameters,
 	walletParameters tbtc.WalletParameters,
 	headTime time.Time,
-) int {
+) (int, error) {
 	// A shared target set: any eligible target suffices for every
 	// source, since the remaining per-reservation checks (anchor
 	// floor, signing window) depend only on the reservation and the
@@ -507,25 +518,21 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 
 		keys, err := oko.spvChain.WalletReservations(sourcePkh)
 		if err != nil {
-			reservationKeeperObserverLogger.Warnf(
-				"keeper observer: failed to read reservations for "+
-					"source wallet [0x%x]: [%v]",
+			return 0, fmt.Errorf(
+				"failed to read reservations for source wallet [0x%x]: [%w]",
 				sourcePkh,
 				err,
 			)
-			continue
 		}
 		for _, key := range keys {
 			reservation, err := oko.spvChain.GetReservation(key)
 			if err != nil {
-				reservationKeeperObserverLogger.Warnf(
-					"keeper observer: failed to read reservation "+
-						"[%v] on source [0x%x]: [%v]",
+				return 0, fmt.Errorf(
+					"failed to read reservation [%v] on source [0x%x]: [%w]",
 					key,
 					sourcePkh,
 					err,
 				)
-				continue
 			}
 			if reservation.State != tbtc.ReservationStateActive {
 				continue
@@ -538,7 +545,7 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 		}
 	}
 
-	return count
+	return count, nil
 }
 
 // countUnrequestedDepositsAtRisk counts the tracked pending reserved
@@ -553,7 +560,7 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 	headNow uint64,
 	reservationParameters *tbtc.ReservationParameters,
-) (int, []string) {
+) (int, []string, error) {
 	riskWindowEnd := headNow + unrequestedDepositRiskWindowSeconds
 	margin := uint64(reservationDepositRefundSafetyMarginSeconds)
 	actionTimeout := uint64(reservationParameters.ReservationActionTimeout)
@@ -563,13 +570,11 @@ func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 	for key, deposit := range oko.trackedDeposits {
 		reserved, err := oko.spvChain.IsReservedDeposit(deposit.depositKey)
 		if err != nil {
-			reservationKeeperObserverLogger.Warnf(
-				"keeper observer: failed to read reserved-deposit "+
-					"record for [%v]: [%v]",
+			return 0, nil, fmt.Errorf(
+				"failed to read reserved-deposit record for [%v]: [%w]",
 				deposit.depositKey,
 				err,
 			)
-			continue
 		}
 		if !reserved {
 			// Released to the pool, stale, or accepted: the
@@ -580,13 +585,11 @@ func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 
 		reservation, err := oko.spvChain.GetReservation(deposit.depositKey)
 		if err != nil {
-			reservationKeeperObserverLogger.Warnf(
-				"keeper observer: failed to read reservation for "+
-					"deposit [%v]: [%v]",
+			return 0, nil, fmt.Errorf(
+				"failed to read reservation for deposit [%v]: [%w]",
 				deposit.depositKey,
 				err,
 			)
-			continue
 		}
 		if reservation != nil && reservation.RequestNonce > 0 {
 			// An acceptance request was made: no longer an
@@ -608,16 +611,15 @@ func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 		}
 	}
 
-	return count, evicted
+	return count, evicted, nil
 }
 
 // refreshWalletStates re-reads the on-chain data of the cached wallets
 // on a wall-clock refresh interval: newly-discovered wallets are read
 // immediately, and every cached one at most once per
-// walletCacheRefreshInterval. A failed read keeps the last known data
-// and is retried on the next pass; the pass itself is not failed by a
-// single wallet read.
-func (oko *ReservationKeeperObserver) refreshWalletStates() {
+// walletCacheRefreshInterval. A failed read fails the pass, because a
+// wallet with unknown or outdated state can hide a retiring source.
+func (oko *ReservationKeeperObserver) refreshWalletStates() error {
 	now := time.Now()
 	for pkh, state := range oko.cachedWallets {
 		if !state.fetchedAt.IsZero() &&
@@ -626,16 +628,12 @@ func (oko *ReservationKeeperObserver) refreshWalletStates() {
 		}
 		wallet, err := oko.spvChain.GetWallet(pkh)
 		if err != nil {
-			reservationKeeperObserverLogger.Warnf(
-				"keeper observer: failed to read wallet [0x%x]: [%v]",
-				pkh,
-				err,
-			)
-			continue
+			return fmt.Errorf("failed to read wallet [0x%x]: [%w]", pkh, err)
 		}
 		state.data = wallet
 		state.fetchedAt = now
 	}
+	return nil
 }
 
 // publishGauges sets all five keeper watchdog gauges on the recorder.

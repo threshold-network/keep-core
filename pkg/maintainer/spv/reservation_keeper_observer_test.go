@@ -651,7 +651,7 @@ func TestReservationKeeperObserver_FailedPassKeepsState(t *testing.T) {
 // pass. Skipping the item instead would publish a lower count with a
 // fresh timestamp, which the monitor would read as healthy.
 func TestReservationKeeperObserver_SourceReadFailureFailsPass(t *testing.T) {
-	spvChain, observer, recorder, head, _ := observerFixture(t)
+	spvChain, observer, recorder, _, _ := observerFixture(t)
 	spvChain.setWalletParameters(
 		tbtc.WalletParameters{CreationPeriod: 30 * 24 * 3600},
 	)
@@ -697,7 +697,6 @@ func TestReservationKeeperObserver_SourceReadFailureFailsPass(t *testing.T) {
 	); got != baseline {
 		t.Errorf("observation timestamp moved after a failed read: got %v", got)
 	}
-	_ = head
 }
 
 func TestReservationKeeperObserver_DepositReadFailureFailsPass(t *testing.T) {
