@@ -796,6 +796,154 @@ func (rr *ReservationRouter) NotifyStaleReservedDepositGasEstimate(
 }
 
 // Transaction submission.
+func (rr *ReservationRouter) ReleaseReservedDepositToPool(
+	arg_depositKey *big.Int,
+	arg_vault common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	rrLogger.Debug(
+		"submitting transaction releaseReservedDepositToPool",
+		" params: ",
+		fmt.Sprint(
+			arg_depositKey,
+			arg_vault,
+		),
+	)
+
+	rr.transactionMutex.Lock()
+	defer rr.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *rr.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := rr.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := rr.contract.ReleaseReservedDepositToPool(
+		transactorOptions,
+		arg_depositKey,
+		arg_vault,
+	)
+	if err != nil {
+		return transaction, rr.errorResolver.ResolveError(
+			err,
+			rr.transactorOptions.From,
+			nil,
+			"releaseReservedDepositToPool",
+			arg_depositKey,
+			arg_vault,
+		)
+	}
+
+	rrLogger.Infof(
+		"submitted transaction releaseReservedDepositToPool with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go rr.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := rr.contract.ReleaseReservedDepositToPool(
+				newTransactorOptions,
+				arg_depositKey,
+				arg_vault,
+			)
+			if err != nil {
+				return nil, rr.errorResolver.ResolveError(
+					err,
+					rr.transactorOptions.From,
+					nil,
+					"releaseReservedDepositToPool",
+					arg_depositKey,
+					arg_vault,
+				)
+			}
+
+			rrLogger.Infof(
+				"submitted transaction releaseReservedDepositToPool with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	rr.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (rr *ReservationRouter) CallReleaseReservedDepositToPool(
+	arg_depositKey *big.Int,
+	arg_vault common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		rr.transactorOptions.From,
+		blockNumber, nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"releaseReservedDepositToPool",
+		&result,
+		arg_depositKey,
+		arg_vault,
+	)
+
+	return err
+}
+
+func (rr *ReservationRouter) ReleaseReservedDepositToPoolGasEstimate(
+	arg_depositKey *big.Int,
+	arg_vault common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		rr.callerOptions.From,
+		rr.contractAddress,
+		"releaseReservedDepositToPool",
+		rr.contractABI,
+		rr.transactor,
+		arg_depositKey,
+		arg_vault,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (rr *ReservationRouter) RequestReservationAcceptance(
 	arg_reservationKey *big.Int,
 	arg_walletPubKeyHash [20]byte,
@@ -5816,6 +5964,207 @@ func (rr *ReservationRouter) PastReservedDepositMarkedStaleEvents(
 	}
 
 	events := make([]*abi.ReservationRouterReservedDepositMarkedStale, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (rr *ReservationRouter) ReservedDepositReleasedToPoolEvent(
+	opts *ethereum.SubscribeOpts,
+	depositKeyFilter []*big.Int,
+	depositorFilter []common.Address,
+) *RrReservedDepositReleasedToPoolSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &RrReservedDepositReleasedToPoolSubscription{
+		rr,
+		opts,
+		depositKeyFilter,
+		depositorFilter,
+	}
+}
+
+type RrReservedDepositReleasedToPoolSubscription struct {
+	contract         *ReservationRouter
+	opts             *ethereum.SubscribeOpts
+	depositKeyFilter []*big.Int
+	depositorFilter  []common.Address
+}
+
+type reservationRouterReservedDepositReleasedToPoolFunc func(
+	DepositKey *big.Int,
+	Depositor common.Address,
+	Vault common.Address,
+	blockNumber uint64,
+)
+
+func (rdrtps *RrReservedDepositReleasedToPoolSubscription) OnEvent(
+	handler reservationRouterReservedDepositReleasedToPoolFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.ReservationRouterReservedDepositReleasedToPool)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.DepositKey,
+					event.Depositor,
+					event.Vault,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := rdrtps.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rdrtps *RrReservedDepositReleasedToPoolSubscription) Pipe(
+	sink chan *abi.ReservationRouterReservedDepositReleasedToPool,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(rdrtps.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := rdrtps.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - rdrtps.opts.PastBlocks
+
+				rrLogger.Infof(
+					"subscription monitoring fetching past ReservedDepositReleasedToPool events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := rdrtps.contract.PastReservedDepositReleasedToPoolEvents(
+					fromBlock,
+					nil,
+					rdrtps.depositKeyFilter,
+					rdrtps.depositorFilter,
+				)
+				if err != nil {
+					rrLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				rrLogger.Infof(
+					"subscription monitoring fetched [%v] past ReservedDepositReleasedToPool events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := rdrtps.contract.watchReservedDepositReleasedToPool(
+		sink,
+		rdrtps.depositKeyFilter,
+		rdrtps.depositorFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rr *ReservationRouter) watchReservedDepositReleasedToPool(
+	sink chan *abi.ReservationRouterReservedDepositReleasedToPool,
+	depositKeyFilter []*big.Int,
+	depositorFilter []common.Address,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return rr.contract.WatchReservedDepositReleasedToPool(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			depositKeyFilter,
+			depositorFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		rrLogger.Warnf(
+			"subscription to event ReservedDepositReleasedToPool had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		rrLogger.Errorf(
+			"subscription to event ReservedDepositReleasedToPool failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (rr *ReservationRouter) PastReservedDepositReleasedToPoolEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	depositKeyFilter []*big.Int,
+	depositorFilter []common.Address,
+) ([]*abi.ReservationRouterReservedDepositReleasedToPool, error) {
+	iterator, err := rr.contract.FilterReservedDepositReleasedToPool(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		depositKeyFilter,
+		depositorFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past ReservedDepositReleasedToPool events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.ReservationRouterReservedDepositReleasedToPool, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
