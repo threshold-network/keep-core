@@ -145,6 +145,15 @@ type localChain struct {
 	newWalletRegisteredEvents            []*tbtc.NewWalletRegisteredEvent
 	reservationAcceptanceRequestedEvents []*tbtc.ReservationAcceptanceRequestedEvent
 	reservationReanchorRequestedEvents   []*tbtc.ReservationReanchorRequestedEvent
+	// walletParameters is the value GetWalletParameters returns when
+	// installed via setWalletParameters; unset, it defaults to a zero
+	// (no creation-period gate) set.
+	walletParameters tbtc.WalletParameters
+	// reservationVaultFeeDebt and reservationVaultFeeDebtErr are the
+	// value/error ReservationVaultFeeDebtSat returns when installed via
+	// setReservationVaultFeeDebt.
+	reservationVaultFeeDebt    uint64
+	reservationVaultFeeDebtErr error
 
 	txProofDifficultyFactor *big.Int
 	currentEpoch            uint64
@@ -1590,4 +1599,58 @@ func (lc *localChain) setReservationCaps(
 
 	lc.reservationCapsPerWallet = perWallet
 	lc.reservationCapsSingle = single
+}
+
+// setGetReservationActionErr installs a chain-wide error for
+// GetReservationAction, mirroring the other error-injection fields.
+func (lc *localChain) setGetReservationActionErr(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.getReservationActionErr = err
+}
+
+// GetWalletParameters returns the value previously installed via
+// setWalletParameters, or a zero set when none was installed.
+func (lc *localChain) GetWalletParameters() (
+	tbtc.WalletParameters,
+	error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.walletParameters, nil
+}
+
+// setWalletParameters installs the wallet parameters GetWalletParameters
+// returns.
+func (lc *localChain) setWalletParameters(parameters tbtc.WalletParameters) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.walletParameters = parameters
+}
+
+// ReservationVaultFeeDebtSat returns the value/error previously installed
+// via setReservationVaultFeeDebt.
+func (lc *localChain) ReservationVaultFeeDebtSat(
+	_ chain.Address,
+) (uint64, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.reservationVaultFeeDebt, lc.reservationVaultFeeDebtErr
+}
+
+// setReservationVaultFeeDebt installs the value/error
+// ReservationVaultFeeDebtSat returns.
+func (lc *localChain) setReservationVaultFeeDebt(
+	debtSat uint64,
+	err error,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationVaultFeeDebt = debtSat
+	lc.reservationVaultFeeDebtErr = err
 }

@@ -637,6 +637,62 @@ func WireReservationWatchers(
 		}
 	}()
 
+	// Start the read-only keeper observer: it publishes the keeper
+	// watchdog gauges that the monitoring service alerts on. It sends
+	// no transactions and does not feed the startup self-check below,
+	// which waits for exactly the three scans above. A crash or a Run
+	// error restarts it with the same backoff as the other watchers;
+	// until it is back, the stale observation timestamp is the alert.
+	keeperObserver := NewReservationKeeperObserver(
+		spvChain,
+		activationBlock,
+		metricsRecorder,
+	)
+	go func() {
+		runOnce := func() (shouldRestart bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					reservationWiringLogger.Errorf(
+						"reservation keeper observer crashed (recovered panic: [%v]); "+
+							"restarting with backoff",
+						r,
+					)
+					recordReservationWatcherDeath(metricsRecorder)
+					if fn := getReservationWatcherPanicRecovered(); fn != nil {
+						fn()
+					}
+					shouldRestart = true
+				}
+			}()
+
+			if err := keeperObserver.Run(
+				ctx,
+				getReservationActionTimeoutPollInterval(),
+			); err != nil {
+				reservationWiringLogger.Errorf(
+					"reservation keeper observer is not running: [%v]; "+
+						"restarting with backoff",
+					err,
+				)
+				recordReservationWatcherDeath(metricsRecorder)
+				return true
+			}
+			return false
+		}
+
+		for {
+			shouldRestart := runOnce()
+			if !shouldRestart || ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(getReservationWatcherRestartBackoff()):
+			}
+		}
+	}()
+
 	// The misconfiguration self-check (see the doc comment above) can no
 	// longer run synchronously now that the other two watchers' initial
 	// passes have moved into their background goroutines (see above):

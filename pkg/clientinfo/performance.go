@@ -399,6 +399,10 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 			MetricReservationVaultFeeDebtSat,
 			MetricReservationVaultFeeReserveTbtcBaseUnits,
 			MetricReservationParamsInfeasible,
+			MetricReservationAcceptanceLateProofAtRiskCount,
+			MetricReservationReanchorNoEligibleTargetCount,
+			MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+			MetricReservationKeeperObservationTimestamp,
 		)
 	}
 
@@ -795,6 +799,29 @@ const (
 	// currently live on-chain, 0 means reserved deposits are feasible.
 	// It is an alarm only: the node keeps running while it is 1.
 	MetricReservationParamsInfeasible = "reservation_params_infeasible"
+
+	// Reservation keeper watchdog gauges, set by the SPV maintainer's
+	// reservation keeper observer after each fully successful
+	// observation pass. A failed pass leaves every value, including
+	// the observation timestamp, unchanged, so a stale timestamp is
+	// the signal that the values below can no longer be trusted.
+	//
+	//   - MetricReservationAcceptanceLateProofAtRiskCount counts
+	//     acceptance generations (Pending or TimedOut, not Settled)
+	//     whose late-settlement edge timeoutAt + termSeconds is within
+	//     7 days of the chain head.
+	//   - MetricReservationReanchorNoEligibleTargetCount counts Active
+	//     reservations on MovingFunds or Closing wallets that no
+	//     source-wallet member re-anchor can move.
+	//   - MetricReservationUnrequestedDepositDeadlineAtRiskCount counts
+	//     pending reserved deposits with no acceptance request whose
+	//     last possible request time is within 1 day of the chain head.
+	//   - MetricReservationKeeperObservationTimestamp is the chain head
+	//     unix time of the last fully successful pass.
+	MetricReservationAcceptanceLateProofAtRiskCount        = "reservation_acceptance_late_proof_at_risk_count"
+	MetricReservationReanchorNoEligibleTargetCount         = "reservation_reanchor_no_eligible_target_count"
+	MetricReservationUnrequestedDepositDeadlineAtRiskCount = "reservation_unrequested_deposit_deadline_at_risk_count"
+	MetricReservationKeeperObservationTimestamp            = "reservation_keeper_observation_timestamp"
 )
 
 // Network join request failure reasons. These are the low-cardinality

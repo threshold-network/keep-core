@@ -239,4 +239,19 @@ type Chain interface {
 	// Watchers compare it with on-chain timestamps (action deadlines,
 	// dissolution eligibility) instead of the local wall clock.
 	GetLatestBlockTimestamp() (time.Time, error)
+
+	// GetWalletParameters gets the current value of the Bridge wallet
+	// parameters (creation period and the balance bounds). The keeper
+	// observer uses the creation period for its re-anchor target age
+	// gate, mirroring the coordinator's target search.
+	GetWalletParameters() (tbtc.WalletParameters, error)
+
+	// ReservationVaultFeeDebtSat returns the given ReservationVault's
+	// outstanding in-kind fee debt in satoshi, read from the vault's
+	// inKindFeeDebtSat view. The caller passes the vault address it
+	// already read from ReservationParameters. If the address is the
+	// zero address (reservations disabled, vault not configured) the
+	// method returns zero with a nil error - the unconfigured skip
+	// sentinel the metrics side consumes, not a chain error.
+	ReservationVaultFeeDebtSat(reservationVault chain.Address) (uint64, error)
 }
