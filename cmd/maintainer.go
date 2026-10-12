@@ -144,7 +144,14 @@ func initializeMaintainerMetrics(
 		return nil
 	}
 
-	perfMetrics := clientinfo.NewPerformanceMetrics(ctx, registry, clientConfig.Tbtc.ReservationsEnabled)
+	// A maintainer run only for reservation proofs (for example an
+	// independent keeper without an operator client) has the client flag
+	// off but still hosts the reservation watchers, so either flag turns
+	// the reservation gauges on. Without registration SetGauge drops
+	// every value.
+	reservationGaugesEnabled := clientConfig.Tbtc.ReservationsEnabled ||
+		clientConfig.Maintainer.Spv.ReservationProofsEnabled
+	perfMetrics := clientinfo.NewPerformanceMetrics(ctx, registry, reservationGaugesEnabled)
 
 	registry.RegisterMetricClientInfo(build.Version)
 	registry.ObserveEthConnectivity(
