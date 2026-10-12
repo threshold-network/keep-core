@@ -154,6 +154,7 @@ type stubAction struct {
 	TermSeconds             uint32
 	DissolutionDelay        uint32
 	MinAmount               uint64
+	ThirdPartyHold          bool
 }
 
 type stubParameters struct {
@@ -659,6 +660,13 @@ func (h *validatorHarness) setWalletReservationsCount(
 	h.transact("setWalletReservationsCount", pubKeyHash, count)
 }
 
+func (h *validatorHarness) setWalletReservationsAmount(
+	pubKeyHash [20]byte,
+	amount uint64,
+) {
+	h.transact("setWalletReservationsAmount", pubKeyHash, amount)
+}
+
 // depositKeyFor reproduces the on-chain deposit/reservation key derivation:
 // uint256(keccak256(abi.encodePacked(fundingTxHash, fundingOutputIndex))).
 func depositKeyFor(fundingTxHash bitcoin.Hash, outputIndex uint32) *big.Int {
@@ -1104,6 +1112,8 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 		timeoutAt                uint32
 		maxReservationsPerWallet uint32
 		targetReservationsCount  uint32
+		maxReservationsAmount    uint64
+		targetReservationsAmount uint64
 	}
 
 	// validateReanchor seeds a valid re-anchor, lets adjust change one
@@ -1120,6 +1130,8 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 			timeoutAt:                now + uint32((24 * time.Hour).Seconds()),
 			maxReservationsPerWallet: 10,
 			targetReservationsCount:  1,
+			maxReservationsAmount:    1_000,
+			targetReservationsAmount: 0,
 		}
 		adjust(now, &s)
 
@@ -1138,8 +1150,14 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 		h.setReservationParameters(stubParameters{
 			MaxReservationsPerWallet: s.maxReservationsPerWallet,
 		})
+		h.setReservationCaps(stubCaps{
+			MaxReservationsAmountPerWallet: s.maxReservationsAmount,
+		})
 		h.setWalletReservationsCount(
 			targetWalletPubKeyHash, s.targetReservationsCount,
+		)
+		h.setWalletReservationsAmount(
+			targetWalletPubKeyHash, s.targetReservationsAmount,
 		)
 		h.commit()
 
@@ -1184,10 +1202,30 @@ func TestValidateReservationReanchorProposal(t *testing.T) {
 		}
 	})
 
-	t.Run("target wallet count above the cap is rejected", func(t *testing.T) {
+	t.Run("target wallet count above the cap is accepted", func(t *testing.T) {
+		// Design C: requestReservationReanchor already reserved this
+		// slot against the target wallet, and privileged hand-offs may
+		// exceed the target's per-wallet count cap. The validator no
+		// longer re-checks the count at signing time, so a target that
+		// sits above the cap still validates.
 		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
 			s.targetReservationsCount = s.maxReservationsPerWallet + 1
 		})
-		mustContainError(t, err, "Wallet reservations cap exceeded")
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
+	})
+
+	t.Run("target wallet reserved amount above the cap is accepted", func(t *testing.T) {
+		// Design C: the target wallet's reserved amount may sit above
+		// the per-wallet amount cap when a privileged hand-off reserved
+		// it. The validator no longer re-checks the reserved amount at
+		// signing time, so this still validates.
+		err := validateReanchor(t, func(now uint32, s *reanchorSeed) {
+			s.targetReservationsAmount = s.maxReservationsAmount + 1
+		})
+		if err != nil {
+			t.Fatalf("unexpected validation error: [%v]", err)
+		}
 	})
 }

@@ -1325,14 +1325,14 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 // 100000) and targetWallets Live wallets filled to their reservation
 // counts. registrationOrder is newest-first: the target search examines
 // candidates in that order (tie-breaker for the fallback pick).
-// privileged makes the fake chain treat the re-anchor request as a
-// proven source-wallet member request: the target's per-wallet count and
-// amount caps are skipped on request and on validation.
+// The source wallet's single operator is registered on the chain so the
+// fresh re-anchor request builds a real source-wallet member proof; the
+// fake then derives privilege from that proof (a member request skips the
+// target's per-wallet count and amount caps; an empty proof keeps them).
 func newHandoffFallbackFixture(
 	state tbtc.WalletState,
 	targetWallets [][20]byte,
 	fills []uint32,
-	privileged bool,
 ) (*tbtcpg.LocalChain, *tbtcpg.LocalBitcoinChain, *big.Int) {
 	source := hexToByte20("5555555555555555555555555555555555555555")
 
@@ -1421,18 +1421,17 @@ func newHandoffFallbackFixture(
 	})
 	tbtcChain.SetWalletReservations(source, []*big.Int{resKey})
 
-	if privileged {
-		tbtcChain.SetReanchorRequestPrivileged(true)
-	}
 
 	return tbtcChain, btcChain, resKey
 }
 
-// runHandoffFallbackRequest runs the re-anchor task for a source wallet
-// carried by an operator and reports the run outcome. walletOperators
-// and executingOperator mirror how the coordination layer populates the
-// request: when executingOperator is one of the wallet's operators,
-// the fresh request is a proven source-wallet member request.
+// runHandoffFallbackRequest registers the wallet's operators on the fake
+// chain (so the fresh re-anchor request builds a real source-wallet
+// member proof via GetWalletMembersInfo, mirroring how the coordination
+// layer populates the request), runs the re-anchor task, and reports the
+// outcome. When executingOperator is one of walletOperators, the request
+// carries a non-empty member proof and the fake treats it as privileged;
+// otherwise the proof is empty and the request stays subject to the caps.
 func runHandoffFallbackRequest(
 	t *testing.T,
 	tbtcChain *tbtcpg.LocalChain,
@@ -1442,6 +1441,16 @@ func runHandoffFallbackRequest(
 	executingOperator chain.Address,
 ) (*tbtc.ReservationReanchorProposal, bool, error) {
 	t.Helper()
+
+	// Register each wallet operator's ID so GetWalletMembersInfo can build
+	// the member proof the fresh request carries. Distinct IDs per address.
+	for i, operator := range walletOperators {
+		if err := tbtcChain.SetOperatorID(
+			operator, chain.OperatorID(i+1),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
 	proposal, found, err := task.Run(&tbtc.CoordinationProposalRequest{
@@ -1480,7 +1489,6 @@ func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testi
 			tbtc.StateMovingFunds,
 			[][20]byte{fullWallet, otherWallet},
 			[]uint32{5, 3},
-			true,
 		)
 
 		proposal, found, err := runHandoffFallbackRequest(
@@ -1511,7 +1519,6 @@ func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testi
 			tbtc.StateClosing,
 			[][20]byte{fullWallet, otherWallet},
 			[]uint32{5, 5},
-			true,
 		)
 
 		proposal, found, err := runHandoffFallbackRequest(
@@ -1541,6 +1548,12 @@ func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testi
 				proposal.TargetWalletPublicKeyHash,
 			)
 		}
+		// Only a request with a member proof is privileged on-chain and
+		// may book a target above its ordinary caps.
+		submissions := tbtcChain.GetReservationReanchorRequestSubmissions()
+		if len(submissions) != 1 || len(submissions[0].WalletMembersIDs) == 0 {
+			t.Fatalf("expected one re-anchor request with a member proof, got %d", len(submissions))
+		}
 
 		// The request landed on the over-cap target: the privileged
 		// contract accepts it, so the fake's ledger now shows one
@@ -1564,7 +1577,6 @@ func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testi
 			tbtc.StateMovingFunds,
 			[][20]byte{fullWallet, otherWallet},
 			[]uint32{5, 6},
-			true,
 		)
 
 		proposal, found, err := runHandoffFallbackRequest(
@@ -1606,7 +1618,6 @@ func TestReservationReanchorTask_NonMemberStillSendsNothingWhenFull(t *testing.T
 			tbtc.StateMovingFunds,
 			[][20]byte{fullWallet, otherWallet},
 			[]uint32{5, 5},
-			false,
 		)
 
 		proposal, found, err := runHandoffFallbackRequest(
@@ -1633,7 +1644,6 @@ func TestReservationReanchorTask_NonMemberStillSendsNothingWhenFull(t *testing.T
 			tbtc.StateClosing,
 			[][20]byte{fullWallet, otherWallet},
 			[]uint32{5, 5},
-			false,
 		)
 
 		proposal, found, err := runHandoffFallbackRequest(
