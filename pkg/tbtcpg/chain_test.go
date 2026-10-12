@@ -109,9 +109,14 @@ type LocalChain struct {
 	// the wallet's custodied reservations it forms the wallet's
 	// walletReservationInfo ledger entry (see walletReservationInfoLocked).
 	reanchorReservedCapacity map[[20]byte]reservationCapacity
+	// reanchorRequestPrivileged models the privileged (proven
+	// source-wallet member) request: the contract skips the target
+	// wallet's per-wallet count and amount caps for such a request,
+	// but still adds to them. Default false keeps the fake mirroring
+	// the ordinary third-party request.
+	reanchorRequestPrivileged bool
 	// pendingNextReanchorRequest makes the next RequestReservationReanchor
 	// submission succeed without writing a generation, modeling a
-	// submission still unconfirmed in the mempool (or dropped from it).
 	pendingNextReanchorRequest bool
 	// reservationReanchorValidationCalls counts calls to
 	// ValidateReservationReanchorProposal, so tests can observe whether
@@ -1690,25 +1695,32 @@ func (lc *LocalChain) ValidateReservationReanchorProposal(
 	if err != nil {
 		return fmt.Errorf("cannot get reservation parameters: [%v]", err)
 	}
-	count, err := lc.WalletReservationsCount(proposal.TargetWalletPublicKeyHash)
-	if err != nil {
-		return fmt.Errorf("cannot get wallet reservations count: [%v]", err)
-	}
-	if count > params.MaxReservationsPerWallet {
-		return fmt.Errorf("wallet reservations cap exceeded")
-	}
-
-	maxAmount, _, err := lc.ReservationCaps()
-	if err != nil {
-		return fmt.Errorf("cannot get reservation caps: [%v]", err)
-	}
-	if maxAmount > 0 {
-		amount, err := lc.WalletReservationsAmount(proposal.TargetWalletPublicKeyHash)
+	// A privileged (proven source-wallet member) re-anchor skips the
+	// target's per-wallet count and amount caps, exactly like the
+	// request path; the ordinary request keeps both checks.
+	if lc.reanchorRequestPrivileged {
+		// No cap checks for the privileged request.
+	} else {
+		count, err := lc.WalletReservationsCount(proposal.TargetWalletPublicKeyHash)
 		if err != nil {
-			return fmt.Errorf("cannot get wallet reservations amount: [%v]", err)
+			return fmt.Errorf("cannot get wallet reservations count: [%v]", err)
 		}
-		if amount > maxAmount {
-			return fmt.Errorf("wallet reserved amount cap exceeded")
+		if count > params.MaxReservationsPerWallet {
+			return fmt.Errorf("wallet reservations cap exceeded")
+		}
+
+		maxAmount, _, err := lc.ReservationCaps()
+		if err != nil {
+			return fmt.Errorf("cannot get reservation caps: [%v]", err)
+		}
+		if maxAmount > 0 {
+			amount, err := lc.WalletReservationsAmount(proposal.TargetWalletPublicKeyHash)
+			if err != nil {
+				return fmt.Errorf("cannot get wallet reservations amount: [%v]", err)
+			}
+			if amount > maxAmount {
+				return fmt.Errorf("wallet reserved amount cap exceeded")
+			}
 		}
 	}
 	if proposal.ReanchorTxFee == nil || proposal.ReanchorTxFee.Sign() <= 0 {
@@ -1872,12 +1884,17 @@ func (lc *LocalChain) RequestReservationReanchor(
 	targetCount, targetAmount := lc.walletReservationInfoLocked(
 		targetWalletPublicKeyHash,
 	)
-	if targetCount+1 > params.MaxReservationsPerWallet {
-		return fmt.Errorf("Wallet reservations cap exceeded")
-	}
-	if maxAmount := lc.reservationCapsLocked()[0]; maxAmount != 0 &&
-		targetAmount+anchorAmount > maxAmount {
-		return fmt.Errorf("Wallet reserved amount cap exceeded")
+	if !lc.reanchorRequestPrivileged {
+		// A privileged (proven source-wallet member) request skips the
+		// target's per-wallet count and amount caps; the counts are
+		// still added below, exactly like the ordinary path.
+		if targetCount+1 > params.MaxReservationsPerWallet {
+			return fmt.Errorf("Wallet reservations cap exceeded")
+		}
+		if maxAmount := lc.reservationCapsLocked()[0]; maxAmount != 0 &&
+			targetAmount+anchorAmount > maxAmount {
+			return fmt.Errorf("Wallet reserved amount cap exceeded")
+		}
 	}
 
 	lc.reservationReanchorRequestSubmissions = append(
@@ -2080,6 +2097,17 @@ func (lc *LocalChain) SetNextReservationReanchorRequestPending() {
 	defer lc.mutex.Unlock()
 
 	lc.pendingNextReanchorRequest = true
+}
+
+// SetReanchorRequestPrivileged makes RequestReservationReanchor behave
+// like a privileged request (the caller proven to be a source-wallet
+// member): the target wallet's per-wallet count and amount caps are
+// skipped, but the counts are still added.
+func (lc *LocalChain) SetReanchorRequestPrivileged(privileged bool) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reanchorRequestPrivileged = privileged
 }
 
 // NotifyMovingFundsBelowDust records a submitted below-dust notification

@@ -2,6 +2,7 @@ package tbtcpg_test
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -1315,6 +1316,342 @@ func TestReservationReanchorTask_AmountCapFillLeadsToNextCandidate(t *testing.T)
 				alternateTargetWalletPublicKeyHash,
 				reanchorProposal.TargetWalletPublicKeyHash,
 			)
+		}
+	})
+}
+
+// newHandoffFallbackFixture builds a re-anchor chain with a source wallet
+// in state state that custodies a single Active reservation (anchor value
+// 100000) and targetWallets Live wallets filled to their reservation
+// counts. registrationOrder is newest-first: the target search examines
+// candidates in that order (tie-breaker for the fallback pick).
+// privileged makes the fake chain treat the re-anchor request as a
+// proven source-wallet member request: the target's per-wallet count and
+// amount caps are skipped on request and on validation.
+func newHandoffFallbackFixture(
+	state tbtc.WalletState,
+	targetWallets [][20]byte,
+	fills []uint32,
+	privileged bool,
+) (*tbtcpg.LocalChain, *tbtcpg.LocalBitcoinChain, *big.Int) {
+	source := hexToByte20("5555555555555555555555555555555555555555")
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	// Fill each target wallet with `fills[i]` custodied reservations.
+	// The keys are stored per wallet only: no reservation record is
+	// created, so WalletReservationsCount sees exactly the fill count
+	// and the per-wallet reserved amount stays zero (the amount cap
+	// never fires; only the count cap is exercised).
+	fill := uint64(1)
+	for i, target := range targetWallets {
+		keys := make([]*big.Int, 0, fills[i])
+		for k := uint32(0); k < fills[i]; k++ {
+			keys = append(keys, new(big.Int).SetUint64(fill))
+			fill++
+		}
+		if len(keys) > 0 {
+			tbtcChain.SetWalletReservations(target, keys)
+		}
+		// Newest first, as the test calls them.
+		if err := tbtcChain.AddPastNewWalletRegisteredEvent(
+			&tbtc.NewWalletRegisteredEventFilter{StartBlock: 0},
+			&tbtc.NewWalletRegisteredEvent{WalletPublicKeyHash: target},
+		); err != nil {
+			panic(err)
+		}
+		tbtcChain.SetWallet(target, &tbtc.WalletChainData{State: tbtc.StateLive})
+	}
+
+	tbtcChain.SetWallet(source, &tbtc.WalletChainData{State: state})
+	tbtcChain.SetLiveWalletsCount(uint32(len(targetWallets)))
+
+	tbtcChain.SetMovingFundsParameters(
+		1000000,
+		1000000,
+		0,
+		0,
+		nil,
+		0,
+		0,
+		0,
+		0,
+		nil,
+		0,
+	)
+	tbtcChain.SetReservationParameters(tbtc.ReservationParameters{
+		ReservationTxMaxFee:      10000,
+		MaxReservationsPerWallet: 5,
+		ReservationActionTimeout: 86400,
+	})
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	resKey := big.NewInt(9101)
+	anchorTxHash, _ := bitcoin.NewHashFromString(
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		bitcoin.ReversedByteOrder,
+	)
+	sourceScript, err := bitcoin.PayToWitnessPublicKeyHash(source)
+	if err != nil {
+		panic(err)
+	}
+	btcChain.SetTransaction(anchorTxHash, &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 1},
+			{Value: 100000, PublicKeyScript: sourceScript},
+		},
+	})
+	tbtcChain.SetReservation(resKey, &tbtc.Reservation{
+		WalletPublicKeyHash: source,
+		AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     1,
+			},
+			Value: 100000,
+		},
+		State:        tbtc.ReservationStateActive,
+		RequestNonce: 0,
+	})
+	tbtcChain.SetWalletReservations(source, []*big.Int{resKey})
+
+	if privileged {
+		tbtcChain.SetReanchorRequestPrivileged(true)
+	}
+
+	return tbtcChain, btcChain, resKey
+}
+
+// runHandoffFallbackRequest runs the re-anchor task for a source wallet
+// carried by an operator and reports the run outcome. walletOperators
+// and executingOperator mirror how the coordination layer populates the
+// request: when executingOperator is one of the wallet's operators,
+// the fresh request is a proven source-wallet member request.
+func runHandoffFallbackRequest(
+	t *testing.T,
+	tbtcChain *tbtcpg.LocalChain,
+	btcChain *tbtcpg.LocalBitcoinChain,
+	source [20]byte,
+	walletOperators []chain.Address,
+	executingOperator chain.Address,
+) (*tbtc.ReservationReanchorProposal, bool, error) {
+	t.Helper()
+
+	task := tbtcpg.NewReservationReanchorTask(tbtcChain, btcChain)
+	proposal, found, err := task.Run(&tbtc.CoordinationProposalRequest{
+		WalletPublicKeyHash: source,
+		WalletOperators:     walletOperators,
+		ExecutingOperator:   executingOperator,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	reanchorProposal, ok := proposal.(*tbtc.ReservationReanchorProposal)
+	if !ok {
+		return nil, false, fmt.Errorf("unexpected proposal type: %T", proposal)
+	}
+	return reanchorProposal, true, nil
+}
+
+// TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet
+// is the red test for the hand-off fallback: when every Live target has
+// reached its per-wallet reservation count and the fresh request is a
+// proven source-wallet member request, the task must still send the
+// re-anchor request -- to the least-loaded Live target, not to nothing.
+func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testing.T) {
+	source := hexToByte20("5555555555555555555555555555555555555555")
+	fullWallet := hexToByte20("7777777777777777777777777777777777777777")
+	otherWallet := hexToByte20("8888888888888888888888888888888888888888")
+
+	// fullWallet (5) is at the cap; otherWallet (3) has headroom. The
+	// headroom pick must still prefer otherWallet; the fallback pick
+	// (no target with headroom) must choose the least-loaded full one.
+	t.Run("a target with headroom is preferred over a full one", func(t *testing.T) {
+		tbtcChain, btcChain, _ := newHandoffFallbackFixture(
+			tbtc.StateMovingFunds,
+			[][20]byte{fullWallet, otherWallet},
+			[]uint32{5, 3},
+			true,
+		)
+
+		proposal, found, err := runHandoffFallbackRequest(
+			t,
+			tbtcChain,
+			btcChain,
+			source,
+			[]chain.Address{"0xMember"},
+			"0xMember",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatalf("expected a re-anchor proposal, got none")
+		}
+		if proposal.TargetWalletPublicKeyHash != otherWallet {
+			t.Fatalf(
+				"expected the target with headroom [%x], got [%x]",
+				otherWallet,
+				proposal.TargetWalletPublicKeyHash,
+			)
+		}
+	})
+
+	t.Run("all targets full: fall back to the least-loaded Live target", func(t *testing.T) {
+		tbtcChain, btcChain, _ := newHandoffFallbackFixture(
+			tbtc.StateClosing,
+			[][20]byte{fullWallet, otherWallet},
+			[]uint32{5, 5},
+			true,
+		)
+
+		proposal, found, err := runHandoffFallbackRequest(
+			t,
+			tbtcChain,
+			btcChain,
+			source,
+			[]chain.Address{"0xMember"},
+			"0xMember",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatalf(
+				"expected the member request to fall back to the least-loaded "+
+					"full Live target, got no proposal",
+			)
+		}
+		// Both targets are full (a tie on the count), so the fallback
+		// keeps the existing candidate order: the first Live target
+		// examined (the most recently registered one) wins.
+		if proposal.TargetWalletPublicKeyHash != otherWallet {
+			t.Fatalf(
+				"expected fallback target = first candidate on a tie [%x], got [%x]",
+				otherWallet,
+				proposal.TargetWalletPublicKeyHash,
+			)
+		}
+
+		// The request landed on the over-cap target: the privileged
+		// contract accepts it, so the fake's ledger now shows one
+		// pending re-anchor reserved on that target beyond its cap.
+		count, err := tbtcChain.WalletReservationsCount(otherWallet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 6 {
+			t.Fatalf("expected target count 6 (cap 5 plus the pending request), got %d", count)
+		}
+	})
+
+	t.Run("distinct counts: the least-loaded full target wins", func(t *testing.T) {
+		// fullWallet sits at 5 (no headroom), otherWallet at 6 (no
+		// headroom, more loaded). Both are full, so the headroom pick
+		// finds nothing and the fallback must choose by count, not by
+		// candidate order: fullWallet (5) beats otherWallet (6) even
+		// though otherWallet is the first candidate examined.
+		tbtcChain, btcChain, _ := newHandoffFallbackFixture(
+			tbtc.StateMovingFunds,
+			[][20]byte{fullWallet, otherWallet},
+			[]uint32{5, 6},
+			true,
+		)
+
+		proposal, found, err := runHandoffFallbackRequest(
+			t,
+			tbtcChain,
+			btcChain,
+			source,
+			[]chain.Address{"0xMember"},
+			"0xMember",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatalf("expected a re-anchor proposal, got none")
+		}
+		if proposal.TargetWalletPublicKeyHash != fullWallet {
+			t.Fatalf(
+				"expected fallback target = least-loaded wallet [%x], got [%x]",
+				fullWallet,
+				proposal.TargetWalletPublicKeyHash,
+			)
+		}
+	})
+}
+
+// TestReservationReanchorTask_NonMemberStillSendsNothingWhenFull pins
+// the non-privileged side of the same decision: an operator that is
+// not one of the source wallet's operators (or no operator at all)
+// must not get the fallback -- with every Live target at its cap the
+// fresh request is simply skipped, exactly as before the change.
+func TestReservationReanchorTask_NonMemberStillSendsNothingWhenFull(t *testing.T) {
+	source := hexToByte20("5555555555555555555555555555555555555555")
+	fullWallet := hexToByte20("7777777777777777777777777777777777777777")
+	otherWallet := hexToByte20("8888888888888888888888888888888888888888")
+
+	t.Run("no operator: all targets full, no request", func(t *testing.T) {
+		tbtcChain, btcChain, _ := newHandoffFallbackFixture(
+			tbtc.StateMovingFunds,
+			[][20]byte{fullWallet, otherWallet},
+			[]uint32{5, 5},
+			false,
+		)
+
+		proposal, found, err := runHandoffFallbackRequest(
+			t,
+			tbtcChain,
+			btcChain,
+			source,
+			[]chain.Address{"0xMember"},
+			"",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found || proposal != nil {
+			t.Fatalf("expected no proposal, got %+v", proposal)
+		}
+		if attempts := tbtcChain.GetReservationReanchorRequestAttempts(); len(attempts) != 0 {
+			t.Fatalf("expected no re-anchor request, got %d", len(attempts))
+		}
+	})
+
+	t.Run("operator not on the wallet: all targets full, no request", func(t *testing.T) {
+		tbtcChain, btcChain, _ := newHandoffFallbackFixture(
+			tbtc.StateClosing,
+			[][20]byte{fullWallet, otherWallet},
+			[]uint32{5, 5},
+			false,
+		)
+
+		proposal, found, err := runHandoffFallbackRequest(
+			t,
+			tbtcChain,
+			btcChain,
+			source,
+			[]chain.Address{"0xMember"},
+			"0xOutside",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found || proposal != nil {
+			t.Fatalf("expected no proposal, got %+v", proposal)
+		}
+		if attempts := tbtcChain.GetReservationReanchorRequestAttempts(); len(attempts) != 0 {
+			t.Fatalf("expected no re-anchor request, got %d", len(attempts))
 		}
 	})
 }
