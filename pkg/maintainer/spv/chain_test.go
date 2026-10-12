@@ -1520,6 +1520,13 @@ func (lc *localChain) setWalletReservationsErr(err error) {
 	lc.walletReservationsErr = err
 }
 
+func (lc *localChain) setIsReservedDepositErr(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.isReservedDepositErr = err
+}
+
 // BuildDepositKey is a test-double implementation independent of the
 // production keccak256-based algorithm (pkg/chain/ethereum's unexported
 // buildDepositKey): only self-consistency within this fake chain matters

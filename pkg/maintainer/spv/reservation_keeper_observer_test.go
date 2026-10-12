@@ -647,6 +647,138 @@ func TestReservationKeeperObserver_FailedPassKeepsState(t *testing.T) {
 	}
 }
 
+// A read that a gauge depends on and that fails must fail the whole
+// pass. Skipping the item instead would publish a lower count with a
+// fresh timestamp, which the monitor would read as healthy.
+func TestReservationKeeperObserver_SourceReadFailureFailsPass(t *testing.T) {
+	spvChain, observer, recorder, head, _ := observerFixture(t)
+	spvChain.setWalletParameters(
+		tbtc.WalletParameters{CreationPeriod: 30 * 24 * 3600},
+	)
+
+	source := [20]byte{1}
+	spvChain.setWallet(source, &tbtc.WalletChainData{
+		State: tbtc.StateMovingFunds,
+	})
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		WalletPublicKeyHash: source,
+		BlockNumber:         800,
+	})
+	key := big.NewInt(61)
+	spvChain.setWalletReservations(source, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State:      tbtc.ReservationStateActive,
+		AnchorUtxo: observerAnchorUtxo(1000),
+	})
+
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("first observation pass failed: [%v]", err)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationReanchorNoEligibleTargetCount,
+	); got != 1 {
+		t.Fatalf("no-target count = %v, want 1", got)
+	}
+	baseline := recorder.Gauge(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	)
+
+	spvChain.setWalletReservationsErr(errors.New("injected RPC failure"))
+	if err := observer.ObservationPass(); err == nil {
+		t.Fatal("expected the pass to fail when a source wallet cannot be read")
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationReanchorNoEligibleTargetCount,
+	); got != 1 {
+		t.Errorf("no-target count changed after a failed read: got %v", got)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	); got != baseline {
+		t.Errorf("observation timestamp moved after a failed read: got %v", got)
+	}
+	_ = head
+}
+
+func TestReservationKeeperObserver_DepositReadFailureFailsPass(t *testing.T) {
+	spvChain, observer, recorder, head, _ := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+
+	headNow := uint32(head.Unix())
+	const day = 24 * 3600
+	addObserverPendingReservedDeposit(
+		t,
+		spvChain,
+		observerFundingTxHash(7),
+		0,
+		headNow+day+day+day, // last request time exactly 1 day ahead
+		900,
+	)
+
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("first observation pass failed: [%v]", err)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 1 {
+		t.Fatalf("at-risk count = %v, want 1", got)
+	}
+	baseline := recorder.Gauge(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	)
+
+	spvChain.setIsReservedDepositErr(errors.New("injected RPC failure"))
+	if err := observer.ObservationPass(); err == nil {
+		t.Fatal("expected the pass to fail when a deposit cannot be read")
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 1 {
+		t.Errorf("at-risk count changed after a failed read: got %v", got)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	); got != baseline {
+		t.Errorf("observation timestamp moved after a failed read: got %v", got)
+	}
+}
+
+// A deposit that was pending and at risk, then released to the pool,
+// leaves the at-risk count on the next pass.
+func TestReservationKeeperObserver_ReleasedDepositLeavesCount(t *testing.T) {
+	spvChain, observer, recorder, head, _ := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+
+	headNow := uint32(head.Unix())
+	const day = 24 * 3600
+	key := addObserverPendingReservedDeposit(
+		t,
+		spvChain,
+		observerFundingTxHash(8),
+		0,
+		headNow+day+day+day,
+		900,
+	)
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("first observation pass failed: [%v]", err)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 1 {
+		t.Fatalf("at-risk count = %v, want 1", got)
+	}
+
+	spvChain.setReservedDeposit(key, [20]byte{}, false)
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("second observation pass failed: [%v]", err)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 0 {
+		t.Errorf("at-risk count = %v after release, want 0", got)
+	}
+}
+
 func acceptanceEventFixture(
 	reservationKey *big.Int,
 	timeoutAt uint32,
