@@ -222,6 +222,53 @@ func TestInitializeMaintainerMetricsEnabledWhenPortSet(t *testing.T) {
 	}
 }
 
+// TestInitializeMaintainerMetricsRegistersReservationGaugesForKeeper
+// verifies that a maintainer run only for reservation proofs (no
+// operator client, so Tbtc.ReservationsEnabled is off) still publishes
+// the reservation gauges. Without registration SetGauge silently drops
+// every value, and the keeper's watchdog gauges never reach /metrics.
+func TestInitializeMaintainerMetricsRegistersReservationGaugesForKeeper(t *testing.T) {
+	originalPort := clientConfig.ClientInfo.Port
+	originalTbtc := clientConfig.Tbtc.ReservationsEnabled
+	originalSpv := clientConfig.Maintainer.Spv.ReservationProofsEnabled
+	defer func() {
+		clientConfig.ClientInfo.Port = originalPort
+		clientConfig.Tbtc.ReservationsEnabled = originalTbtc
+		clientConfig.Maintainer.Spv.ReservationProofsEnabled = originalSpv
+	}()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not reserve a free port: [%v]", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("could not release reserved port: [%v]", err)
+	}
+
+	clientConfig.ClientInfo.Port = port
+	clientConfig.Tbtc.ReservationsEnabled = false
+	clientConfig.Maintainer.Spv.ReservationProofsEnabled = true
+
+	recorder := initializeMaintainerMetrics(
+		context.Background(),
+		stubBlockCounter{},
+		stubEthereumRPC{},
+		stubBitcoinChain{},
+	)
+	perfMetrics, ok := recorder.(*clientinfo.PerformanceMetrics)
+	if !ok {
+		t.Fatalf("expected a *clientinfo.PerformanceMetrics, got [%T]", recorder)
+	}
+
+	perfMetrics.SetGauge(clientinfo.MetricReservationKeeperObservationTimestamp, 7)
+	if got := perfMetrics.GetGaugeValue(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	); got != 7 {
+		t.Errorf("keeper observation timestamp gauge = %v, want 7", got)
+	}
+}
+
 // TestMaintainerConfig verifies that the maintainer command hands the SPV
 // maintainer the Ethereum network from the [ethereum] section: without it
 // the network is Unknown, the reservation activation block lookup fails
