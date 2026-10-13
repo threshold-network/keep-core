@@ -191,6 +191,12 @@
           "internalType": "uint32",
           "name": "maxThirdPartyReanchorHoldsPerWallet",
           "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "handoffReserveWallets",
+          "type": "uint32"
         }
       ],
       "name": "ReservationCapsUpdated",
@@ -860,6 +866,19 @@
     },
     {
       "inputs": [],
+      "name": "reservationHandoffReserveWallets",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "reservationParameters",
       "outputs": [
         {
@@ -1226,6 +1245,11 @@
         {
           "internalType": "uint32",
           "name": "maxThirdPartyReanchorHoldsPerWallet",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "handoffReserveWallets",
           "type": "uint32"
         }
       ],

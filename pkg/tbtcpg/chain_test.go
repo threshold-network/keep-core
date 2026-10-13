@@ -111,7 +111,6 @@ type LocalChain struct {
 	reanchorReservedCapacity map[[20]byte]reservationCapacity
 	// pendingNextReanchorRequest makes the next RequestReservationReanchor
 	// submission succeed without writing a generation, modeling a
-	// submission still unconfirmed in the mempool (or dropped from it).
 	pendingNextReanchorRequest bool
 	// reservationReanchorValidationCalls counts calls to
 	// ValidateReservationReanchorProposal, so tests can observe whether
@@ -1686,31 +1685,9 @@ func (lc *LocalChain) ValidateReservationReanchorProposal(
 		return fmt.Errorf("target wallet must be in Live state")
 	}
 
-	params, err := lc.ReservationParameters()
-	if err != nil {
-		return fmt.Errorf("cannot get reservation parameters: [%v]", err)
-	}
-	count, err := lc.WalletReservationsCount(proposal.TargetWalletPublicKeyHash)
-	if err != nil {
-		return fmt.Errorf("cannot get wallet reservations count: [%v]", err)
-	}
-	if count > params.MaxReservationsPerWallet {
-		return fmt.Errorf("wallet reservations cap exceeded")
-	}
-
-	maxAmount, _, err := lc.ReservationCaps()
-	if err != nil {
-		return fmt.Errorf("cannot get reservation caps: [%v]", err)
-	}
-	if maxAmount > 0 {
-		amount, err := lc.WalletReservationsAmount(proposal.TargetWalletPublicKeyHash)
-		if err != nil {
-			return fmt.Errorf("cannot get wallet reservations amount: [%v]", err)
-		}
-		if amount > maxAmount {
-			return fmt.Errorf("wallet reserved amount cap exceeded")
-		}
-	}
+	// The validator does not re-check the target's per-wallet caps: the
+	// request already booked that capacity, and a privileged hand-off may
+	// have booked it above the ordinary cap.
 	if proposal.ReanchorTxFee == nil || proposal.ReanchorTxFee.Sign() <= 0 {
 		return fmt.Errorf("proposed transaction fee cannot be zero")
 	}
@@ -1872,12 +1849,19 @@ func (lc *LocalChain) RequestReservationReanchor(
 	targetCount, targetAmount := lc.walletReservationInfoLocked(
 		targetWalletPublicKeyHash,
 	)
-	if targetCount+1 > params.MaxReservationsPerWallet {
-		return fmt.Errorf("Wallet reservations cap exceeded")
-	}
-	if maxAmount := lc.reservationCapsLocked()[0]; maxAmount != 0 &&
-		targetAmount+anchorAmount > maxAmount {
-		return fmt.Errorf("Wallet reserved amount cap exceeded")
+	// A privileged request is proven by the caller's source-wallet member
+	// proof: a non-empty set of member IDs. The contract skips the
+	// target's per-wallet count and amount caps for such a request, but
+	// the counts are still added below, exactly like the ordinary path.
+	// An empty proof is an ordinary third-party request: the caps apply.
+	if len(walletMembersIDs) == 0 {
+		if targetCount+1 > params.MaxReservationsPerWallet {
+			return fmt.Errorf("Wallet reservations cap exceeded")
+		}
+		if maxAmount := lc.reservationCapsLocked()[0]; maxAmount != 0 &&
+			targetAmount+anchorAmount > maxAmount {
+			return fmt.Errorf("Wallet reserved amount cap exceeded")
+		}
 	}
 
 	lc.reservationReanchorRequestSubmissions = append(
@@ -2081,6 +2065,7 @@ func (lc *LocalChain) SetNextReservationReanchorRequestPending() {
 
 	lc.pendingNextReanchorRequest = true
 }
+
 
 // NotifyMovingFundsBelowDust records a submitted below-dust notification
 // for assertion in tests.

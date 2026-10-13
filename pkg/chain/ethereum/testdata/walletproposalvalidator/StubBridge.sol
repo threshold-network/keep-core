@@ -80,6 +80,7 @@ contract StubBridge {
         uint32 termSeconds;
         uint32 dissolutionDelay;
         uint64 minAmount;
+        bool thirdPartyHold;
     }
 
     struct Parameters {

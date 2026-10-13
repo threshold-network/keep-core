@@ -14,14 +14,16 @@
 #                                    StateDB), never reimplementing it in Go.
 #
 # Provenance of the currently vendored WalletProposalValidator.json:
-#   commit:        eec999aad43b3913df378840773348e17f68f1ba
-#                  (threshold-network/tbtc-v2, merge of #1161 into
-#                  reservations-upgrade). The same commit is pinned as
-#                  TBTC_V2_REF in the reservation-router-vendored-fallback-
-#                  verify job of .github/workflows/client.yml, which checks
-#                  this file against its own compile of that commit with
-#                  verify.sh. Built with `yarn install && yarn build` in
-#                  tbtc-v2's solidity/ directory, as that job does.
+#   commit:        09a6651b66a1a90e482b7ba2c54f163d20c96327
+#                  (tlabs-xyz/tbtc-v2-security, reservations-handoff-capacity:
+#                  release to pool plus the hand-off capacity change; the
+#                  validator no longer re-checks re-anchor target caps).
+#                  Built with `yarn install && yarn build` in tbtc-v2's
+#                  solidity/ directory and checked locally with verify.sh.
+#                  TBTC_V2_REF in .github/workflows/client.yml still names
+#                  the public commit eec999aa: that job cannot fetch this
+#                  private commit, so it fails on this file until the source
+#                  is public and the pin is moved to the same commit.
 #   Re-run this script against a newer tbtc-v2 build whenever the
 #   validator changes, bump TBTC_V2_REF to the same commit, and update
 #   this note.

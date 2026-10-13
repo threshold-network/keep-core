@@ -133,6 +133,7 @@ func TestReservationReanchorTask_TargetSearch_CachesAcrossRuns(t *testing.T) {
 		}
 		return task.newReanchorTargetSearch(
 			logger, walletA, 5, 100000000, headTime, walletParams.CreationPeriod,
+			false,
 		).find(100000)
 	}
 

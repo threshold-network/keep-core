@@ -147,6 +147,7 @@ func TestReanchorTargetSearch_SkipsYoungCandidate(t *testing.T) {
 		search := task.newReanchorTargetSearch(
 			logger, [20]byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9},
 			5, 100000000, headTime, walletParams.CreationPeriod,
+			false,
 		)
 		got, err := search.find(100000)
 		if err != nil {
@@ -185,6 +186,7 @@ func TestReanchorTargetSearch_SkipsYoungCandidate(t *testing.T) {
 		search := taskYoung.newReanchorTargetSearch(
 			logger, [20]byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9},
 			5, 100000000, headTime, walletParams.CreationPeriod,
+			false,
 		)
 		_, err := search.find(100000)
 		if !errors.Is(err, errNoLiveTargetWallet) {

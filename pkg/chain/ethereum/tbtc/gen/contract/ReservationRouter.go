@@ -1739,6 +1739,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
 	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
+	arg_handoffReserveWallets uint32,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
@@ -1750,6 +1751,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
 			arg_maxThirdPartyReanchorHoldsPerWallet,
+			arg_handoffReserveWallets,
 		),
 	)
 
@@ -1781,6 +1783,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
 		arg_maxThirdPartyReanchorHoldsPerWallet,
+		arg_handoffReserveWallets,
 	)
 	if err != nil {
 		return transaction, rr.errorResolver.ResolveError(
@@ -1792,6 +1795,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
 			arg_maxThirdPartyReanchorHoldsPerWallet,
+			arg_handoffReserveWallets,
 		)
 	}
 
@@ -1821,6 +1825,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 				arg_reservationMaxSingleAmount,
 				arg_maxActiveReservations,
 				arg_maxThirdPartyReanchorHoldsPerWallet,
+				arg_handoffReserveWallets,
 			)
 			if err != nil {
 				return nil, rr.errorResolver.ResolveError(
@@ -1832,6 +1837,7 @@ func (rr *ReservationRouter) UpdateReservationCaps(
 					arg_reservationMaxSingleAmount,
 					arg_maxActiveReservations,
 					arg_maxThirdPartyReanchorHoldsPerWallet,
+					arg_handoffReserveWallets,
 				)
 			}
 
@@ -1856,6 +1862,7 @@ func (rr *ReservationRouter) CallUpdateReservationCaps(
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
 	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
+	arg_handoffReserveWallets uint32,
 	blockNumber *big.Int,
 ) error {
 	var result interface{} = nil
@@ -1873,6 +1880,7 @@ func (rr *ReservationRouter) CallUpdateReservationCaps(
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
 		arg_maxThirdPartyReanchorHoldsPerWallet,
+		arg_handoffReserveWallets,
 	)
 
 	return err
@@ -1883,6 +1891,7 @@ func (rr *ReservationRouter) UpdateReservationCapsGasEstimate(
 	arg_reservationMaxSingleAmount uint64,
 	arg_maxActiveReservations uint32,
 	arg_maxThirdPartyReanchorHoldsPerWallet uint32,
+	arg_handoffReserveWallets uint32,
 ) (uint64, error) {
 	var result uint64
 
@@ -1896,6 +1905,7 @@ func (rr *ReservationRouter) UpdateReservationCapsGasEstimate(
 		arg_reservationMaxSingleAmount,
 		arg_maxActiveReservations,
 		arg_maxThirdPartyReanchorHoldsPerWallet,
+		arg_handoffReserveWallets,
 	)
 
 	return result, err
@@ -2414,6 +2424,43 @@ func (rr *ReservationRouter) ReservationCapsAtBlock(
 		rr.errorResolver,
 		rr.contractAddress,
 		"reservationCaps",
+		&result,
+	)
+
+	return result, err
+}
+
+func (rr *ReservationRouter) ReservationHandoffReserveWallets() (uint32, error) {
+	result, err := rr.contract.ReservationHandoffReserveWallets(
+		rr.callerOptions,
+	)
+
+	if err != nil {
+		return result, rr.errorResolver.ResolveError(
+			err,
+			rr.callerOptions.From,
+			nil,
+			"reservationHandoffReserveWallets",
+		)
+	}
+
+	return result, err
+}
+
+func (rr *ReservationRouter) ReservationHandoffReserveWalletsAtBlock(
+	blockNumber *big.Int,
+) (uint32, error) {
+	var result uint32
+
+	err := chainutil.CallAtBlock(
+		rr.callerOptions.From,
+		blockNumber,
+		nil,
+		rr.contractABI,
+		rr.caller,
+		rr.errorResolver,
+		rr.contractAddress,
+		"reservationHandoffReserveWallets",
 		&result,
 	)
 
@@ -3875,6 +3922,7 @@ type reservationRouterReservationCapsUpdatedFunc func(
 	ReservationMaxSingleAmount uint64,
 	MaxActiveReservations uint32,
 	MaxThirdPartyReanchorHoldsPerWallet uint32,
+	HandoffReserveWallets uint32,
 	blockNumber uint64,
 )
 
@@ -3895,6 +3943,7 @@ func (rcus *RrReservationCapsUpdatedSubscription) OnEvent(
 					event.ReservationMaxSingleAmount,
 					event.MaxActiveReservations,
 					event.MaxThirdPartyReanchorHoldsPerWallet,
+					event.HandoffReserveWallets,
 					event.Raw.BlockNumber,
 				)
 			}

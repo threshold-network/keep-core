@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -222,6 +223,16 @@ func (rrt *ReservationReanchorTask) Run(
 		)
 	}
 
+	// A fresh request is sent on the executing operator's account. When
+	// that operator is one of the source wallet's signing operators, the
+	// request is a proven source-wallet member request, and the
+	// contract skips the target's per-wallet count and amount caps for
+	// it. The target search may then fall back to a target that has no
+	// headroom; without the proof, the request stays subject to both
+	// caps, exactly as before.
+	privilegedHandoff := request.ExecutingOperator != "" &&
+		slices.Contains(request.WalletOperators, request.ExecutingOperator)
+
 	// One target search serves every reservation of this pass, so
 	// registrations and wallet states are read at most once per pass.
 	headTime, err := rrt.chain.GetLatestBlockTimestamp()
@@ -245,6 +256,7 @@ func (rrt *ReservationReanchorTask) Run(
 		maxReservationsAmountPerWallet,
 		headTime,
 		walletParameters.CreationPeriod,
+		privilegedHandoff,
 	)
 
 	// Source wallet member proof for the fresh re-anchor request: the
@@ -1040,10 +1052,29 @@ type reanchorTargetSearch struct {
 	maxReservationsPerWallet       uint32
 	maxReservationsAmountPerWallet uint64
 
+	// privilegedHandoff is set when this pass's fresh requests were made
+	// by a proven source-wallet member: the contract skips a target's
+	// per-wallet count and amount caps for such a request, so when no
+	// candidate has headroom the search falls back to the least-loaded
+	// eligible Live wallet (pickFallback).
+	privilegedHandoff bool
+	// countCapped holds candidates whose count cap is reached. They are
+	// ruled out of the headroom pick, but not of the fallback pick: a
+	// member request may exceed the cap. A candidate that has not aged
+	// out of its creation period, or that reverted on capacity at
+	// request time, goes to excluded instead, which rules it out of
+	// every pick for this pass.
+	countCapped map[[20]byte]bool
+	// lastCount holds the most recently read reservation count of every
+	// candidate, so the fallback pick needs no extra reads.
+	lastCount map[[20]byte]uint32
+
 	// checked holds every wallet whose state was already read this pass.
 	checked map[[20]byte]bool
-	// excluded holds wallets ruled out for every anchor value this pass:
-	// count cap reached, age gate, or rejected by a request-time capacity revert.
+	// excluded holds wallets ruled out of every pick this pass:
+	// age gate, or rejected by a request-time capacity revert. A
+	// count-capped wallet is not excluded: it may still be a fallback
+	// target for a privileged request.
 	excluded map[[20]byte]bool
 	// candidates are the Live wallets found so far, in selection order:
 	// the cached wallet first, then newest registration first.
@@ -1073,7 +1104,10 @@ type reanchorTargetSearch struct {
 }
 
 // newReanchorTargetSearch returns a target search for one Run pass. It
-// reads nothing until find is first called.
+// reads nothing until find is first called. privilegedHandoff allows the
+// fallback pick: when the request that would use the search was made by a
+// proven source-wallet member, the contract skips a target's per-wallet
+// caps, so a target with no headroom may still be selected.
 func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 	taskLogger log.StandardLogger,
 	sourceWalletPublicKeyHash [20]byte,
@@ -1081,6 +1115,7 @@ func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 	maxReservationsAmountPerWallet uint64,
 	headTime time.Time,
 	creationPeriod uint32,
+	privilegedHandoff bool,
 ) *reanchorTargetSearch {
 	return &reanchorTargetSearch{
 		rrt:                            rrt,
@@ -1088,8 +1123,11 @@ func (rrt *ReservationReanchorTask) newReanchorTargetSearch(
 		sourceWalletPublicKeyHash:      sourceWalletPublicKeyHash,
 		maxReservationsPerWallet:       maxReservationsPerWallet,
 		maxReservationsAmountPerWallet: maxReservationsAmountPerWallet,
+		privilegedHandoff:              privilegedHandoff,
 		checked:                        make(map[[20]byte]bool),
 		excluded:                       make(map[[20]byte]bool),
+		countCapped:                    make(map[[20]byte]bool),
+		lastCount:                      make(map[[20]byte]uint32),
 		createdAt:                      make(map[[20]byte]time.Time),
 		headTime:                       headTime,
 		creationPeriod:                 creationPeriod,
@@ -1112,10 +1150,17 @@ var errReanchorNotSourceWalletMember = errors.New(
 	"operator is not a member of the source wallet",
 )
 
-// find returns a target wallet with headroom for anchorValue, loading more
-// candidates only when the ones already found have none.
+// find returns a target wallet for anchorValue. First it looks for a
+// candidate with headroom, loading more candidates only when the ones
+// already found have none; when this pass's requests are privileged
+// (made by a proven source-wallet member) and no candidate has
+// headroom, it falls back to the least-loaded eligible Live wallet,
+// which the contract may accept over cap.
 func (s *reanchorTargetSearch) find(anchorValue uint64) ([20]byte, error) {
 	if s.noHeadroomFromAnchor != 0 && anchorValue >= s.noHeadroomFromAnchor {
+		if s.privilegedHandoff {
+			return s.pickFallback()
+		}
 		return [20]byte{}, errNoLiveTargetWallet
 	}
 
@@ -1139,9 +1184,60 @@ func (s *reanchorTargetSearch) find(anchorValue uint64) ([20]byte, error) {
 		}
 		if !loaded {
 			s.noHeadroomFromAnchor = anchorValue
+			if s.privilegedHandoff {
+				return s.pickFallback()
+			}
 			return [20]byte{}, errNoLiveTargetWallet
 		}
 	}
+}
+
+// pickFallback selects the Live wallet with the lowest reservation count
+// among the candidates read so far, skipping every excluded candidate
+// and the source wallet. Ties keep the existing candidate order: the
+// cached wallet first, then newest registration first. The result is
+// not cached -- a wallet with no headroom is a poor headroom-pick
+// candidate -- so the next find starts from the cache as before.
+func (s *reanchorTargetSearch) pickFallback() ([20]byte, error) {
+	if s.noHeadroomFromAnchor == 0 {
+		return [20]byte{}, errNoLiveTargetWallet
+	}
+
+	var (
+		best      [20]byte
+		bestCount uint32
+		found     bool
+	)
+	for _, candidate := range s.candidates {
+		if s.excluded[candidate] || candidate == s.sourceWalletPublicKeyHash {
+			continue
+		}
+
+		count, ok := s.lastCount[candidate]
+		if !ok {
+			countRead, err := s.rrt.chain.WalletReservationsCount(candidate)
+			if err != nil {
+				return [20]byte{}, fmt.Errorf(
+					"cannot read reservation count of candidate wallet 0x%x: [%w]",
+					candidate, err,
+				)
+			}
+			count = countRead
+			s.lastCount[candidate] = count
+		}
+
+		if found && count >= bestCount {
+			// The candidate order decides ties: keep the first one.
+			continue
+		}
+		found = true
+		best = candidate
+		bestCount = count
+	}
+	if !found {
+		return [20]byte{}, errNoLiveTargetWallet
+	}
+	return best, nil
 }
 
 // exclude rules target out for the rest of the pass, after a request-time
@@ -1152,15 +1248,15 @@ func (s *reanchorTargetSearch) exclude(target [20]byte) {
 }
 
 // pick returns the first candidate, starting at index from, with headroom
-// for anchorValue. A candidate whose count cap is reached is excluded for
-// the rest of the pass, as is a candidate that has not aged out of its
-// creation period.
+// for anchorValue. A candidate whose count cap is reached stays
+// eligible only for the fallback pick; a candidate that has not aged
+// out of its creation period is excluded for the rest of the pass.
 func (s *reanchorTargetSearch) pick(
 	anchorValue uint64,
 	from int,
 ) ([20]byte, bool, error) {
 	for _, candidate := range s.candidates[from:] {
-		if s.excluded[candidate] {
+		if s.excluded[candidate] || s.countCapped[candidate] {
 			continue
 		}
 
@@ -1192,13 +1288,17 @@ func (s *reanchorTargetSearch) pick(
 				err,
 			)
 		}
+		s.lastCount[candidate] = count
 		if count+1 > s.maxReservationsPerWallet {
 			s.logger.Infof(
 				"candidate re-anchor target wallet [0x%x] has no count "+
 					"headroom, skipping",
 				candidate,
 			)
-			s.exclude(candidate)
+			// A member request may exceed the cap, so the candidate
+			// stays eligible for the fallback pick instead of being
+			// ruled out for the whole pass.
+			s.countCapped[candidate] = true
 			continue
 		}
 

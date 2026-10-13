@@ -60,6 +60,7 @@ func init() {
 		rrReservationActionsCommand(),
 		rrReservationByAnchorUtxoCommand(),
 		rrReservationCapsCommand(),
+		rrReservationHandoffReserveWalletsCommand(),
 		rrReservationParametersCommand(),
 		rrReservationRouterCommand(),
 		rrReservationsCommand(),
@@ -354,6 +355,40 @@ func rrReservationCaps(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.ReservationCapsAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func rrReservationHandoffReserveWalletsCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "reservation-handoff-reserve-wallets",
+		Short:                 "Calls the view method reservationHandoffReserveWallets on the ReservationRouter contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  rrReservationHandoffReserveWallets,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func rrReservationHandoffReserveWallets(c *cobra.Command, args []string) error {
+	contract, err := initializeReservationRouter(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.ReservationHandoffReserveWalletsAtBlock(
 		cmd.BlockFlagValue.Int,
 	)
 
@@ -1322,9 +1357,9 @@ func rrTransferGovernance(c *cobra.Command, args []string) error {
 
 func rrUpdateReservationCapsCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "update-reservation-caps [arg_maxReservationsAmountPerWallet] [arg_reservationMaxSingleAmount] [arg_maxActiveReservations] [arg_maxThirdPartyReanchorHoldsPerWallet]",
+		Use:                   "update-reservation-caps [arg_maxReservationsAmountPerWallet] [arg_reservationMaxSingleAmount] [arg_maxActiveReservations] [arg_maxThirdPartyReanchorHoldsPerWallet] [arg_handoffReserveWallets]",
 		Short:                 "Calls the nonpayable method updateReservationCaps on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(4),
+		Args:                  cmd.ArgCountChecker(5),
 		RunE:                  rrUpdateReservationCaps,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
@@ -1370,6 +1405,13 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			args[3],
 		)
 	}
+	arg_handoffReserveWallets, err := decode.ParseUint[uint32](args[4], 32)
+	if err != nil {
+		return fmt.Errorf(
+			"couldn't parse parameter arg_handoffReserveWallets, a uint32, from passed value %v",
+			args[4],
+		)
+	}
 
 	var (
 		transaction *types.Transaction
@@ -1382,6 +1424,7 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
 			arg_maxThirdPartyReanchorHoldsPerWallet,
+			arg_handoffReserveWallets,
 		)
 		if err != nil {
 			return err
@@ -1395,6 +1438,7 @@ func rrUpdateReservationCaps(c *cobra.Command, args []string) error {
 			arg_reservationMaxSingleAmount,
 			arg_maxActiveReservations,
 			arg_maxThirdPartyReanchorHoldsPerWallet,
+			arg_handoffReserveWallets,
 			cmd.BlockFlagValue.Int,
 		)
 		if err != nil {
