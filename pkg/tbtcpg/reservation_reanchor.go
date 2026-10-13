@@ -616,12 +616,14 @@ reservationLoop:
 }
 
 // isReservationCapRevertError reports whether err is a reservation
-// wallet-capacity revert from either RequestReservationReanchor or
-// ValidateReservationReanchorProposal, mirroring the two capacity
-// require() reasons in Reservation.sol's requestReservationReanchor and
-// WalletProposalValidator.sol's validateReservationReanchorProposal
-// ("Wallet reservations cap exceeded", "Wallet reserved amount cap
-// exceeded"). Both end in the same suffix, so a single substring check
+// wallet-capacity revert from RequestReservationReanchor, mirroring the
+// two capacity require() reasons in Reservation.sol's
+// requestReservationReanchor ("Wallet reservations cap exceeded",
+// "Wallet reserved amount cap exceeded"). The contract skips both checks
+// for a privileged request from a retiring source wallet, such as this
+// task's member-proof request, and WalletProposalValidator.sol's
+// validateReservationReanchorProposal no longer checks target capacity.
+// Both reasons end in the same suffix, so a single substring check
 // covers both without needing separate matches.
 func isReservationCapRevertError(err error) bool {
 	if err == nil {
