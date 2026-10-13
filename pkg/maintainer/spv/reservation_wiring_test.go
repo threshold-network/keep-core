@@ -1169,15 +1169,16 @@ func awaitReservationWatcherPanicRecoveries(t *testing.T, count int) func() {
 // when a watcher goroutine dies (here: a panic during its initial poll
 // pass, recovered by the goroutine's panic-recover), the watcher-death
 // counter is incremented on the supplied MetricsRecorder - not just a
-// log line - so a dead watcher is observable in metrics. Both watcher
-// goroutines are forced through the death path, and the test asserts
-// exactly two increments (one per goroutine) once both goroutines have
-// finished their recover path.
+// log line - so a dead watcher is observable in metrics. All three
+// watcher goroutines (stale-deposit, action-timeout and the keeper
+// observer) are forced through the death path, and the test asserts
+// exactly three increments (one per goroutine) once all three goroutines
+// have finished their recover path.
 func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 2)
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 3)
 
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -1193,15 +1194,16 @@ func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
 
 	awaitRecoveries()
 
-	if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 2 {
-		t.Fatalf("expected exactly two watcher-death increments (one per watcher goroutine), got %v", got)
+	if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 3 {
+		t.Fatalf("expected exactly three watcher-death increments (one per watcher goroutine), got %v", got)
 	}
 }
 
 // watcherDeathPanickingChain wraps a *localChain and panics on the first
 // chain read each watcher's initial poll pass performs, so the
 // goroutine's panic-recover (and thus the watcher-death counter) fires
-// deterministically.
+// deterministically. The keeper observer reads both event kinds, so it
+// dies on whichever it reads first.
 type watcherDeathPanickingChain struct {
 	*localChain
 }
@@ -1259,14 +1261,14 @@ func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) 
 // recorder - the shape a direct caller (package wiring or a test) produces
 // when it boxes the concrete pointer, which recordReservationWatcherDeath
 // must tolerate - against a chain that panics on the first chain read,
-// forcing both watcher goroutines through the recovered-panic death path
+// forcing all three watcher goroutines through the recovered-panic death path
 // that calls recordReservationWatcherDeath. Without the guard the
 // death-handler's counter increment panics inside the deferred recover,
 // crashing the whole test process; this test's completion (rather than a
 // process crash) is the proof the guard holds end-to-end, not just at the
 // unit level above.
 //
-// The test waits - with a bounded timeout - until both goroutines have
+// The test waits - with a bounded timeout - until all three goroutines have
 // finished their recover path (reservationWatcherPanicRecovered runs
 // right after recordReservationWatcherDeath), so it cannot pass before
 // the guarded call has actually run.
@@ -1274,7 +1276,7 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 2)
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 3)
 
 	spvChain := newLocalChain()
 	blockCounter := newMockBlockCounter()
@@ -1298,7 +1300,7 @@ func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(
 	// One signal per watcher goroutine once its recover path, including
 	// recordReservationWatcherDeath against the typed-nil recorder, has
 	// completed. A crash there would take the whole test process down,
-	// so receiving both signals is the assertion.
+	// so receiving all three signals is the assertion.
 	awaitRecoveries()
 }
 
