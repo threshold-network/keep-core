@@ -401,10 +401,10 @@ func TestReservationActionConstructors_WireTransactionMonitor(t *testing.T) {
 	}
 }
 
-// TestRPCCallWithTimeoutErr_ReleasesSlotAfterTimeout pins that a timed-out
+// TestReservationRPCCallWithTimeoutErr_ReleasesSlotAfterTimeout pins that a timed-out
 // call does not hold its RPC slot forever: the result channel must be
 // buffered so the worker can finish after execute has moved on.
-func TestRPCCallWithTimeoutErr_ReleasesSlotAfterTimeout(t *testing.T) {
+func TestReservationRPCCallWithTimeoutErr_ReleasesSlotAfterTimeout(t *testing.T) {
 	oldTimeout := reservationRPCRequestTimeout
 	reservationRPCRequestTimeout = 20 * time.Millisecond
 	defer func() { reservationRPCRequestTimeout = oldTimeout }()
