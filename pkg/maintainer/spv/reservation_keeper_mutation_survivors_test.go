@@ -1723,3 +1723,243 @@ func TestReservationKeeperObserver_NilDataWalletSkipped(t *testing.T) {
 		t.Errorf("no-target count = %d, want 0", got)
 	}
 }
+
+// acceptanceFetchCountingChain wraps the fixture chain, counts the
+// acceptance-event fetches it issues, and can inject an error into one.
+type acceptanceFetchCountingChain struct {
+	*localChain
+	fetchCount int
+	fetchErr   error
+}
+
+func (c *acceptanceFetchCountingChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	c.fetchCount++
+	if c.fetchErr != nil {
+		return nil, c.fetchErr
+	}
+	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+// TestReservationKeeperObserver_NoScanPathFetchFailureKeepsPublishing
+// checks that the no-activation-entry acceptance path is a real
+// no-scan: it issues no acceptance-event fetch (the cursor moves
+// straight to the confirmed tip), so an acceptance RPC failure cannot
+// make the pass fail or withhold the observation timestamp.
+func TestReservationKeeperObserver_NoScanPathFetchFailureKeepsPublishing(
+	t *testing.T,
+) {
+	spvChain, _, recorder, head, blockCounter := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+	blockCounter.SetCurrentBlock(20000)
+	tip := confirmedTip(20000)
+
+	// One acceptance event below the activation-absent network's scan
+	// range: a real no-scan must never pick it up.
+	key := big.NewInt(1)
+	spvChain.addReservationAcceptanceRequestedEvent(
+		acceptanceEventFixture(key, 0),
+	)
+
+	// A no-activation-entry observer (activationBlock is MaxUint64),
+	// so the first acceptance scan is the no-scan path.
+	observer := newObserverForTest(spvChain, math.MaxUint64, recorder)
+	wrap := &acceptanceFetchCountingChain{localChain: spvChain}
+	wrap.fetchErr = errors.New("acceptance RPC failed")
+	observer.spvChain = wrap
+
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf(
+			"no-scan acceptance pass must not fetch, so a fetch error "+
+				"cannot fail it; pass failed: [%v]",
+			err,
+		)
+	}
+	if got := wrap.fetchCount; got != 0 {
+		t.Fatalf(
+			"acceptance-event fetches on the no-scan path = %d, want 0",
+			got,
+		)
+	}
+	if got := observer.acceptanceScanCursor; got != tip {
+		t.Errorf("acceptance cursor = %d, want %d", got, tip)
+	}
+	if got := len(observer.trackedAcceptance); got != 0 {
+		t.Errorf(
+			"no-scan path tracked acceptance events: %d, want 0",
+			got,
+		)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	); got != float64(head.Unix()) {
+		t.Errorf(
+			"observation timestamp after the no-scan pass = %v, want %v",
+			got,
+			head.Unix(),
+		)
+	}
+}
+
+// TestReservationKeeperObserver_VaultMismatchRevealNotTracked checks
+// that deposit reveals routed to a non-reservation vault are excluded
+// from the tracked-deposit set even when a reserved-deposit record was
+// installed for them: only the vault-routed reveal is tracked, and the
+// at-risk gauge sees only it.
+func TestReservationKeeperObserver_VaultMismatchRevealNotTracked(t *testing.T) {
+	spvChain, observer, recorder, head, _ := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+	headNow := uint32(head.Unix())
+
+	otherVault := chain.Address("0x00000000000000000000000000000000000000f2")
+	const day = 24 * 3600
+	deadline := headNow + day + day
+
+	// Two reveals routed to a different vault, each with a
+	// reserved-deposit record installed, so an identity read would keep
+	// them in the at-risk set if they were tracked.
+	for _, seed := range []byte{70, 71} {
+		event := &tbtc.DepositRevealedEvent{
+			FundingTxHash: observerFundingTxHash(seed),
+			RefundLocktime: [4]byte{
+				byte(deadline),
+				byte(deadline >> 8),
+				byte(deadline >> 16),
+				byte(deadline >> 24),
+			},
+			Vault:       &otherVault,
+			BlockNumber: 900,
+		}
+		spvChain.addPastDepositRevealedEvent(nil, event)
+		key := spvChain.BuildDepositKey(
+			observerFundingTxHash(seed),
+			0,
+		)
+		spvChain.setReservedDeposit(key, [20]byte{2}, true)
+	}
+	// One reveal routed to the fixture vault, reserved as well: the
+	// only one that must be tracked and counted.
+	matchKey := addObserverPendingReservedDeposit(
+		t, spvChain, observerFundingTxHash(72), 0, deadline, 901,
+	)
+
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("observation pass failed: [%v]", err)
+	}
+	if got := len(observer.trackedDeposits); got != 1 {
+		t.Errorf(
+			"tracked deposits = %d, want 1 (the vault-routed reveal only)",
+			got,
+		)
+	}
+	if _, ok := observer.trackedDeposits[matchKey.String()]; !ok {
+		t.Error("the vault-routed reveal was not tracked")
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 1 {
+		t.Errorf("at-risk count = %v, want 1", got)
+	}
+}
+
+// TestReservationKeeperObserver_UnrequestedDeadlineUnder48hCounted
+// checks that a pending reserved deposit whose refund deadline is in the
+// underflow band (less than the 24h margin plus the 24h action timeout)
+// is counted at risk: its last possible request time has already passed
+// relative to the head, so the request window is closing now.
+func TestReservationKeeperObserver_UnrequestedDeadlineUnder48hCounted(t *testing.T) {
+	spvChain, observer, recorder, _, _ := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+
+	// The fixture's action timeout is 24h and the refund safety margin
+	// is 24h, so the underflow band is an absolute refund deadline
+	// within 48h. 24h (86400 s) sits in that band: the original maps
+	// it to a last-possible-request time of zero (the request window
+	// is closing now), which is at risk; a guard that underflows
+	// instead wraps to a far-future time and drops it.
+	key := addObserverPendingReservedDeposit(
+		t, spvChain, observerFundingTxHash(80), 0, 86400, 900,
+	)
+	_ = key
+
+	if err := observer.ObservationPass(); err != nil {
+		t.Fatalf("observation pass failed: [%v]", err)
+	}
+	if got := recorder.Gauge(
+		clientinfo.MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+	); got != 1 {
+		t.Errorf(
+			"at-risk count for the in-band underflow deadline = %v, "+
+				"want 1",
+			got,
+		)
+	}
+}
+
+// TestReservationKeeperObserver_NilDataWalletDoesNotHideTarget checks
+// that cached wallets with nil on-chain data (never fetched) do not
+// stop the target search: with a retiring source that has an Active
+// reservation, the no-target count stays 0 across many runs even when
+// only one of many cached wallets is the eligible aged target, so a
+// target-loop variant that terminates at the first nil-data entry
+// fails. The map iteration order is random per run, which is why the
+// assertion repeats: the original finds the target in every order, so
+// every run must count 0.
+func TestReservationKeeperObserver_NilDataWalletDoesNotHideTarget(t *testing.T) {
+	spvChain, _, _, head, _ := observerFixture(t)
+	spvChain.setWalletParameters(tbtc.WalletParameters{})
+
+	// One retiring source with an Active reservation that needs a
+	// target, one aged Live target, and many never-fetched (nil-data)
+	// wallets: the original skips every nil entry and always reaches
+	// the target, whatever the map order.
+	source := [20]byte{5}
+	target := [20]byte{6}
+	observer := newObserverForTest(spvChain, 0, newObserverRecorder())
+	for i := range 128 {
+		pkh := [20]byte{}
+		pkh[0] = byte(i)
+		observer.cachedWallets[pkh] = &cachedWalletState{}
+	}
+	observer.cachedWallets[source] = &cachedWalletState{
+		data: &tbtc.WalletChainData{State: tbtc.StateMovingFunds},
+	}
+	observer.cachedWallets[target] = &cachedWalletState{
+		data: &tbtc.WalletChainData{
+			State:     tbtc.StateLive,
+			CreatedAt: head.Add(-31 * 24 * time.Hour),
+		},
+	}
+
+	key := big.NewInt(2)
+	spvChain.setWalletReservations(source, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		State:      tbtc.ReservationStateActive,
+		AnchorUtxo: observerAnchorUtxo(1000),
+	})
+
+	params, err := spvChain.ReservationParameters()
+	if err != nil {
+		t.Fatalf("reservation parameters: [%v]", err)
+	}
+	const runs = 50
+	for i := range runs {
+		got, rerr := observer.countReanchorsWithoutTarget(
+			params,
+			tbtc.WalletParameters{CreationPeriod: 30 * 24 * 3600},
+			head,
+		)
+		if rerr != nil {
+			t.Fatalf("no-target count on run %d failed: [%v]", i, rerr)
+		}
+		if got != 0 {
+			t.Fatalf(
+				"run %d: no-target count = %d, want 0 (a nil-data "+
+					"wallet hid the eligible target)",
+				i,
+				got,
+			)
+		}
+	}
+}
