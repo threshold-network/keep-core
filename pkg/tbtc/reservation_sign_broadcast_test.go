@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -290,13 +291,7 @@ func TestReservationAnchorAction_SignError(t *testing.T) {
 		t.Fatal("expected the sign step to fail, got nil")
 	}
 	wanted := "cannot sign reservation anchor transaction: [error while signing transaction's sig hashes: [forced custody signing failure]]"
-	if err.Error() != wanted {
-		t.Fatalf(
-			"unexpected error\nexpected: [%s]\nactual:   [%v]",
-			wanted,
-			err,
-		)
-	}
+	testutils.AssertStringsEqual(t, "error", wanted, err.Error())
 
 	if signExecutor.startCalls() != 1 {
 		t.Errorf("expected exactly one sign call, got [%d]", signExecutor.startCalls())
@@ -376,12 +371,15 @@ func TestReservationAnchorAction_InvalidExpiry(t *testing.T) {
 	action.expiryBlock = 100 // below the margin
 
 	err := action.execute()
-	if err == nil || err.Error() != "invalid proposal expiry block" {
-		t.Fatalf(
-			"unexpected error\nexpected: [invalid proposal expiry block]\nactual:   [%v]",
-			err,
-		)
+	if err == nil {
+		t.Fatal("expected an invalid expiry error, got nil")
 	}
+	testutils.AssertStringsEqual(
+		t,
+		"error",
+		"invalid proposal expiry block",
+		err.Error(),
+	)
 	if signExecutor.startCalls() != 0 {
 		t.Errorf(
 			"signing must not run when the expiry block is invalid, got [%d]",
@@ -418,12 +416,15 @@ func TestReservationAnchorAction_PendingRecheck(t *testing.T) {
 			)
 
 			err := action.execute()
-			if err == nil || err.Error() != "reservation action is not a pending acceptance" {
-				t.Fatalf(
-					"unexpected error\nexpected: [reservation action is not a pending acceptance]\nactual:   [%v]",
-					err,
-				)
+			if err == nil {
+				t.Fatal("expected a not-pending-acceptance error, got nil")
 			}
+			testutils.AssertStringsEqual(
+				t,
+				"error",
+				"reservation action is not a pending acceptance",
+				err.Error(),
+			)
 			if signExecutor.startCalls() != 0 {
 				t.Errorf(
 					"signing must not run for a non-pending action, got [%d]",
