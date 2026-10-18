@@ -1,10 +1,9 @@
-// Execute-level reservation broadcast-error tests: executor-level error surface plus the two env-gated full-execute tests.
+// Execute-level reservation broadcast-error tests: executor-level error surface plus the two full-execute tests.
 package tbtc
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -82,29 +81,22 @@ func (c *reservationBroadcastErrorChain) GetTransactionConfirmations(
 	return 0, fmt.Errorf("transaction not found")
 }
 
-// reservationExecuteBroadcastSlowTest reports whether the execute-level
-// reservation broadcast-error tests should run. They are gated because they
-// drive the production broadcast loop to its const
-// reservationActionBroadcastTimeout (fifteen minutes), which would
-// otherwise block the default reservation suite.
-func reservationExecuteBroadcastSlowTest(t *testing.T) bool {
-	t.Helper()
-	if os.Getenv("RESERVATION_BROADCAST_ERROR_TEST") == "" {
-		t.Skip(
-			"set RESERVATION_BROADCAST_ERROR_TEST=1 to exercise the " +
-				"execute-level reservation broadcast error path (15-minute loop)",
-		)
-	}
-	return true
-}
+// reservationExecuteBroadcastTimeout and reservationExecuteBroadcastCheckDelay
+// are the shortened broadcast loop parameters the execute-level tests below
+// install on the action under test. Production uses the const values
+// reservationActionBroadcastTimeout and
+// reservationActionBroadcastCheckDelay; the fields exist so these tests can
+// drive the real broadcast loop to its timeout in milliseconds instead of
+// minutes.
+const (
+	reservationExecuteBroadcastTimeout    = 300 * time.Millisecond
+	reservationExecuteBroadcastCheckDelay = 20 * time.Millisecond
+)
 
 // TestReservationAnchorAction_BroadcastError drives the anchor execute()
 // broadcast step through a never-confirming Bitcoin chain so the executor's
 // broadcast loop times out, killing the swallowed-broadcast-error path.
 func TestReservationAnchorAction_BroadcastError(t *testing.T) {
-	if !reservationExecuteBroadcastSlowTest(t) {
-		return
-	}
 	_, walletPKH := newCustodyWallet(t)
 
 	action, signExecutor, recordingChain, _ := newAnchorSignFixture(
@@ -113,6 +105,8 @@ func TestReservationAnchorAction_BroadcastError(t *testing.T) {
 		true, // never confirm, so the broadcast step times out
 		pendingAnchorActionState(walletPKH),
 	)
+	action.broadcastTimeout = reservationExecuteBroadcastTimeout
+	action.broadcastCheckDelay = reservationExecuteBroadcastCheckDelay
 
 	err := action.execute()
 	if err == nil {
@@ -142,9 +136,6 @@ func TestReservationAnchorAction_BroadcastError(t *testing.T) {
 // broadcast step through a never-confirming Bitcoin chain so the executor's
 // broadcast loop times out, killing the swallowed-broadcast-error path.
 func TestReservationReanchorAction_BroadcastError(t *testing.T) {
-	if !reservationExecuteBroadcastSlowTest(t) {
-		return
-	}
 	targetPKH := [20]byte{0x02}
 
 	action, signExecutor, recordingChain, _ := newReanchorSignFixture(
@@ -153,6 +144,8 @@ func TestReservationReanchorAction_BroadcastError(t *testing.T) {
 		true, // never confirm, so the broadcast step times out
 		pendingReanchorActionState(targetPKH),
 	)
+	action.broadcastTimeout = reservationExecuteBroadcastTimeout
+	action.broadcastCheckDelay = reservationExecuteBroadcastCheckDelay
 
 	err := action.execute()
 	if err == nil {

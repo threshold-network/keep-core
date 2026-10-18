@@ -31,10 +31,10 @@ import (
 //
 // The executor's broadcastTransaction loop returns a "broadcast timeout
 // exceeded" error only when the relayed transaction is never confirmed
-// within the (const) reservationActionBroadcastTimeout; a full-execute
-// broadcast-error test would therefore block for fifteen minutes. The
-// broadcast-error error surface is instead pinned at the executor level with
-// short timeouts (reservationBroadcastTransactionTest), so these execute-level
+// within the action's broadcastTimeout, which production sets to the const
+// reservationActionBroadcastTimeout. The broadcast-error paths are therefore
+// covered with a shortened broadcastTimeout on the action under test
+// (TestReservationAnchorAction_BroadcastError), so these execute-level
 // tests stay fast: they cover the sign-error, success, expiry-guard, and
 // pending-recheck paths.
 
