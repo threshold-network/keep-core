@@ -1044,9 +1044,9 @@ func rrReleaseReservedDepositToPool(c *cobra.Command, args []string) error {
 
 func rrRequestReservationAcceptanceCommand() *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "request-reservation-acceptance [arg_reservationKey] [arg_walletPubKeyHash]",
+		Use:                   "request-reservation-acceptance [arg_fundingTx_json] [arg_fundingProof_json] [arg_fundingOutputIndex] [arg_walletPubKeyHash]",
 		Short:                 "Calls the nonpayable method requestReservationAcceptance on the ReservationRouter contract.",
-		Args:                  cmd.ArgCountChecker(2),
+		Args:                  cmd.ArgCountChecker(4),
 		RunE:                  rrRequestReservationAcceptance,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
@@ -1064,18 +1064,27 @@ func rrRequestReservationAcceptance(c *cobra.Command, args []string) error {
 		return err
 	}
 
-	arg_reservationKey, err := hexutil.DecodeBig(args[0])
+	arg_fundingTx_json := abi.BitcoinTxInfo4{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_fundingTx_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_fundingTx_json to abi.BitcoinTxInfo4: %w", err)
+	}
+
+	arg_fundingProof_json := abi.BitcoinTxProof3{}
+	if err := json.Unmarshal([]byte(args[1]), &arg_fundingProof_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_fundingProof_json to abi.BitcoinTxProof3: %w", err)
+	}
+	arg_fundingOutputIndex, err := decode.ParseUint[uint32](args[2], 32)
 	if err != nil {
 		return fmt.Errorf(
-			"couldn't parse parameter arg_reservationKey, a uint256, from passed value %v",
-			args[0],
+			"couldn't parse parameter arg_fundingOutputIndex, a uint32, from passed value %v",
+			args[2],
 		)
 	}
-	arg_walletPubKeyHash, err := decode.ParseBytes20(args[1])
+	arg_walletPubKeyHash, err := decode.ParseBytes20(args[3])
 	if err != nil {
 		return fmt.Errorf(
 			"couldn't parse parameter arg_walletPubKeyHash, a bytes20, from passed value %v",
-			args[1],
+			args[3],
 		)
 	}
 
@@ -1086,7 +1095,9 @@ func rrRequestReservationAcceptance(c *cobra.Command, args []string) error {
 	if shouldSubmit, _ := c.Flags().GetBool(cmd.SubmitFlag); shouldSubmit {
 		// Do a regular submission. Take payable into account.
 		transaction, err = contract.RequestReservationAcceptance(
-			arg_reservationKey,
+			arg_fundingTx_json,
+			arg_fundingProof_json,
+			arg_fundingOutputIndex,
 			arg_walletPubKeyHash,
 		)
 		if err != nil {
@@ -1097,7 +1108,9 @@ func rrRequestReservationAcceptance(c *cobra.Command, args []string) error {
 	} else {
 		// Do a call.
 		err = contract.CallRequestReservationAcceptance(
-			arg_reservationKey,
+			arg_fundingTx_json,
+			arg_fundingProof_json,
+			arg_fundingOutputIndex,
 			arg_walletPubKeyHash,
 			cmd.BlockFlagValue.Int,
 		)

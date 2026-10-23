@@ -945,7 +945,9 @@ func (rr *ReservationRouter) ReleaseReservedDepositToPoolGasEstimate(
 
 // Transaction submission.
 func (rr *ReservationRouter) RequestReservationAcceptance(
-	arg_reservationKey *big.Int,
+	arg_fundingTx abi.BitcoinTxInfo4,
+	arg_fundingProof abi.BitcoinTxProof3,
+	arg_fundingOutputIndex uint32,
 	arg_walletPubKeyHash [20]byte,
 
 	transactionOptions ...chainutil.TransactionOptions,
@@ -954,7 +956,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 		"submitting transaction requestReservationAcceptance",
 		" params: ",
 		fmt.Sprint(
-			arg_reservationKey,
+			arg_fundingTx,
+			arg_fundingProof,
+			arg_fundingOutputIndex,
 			arg_walletPubKeyHash,
 		),
 	)
@@ -983,7 +987,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 
 	transaction, err := rr.contract.RequestReservationAcceptance(
 		transactorOptions,
-		arg_reservationKey,
+		arg_fundingTx,
+		arg_fundingProof,
+		arg_fundingOutputIndex,
 		arg_walletPubKeyHash,
 	)
 	if err != nil {
@@ -992,7 +998,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 			rr.transactorOptions.From,
 			nil,
 			"requestReservationAcceptance",
-			arg_reservationKey,
+			arg_fundingTx,
+			arg_fundingProof,
+			arg_fundingOutputIndex,
 			arg_walletPubKeyHash,
 		)
 	}
@@ -1019,7 +1027,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 
 			transaction, err := rr.contract.RequestReservationAcceptance(
 				newTransactorOptions,
-				arg_reservationKey,
+				arg_fundingTx,
+				arg_fundingProof,
+				arg_fundingOutputIndex,
 				arg_walletPubKeyHash,
 			)
 			if err != nil {
@@ -1028,7 +1038,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 					rr.transactorOptions.From,
 					nil,
 					"requestReservationAcceptance",
-					arg_reservationKey,
+					arg_fundingTx,
+					arg_fundingProof,
+					arg_fundingOutputIndex,
 					arg_walletPubKeyHash,
 				)
 			}
@@ -1050,7 +1062,9 @@ func (rr *ReservationRouter) RequestReservationAcceptance(
 
 // Non-mutating call, not a transaction submission.
 func (rr *ReservationRouter) CallRequestReservationAcceptance(
-	arg_reservationKey *big.Int,
+	arg_fundingTx abi.BitcoinTxInfo4,
+	arg_fundingProof abi.BitcoinTxProof3,
+	arg_fundingOutputIndex uint32,
 	arg_walletPubKeyHash [20]byte,
 	blockNumber *big.Int,
 ) error {
@@ -1065,7 +1079,9 @@ func (rr *ReservationRouter) CallRequestReservationAcceptance(
 		rr.contractAddress,
 		"requestReservationAcceptance",
 		&result,
-		arg_reservationKey,
+		arg_fundingTx,
+		arg_fundingProof,
+		arg_fundingOutputIndex,
 		arg_walletPubKeyHash,
 	)
 
@@ -1073,7 +1089,9 @@ func (rr *ReservationRouter) CallRequestReservationAcceptance(
 }
 
 func (rr *ReservationRouter) RequestReservationAcceptanceGasEstimate(
-	arg_reservationKey *big.Int,
+	arg_fundingTx abi.BitcoinTxInfo4,
+	arg_fundingProof abi.BitcoinTxProof3,
+	arg_fundingOutputIndex uint32,
 	arg_walletPubKeyHash [20]byte,
 ) (uint64, error) {
 	var result uint64
@@ -1084,7 +1102,9 @@ func (rr *ReservationRouter) RequestReservationAcceptanceGasEstimate(
 		"requestReservationAcceptance",
 		rr.contractABI,
 		rr.transactor,
-		arg_reservationKey,
+		arg_fundingTx,
+		arg_fundingProof,
+		arg_fundingOutputIndex,
 		arg_walletPubKeyHash,
 	)
 
