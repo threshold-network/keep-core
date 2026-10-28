@@ -1,0 +1,21 @@
+# Phase C rerun PR fixes triage and actions
+
+Rows whose final origin is pre-existing code are not part of this record and are omitted.
+
+| ID | final origin | final verdict | action (commit SHA + test name, or reason not fixed) | evidence file:line |
+|---|---|---|---|---|
+| G1-R17 | PR fix | Disputed (Informational) | Not fixed: `checkSweepFeeFloor` size estimator uses fixed dummy script parameters with deterministic virtual size that never fails at runtime; `MinWalletTxSatPerVByteFee` is positive by config validation; on-chain `WalletProposalValidator` validates the proposal | `pkg/tbtc/deposit_sweep.go:692-715,754-762` |
+| G1-R20 | PR fix | Disputed (Informational) | Not fixed: candidate selection in `addCandidateIfLive` queries on-chain state and validates `wallet.State == tbtc.StateLive` for both cached and event-discovered wallets; on resume path `ValidateReservationReanchorProposal` calls on-chain `WalletProposalValidator.validateReservationReanchorProposal` verifying the target is `Live` | `pkg/tbtcpg/reservation_reanchor.go:394-400,1174,1256-1267` |
+| G2-R1 | PR fix | Low Confirmed | Fixed in `cb0e62c29` (`TestRerun_G2_R1_StaleDepositCursorPreservedAcrossTicks`) | `pkg/maintainer/spv/reservation_stale_deposit_watch.go:593-608` |
+| G2-R2 | PR fix | Low Confirmed | Fixed in `cb0e62c29` (`TestRerun_G2_R2_StaleDepositWatcherSingleHeadTimePerTick`) | `pkg/maintainer/spv/reservation_stale_deposit_watch.go:272-276` |
+| G2-R4 | PR #4282 | Disputed (Informational) | Not fixed: `WalletReservationsCount` is a direct contract storage counter on `ReservationRouter.sol`; returning `nil, nil` on 0 without scanning event logs is standard design and correctly avoids unnecessary log queries | `pkg/chain/ethereum/tbtc.go:1310-1320` |
+| G2-R5 | PR #4282 | Disputed (Informational) | Not fixed: `NewWalletRegistered` is an immutable historical event; caching the resolved registration block in `walletRegistrationBlockCache` avoids repeating full-chain log queries on subsequent lookups | `pkg/chain/ethereum/tbtc.go:1372-1393,1423-1425` |
+| G2-R6 | PR fix | Low Confirmed | Fixed in `cb0e62c29` (`TestRerun_G2_R6_StaleDepositPollTickBudgetUsesChainHeadTime`) | `pkg/maintainer/spv/reservation_stale_deposit_watch.go:600-610` |
+| G4-R23 | PR fix | False positive | Not fixed: `ReleaseBroadcastChannel` explicitly cancels all ticker contexts (`cancelTicker`) in the session via `cancel()` | `pkg/net/local/broadcast_channel_manager.go:115-123` |
+| G4-R41 | PR #4282 | Disputed (Informational) | Not fixed: Action execution uses on-chain block counters and chain head timestamps (`GetLatestBlockTimestamp`), not host wall clock, for eligibility and timeout checks | `pkg/tbtc/reservation.go:739,887-913` |
+| G4-R42 | PR #4282 | Disputed (Informational) | Not fixed: Checking on-chain action state of pending unproven actions is the standard SPV maintainer loop, bounded by governance reservation caps; settled/abandoned actions are evicted | `pkg/maintainer/spv/reservation_proof_loop.go:454-520` |
+| G4-R43 | PR #4282 | False positive | Not fixed: All action types including `ActionReservationAnchor` and `ActionReservationReanchor` are fully handled with exact concrete type assertions; unmarshaling guarantees type and enum match | `pkg/tbtc/node_coordination.go:266-333` |
+| G4-R44 | PR fix | Disputed (Informational) | Not fixed: `applyWalletTxFeePolicy` executes synchronously once at node startup in `Initialize` before concurrent routines are spawned; runtime usage is read-only | `pkg/tbtc/tbtc.go:196-215,244` |
+| G4-R45 | PR fix | Disputed (Informational) | Not fixed: `WalletTxFeeBufferPercent` is an operator configuration setting; arithmetic in `bufferedWalletTxFeeFloor` uses `big.Int` to prevent integer overflow | `pkg/tbtc/tbtc.go:211-213` |
+| G4-R47 | PR fix | Disputed (Informational) | Not fixed: Reading group parameters from the governance-controlled on-chain `EcdsaDkgValidator` contract is the intended on-chain parameter management design | `pkg/tbtc/tbtc.go:249-270` |
+| G4-R51 | PR fix | Disputed (Informational) | Not fixed: Size estimators for 1-in-1-out reservation transactions use constant dummy parameters and never error at runtime | `pkg/tbtc/reservation.go:700-708,937-945` |

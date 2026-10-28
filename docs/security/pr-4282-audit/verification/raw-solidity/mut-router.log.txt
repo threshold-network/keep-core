@@ -1,0 +1,176 @@
+INFO:Slither-Mutate:Starting mutation campaign in contracts/bridge/ReservationRouter.sol
+INFO:Slither-Mutate:Preparing to mutate contracts:
+- ReservationRouter
+INFO:Slither-Mutate:Timing tests..
+INFO:Slither-Mutate:Test suite passes in 171 seconds, commencing mutation campaign with a timeout of 240 seconds
+
+ERROR:ContractSolcParsing:Impossible to generate IR for BitcoinTx.extractPubKeyHash (contracts/bridge/BitcoinTx.sol#337-384):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Deposit._revealDeposit (contracts/bridge/Deposit.sol#198-421):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.submitFraudChallenge (contracts/bridge/Fraud.sol#134-199):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.resolveFraudChallenge (contracts/bridge/Fraud.sol#324-347):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.notifyFraudChallengeDefeatTimeout (contracts/bridge/Fraud.sol#383-436):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.extractSighashType (contracts/bridge/Fraud.sol#568-574):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Redemption.requestRedemption (contracts/bridge/Redemption.sol#483-639):
+ 'NoneType' object has no attribute 'parameters'
+INFO:Slither-Mutate:Mutating contract ReservationRouter
+INFO:Slither-Mutate:Targeting functions: ['requestReservationAcceptance', 'requestReservationReanchor', 'notifyReservationActionTimeout', 'notifyReservationAcceptanceTimedOut', 'updateReservationParameters', 'notifyStaleReservedDeposit', 'forceStaleReservedDeposit', 'notifyReservationStranded', 'updateReservationCaps', 'reservationCaps', 'pendingThirdPartyReanchorHolds', 'walletReservationsAmount', 'walletReservationsCount', 'reservationByAnchorUtxo', 'reservedDepositWallet', 'pendingReservedDeposits', 'reservations', 'reservationActions', 'reservationParameters', 'activeReservationsCount', 'reservationRouter']
+INFO:Slither-Mutate:Including modifiers: ['onlyGovernance']
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 216: 'self.requestReservationAcceptance(reservationKey, walletPubKeyHash)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 245: 'self.requestReservationReanchor(
+            reservationKey,
+            targetWalletPubKeyHash,
+            msg.sender == governance,
+            walletMembersIDs,
+            walletMemberIndex
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 316: 'self.notifyReservationActionTimeout(reservationKey)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[RR] Line 337: 'self.notifyReservationAcceptanceTimedOut(reservationKey)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 64 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.60s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/bridge/ReservationRouter.sol:377:16:
+stderr:     |
+stderr: 377 |     ) external revert() {
+stderr:     |                ^^^^^^
+INFO:Slither-Mutate:[RR] Line 377: 'onlyGovernance' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 378: 'self.updateReservationParameters(
+            reservationVault,
+            reservationMinAmount,
+            reservationTxMaxFee,
+            reservationTermSeconds,
+            reservationDissolutionDelay,
+            reservationMaxTotalAmount,
+            maxReservationsPerWallet,
+            reservationActionTimeout,
+            reservationRenewalWindowSeconds
+        )' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 397: 'self.notifyStaleReservedDeposit(depositKey)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 64 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.59s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/bridge/ReservationRouter.sol:412:9:
+stderr:     |
+stderr: 412 |         revert()
+stderr:     |         ^^^^^^
+INFO:Slither-Mutate:[RR] Line 412: 'onlyGovernance' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 414: 'self.forceStaleReservedDeposit(depositKey)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 426: 'self.notifyReservationStranded(reservationKey)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 64 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.06s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/bridge/ReservationRouter.sol:455:16:
+stderr:     |
+stderr: 455 |     ) external revert() {
+stderr:     |                ^^^^^^
+INFO:Slither-Mutate:[RR] Line 455: 'onlyGovernance' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 456: 'self.updateReservationCaps(
+            maxReservationsAmountPerWallet,
+            reservationMaxSingleAmount,
+            maxActiveReservations,
+            maxThirdPartyReanchorHoldsPerWallet
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[RR] Line 477: 'maxReservationsAmountPerWallet = self.maxReservationsAmountPerWallet' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 478: 'reservationMaxSingleAmount = self.reservationMaxSingleAmount' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[RR] Line 479: 'maxActiveReservations = self.maxActiveReservations' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 480: 'maxThirdPartyReanchorHoldsPerWallet =
+            self.maxThirdPartyReanchorHoldsPerWallet' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 494: 'holds = self.pendingThirdPartyReanchorHolds[walletPubKeyHash]' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Error: "tbtc-v2/solidity/forge-artifacts": Directory not empty (os error 39)
+INFO:Slither-Mutate:[RR] Line 506: 'return self.walletReservationInfo[walletPubKeyHash].amount' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 517: 'return self.walletReservationInfo[walletPubKeyHash].count' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 530: 'return
+            self.reservationsByAnchorUtxo[
+                uint256(
+                    keccak256(
+                        abi.encodePacked(anchorTxHash, anchorTxOutputIndex)
+                    )
+                )
+            ]' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 548: 'return self.pendingReservedDeposit[depositKey].walletPubKeyHash' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 554: 'return self.pendingReservedDeposits' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 566: 'return self.reservations[reservationKey]' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 578: 'return
+            self.reservationActions[
+                Reservation.actionKey(reservationKey, requestNonce)
+            ]' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 601: 'reservationVault = self.reservationVault' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 602: 'reservationMinAmount = self.reservationMinAmount' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 603: 'reservationTxMaxFee = self.reservationTxMaxFee' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 604: 'reservationTermSeconds = self.reservationTermSeconds' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 605: 'reservationDissolutionDelay = self.reservationDissolutionDelay' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 606: 'reservationMaxTotalAmount = self.reservationMaxTotalAmount' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 607: 'reservationTotalAmount = self.reservationTotalAmount' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 608: 'maxReservationsPerWallet = self.maxReservationsPerWallet' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 609: 'reservationActionTimeout = self.reservationActionTimeout' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 610: 'reservationRenewalWindowSeconds = self.reservationRenewalWindowSeconds' ==> 'revert()' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 622: 'count = self.activeReservationsCount' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 623: 'maxActive = self.maxActiveReservations' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 630: 'return self.reservationRouter' ==> 'revert()' --> UNCAUGHT
+INFO:Slither-Mutate:Mutator RR found 23 caught revert mutants (out of 33 that compile)
+INFO:Slither-Mutate:Mutator AOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Mutator LOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Mutator ROR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Done mutating ReservationRouter.
+INFO:Slither-Mutate:Revert mutants: 23 caught of 33 (69.7% caught)
+INFO:Slither-Mutate:Zero Comment mutants analyzed
+INFO:Slither-Mutate:Zero Tweak mutants analyzed
+
+INFO:Slither-Mutate:Finished mutation testing assessment of 'contracts/bridge/ReservationRouter.sol' in 1 hour
+
+ROUTER_EXIT=0

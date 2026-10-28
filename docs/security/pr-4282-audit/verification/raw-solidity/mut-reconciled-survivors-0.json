@@ -1,0 +1,54 @@
+{
+ "R03": {
+  "name": "R03 reanchor floor: > -> >=",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 43
+ },
+ "R11": {
+  "name": "R11 amount cap: <= -> <",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 44
+ },
+ "R12": {
+  "name": "R12 privilege: governance not privileged",
+  "verdict": "PATTERN_NOT_FOUND"
+ },
+ "R26": {
+  "name": "R26 custody add: count += 2",
+  "verdict": "KILLED",
+  "note": "3 failing",
+  "seconds": 43
+ },
+ "R28": {
+  "name": "R28 custody remove: count not reduced",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 44
+ },
+ "R29": {
+  "name": "R29 custody remove: amount not reduced",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 42
+ },
+ "P01": {
+  "name": "P01 acceptance settle: custody not added",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 47
+ },
+ "P03": {
+  "name": "P03 reanchor settle: old custody not removed",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 48
+ },
+ "W02": {
+  "name": "W02 wrapper: output index ignored in key",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 35
+ }
+}

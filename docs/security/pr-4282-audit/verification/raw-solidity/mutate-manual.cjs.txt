@@ -1,0 +1,118 @@
+// Manual mutation harness for the new reservation logic.
+// usage: node mutate.cjs <worktree> <shardIndex> <shardCount> <outJson>
+const fs = require("fs")
+const cp = require("child_process")
+const crypto = require("crypto")
+const [wt, shardIndexArg, shardCountArg, outPath] = process.argv.slice(2)
+const shardIndex = Number(shardIndexArg)
+const shardCount = Number(shardCountArg)
+const sol = `${wt}/solidity`
+const killset = process.env.KILLSET || fs.readFileSync("/dev/shm/public-merge/killset.txt", "utf8").trim()
+const only = process.env.ONLY ? new Set(process.env.ONLY.split(",")) : null
+const RES = "contracts/bridge/Reservation.sol"
+const PRF = "contracts/bridge/ReservationProofs.sol"
+const RTR = "contracts/bridge/ReservationRouter.sol"
+
+const ind = (n) => " ".repeat(n)
+const mutants = [
+  // acceptance floor
+  ["R01 floor: 2*txMaxFee -> 1*txMaxFee", RES, "uint256(minAmount) + 2 * uint256(txMaxFee)", "uint256(minAmount) + uint256(txMaxFee)"],
+  ["R02 floor: > -> >=", RES, `uint256(deposit.amount) >\n${ind(16)}uint256(minAmount) + 2 * uint256(txMaxFee)`, `uint256(deposit.amount) >=\n${ind(16)}uint256(minAmount) + 2 * uint256(txMaxFee)`],
+  // re-anchor floor
+  ["R03 reanchor floor: > -> >=", RES, "anchorAmount > txMaxFee + minAmount,", "anchorAmount >= txMaxFee + minAmount,"],
+  ["R04 reanchor floor: drops minAmount", RES, "anchorAmount > txMaxFee + minAmount,", "anchorAmount > txMaxFee,"],
+  // skipTargetCaps
+  ["R05 skip: isPrivileged only (Live source also skips)", RES, "isPrivileged && sourceState != Wallets.WalletState.Live;", "isPrivileged;"],
+  ["R06 skip: non-Live source only (third party skips)", RES, "isPrivileged && sourceState != Wallets.WalletState.Live;", "sourceState != Wallets.WalletState.Live;"],
+  ["R07 skip: || instead of &&", RES, "isPrivileged && sourceState != Wallets.WalletState.Live;", "isPrivileged || sourceState != Wallets.WalletState.Live;"],
+  ["R08 skip: count cap never skipped", RES, `if (!skipTargetCaps) {\n${ind(20)}require(\n${ind(24)}targetCount`, `if (true) {\n${ind(20)}require(\n${ind(24)}targetCount`],
+  ["R09 skip: amount cap never skipped", RES, `if (!skipTargetCaps) {\n${ind(20)}require(\n${ind(24)}self.maxReservationsAmountPerWallet == 0 ||`, `if (true) {\n${ind(20)}require(\n${ind(24)}self.maxReservationsAmountPerWallet == 0 ||`],
+  ["R10 count cap: <= -> <", RES, "targetCount <= self.maxReservationsPerWallet", "targetCount < self.maxReservationsPerWallet"],
+  ["R11 amount cap: <= -> <", RES, "targetAmount <= self.maxReservationsAmountPerWallet", "targetAmount < self.maxReservationsAmountPerWallet"],
+  // privilege computation
+  ["R12 privilege: governance not privileged", RES, `privileged ||\n${ind(12)}reservation.owner == msg.sender ||`, `false ||\n${ind(12)}reservation.owner == msg.sender ||`],
+  ["R13 privilege: owner not privileged", RES, `reservation.owner == msg.sender ||\n${ind(12)}self.isSpvMaintainer[msg.sender] ||`, `false ||\n${ind(12)}self.isSpvMaintainer[msg.sender] ||`],
+  ["R14 privilege: maintainer not privileged", RES, `self.isSpvMaintainer[msg.sender] ||\n${ind(12)}walletMembersIDs.length > 0;`, `false ||\n${ind(12)}walletMembersIDs.length > 0;`],
+  ["R15 privilege: member not privileged", RES, "walletMembersIDs.length > 0;", "false;"],
+  ["R16 member proof failure does not revert", RES, `if (!isSourceMember) {\n${ind(16)}revert(`, `if (false) {\n${ind(16)}revert(`],
+  ["R17 Live source: any caller may rotate", RES, `require(\n${ind(20)}privileged,\n${ind(20)}"Only governance can rotate a Live wallet's anchor"`, `require(\n${ind(20)}true,\n${ind(20)}"Only governance can rotate a Live wallet's anchor"`],
+  ["R18 cooldown applies to nobody", RES, `if (!privileged) {\n${ind(12)}require(\n${ind(16)}block.timestamp >= reservation.reanchorCooldownUntil`, `if (false) {\n${ind(12)}require(\n${ind(16)}block.timestamp >= reservation.reanchorCooldownUntil`],
+  ["R19 source state: Closing refused", RES, `sourceState == Wallets.WalletState.MovingFunds ||\n${ind(24)}sourceState == Wallets.WalletState.Closing,`, `sourceState == Wallets.WalletState.MovingFunds,`],
+  // hand-off reserve gate
+  ["R20 reserve: <= -> <", RES, "activeAfterThis <= remaining * self.maxReservationsPerWallet", "activeAfterThis < remaining * self.maxReservationsPerWallet"],
+  ["R21 reserve: ignores per-wallet cap", RES, "activeAfterThis <= remaining * self.maxReservationsPerWallet", "activeAfterThis <= remaining"],
+  ["R22 reserve: > -> >=", RES, "liveWalletsCount > handoffReserveWallets\n", "liveWalletsCount >= handoffReserveWallets\n"],
+  ["R23 reserve: does not subtract the reserve", RES, "? liveWalletsCount - handoffReserveWallets", "? liveWalletsCount"],
+  ["R24 caps: zero reserve accepted", RES, "handoffReserveWallets > 0,", "true,"],
+  ["R25 caps: reserve not stored", RES, "self.handoffReserveWallets = handoffReserveWallets;", ""],
+  // anchored custody
+  ["R26 custody add: count += 2", RES, "self.walletAnchoredInfo[walletPubKeyHash].count += 1;", "self.walletAnchoredInfo[walletPubKeyHash].count += 2;"],
+  ["R27 custody add: amount not added", RES, "self.walletAnchoredInfo[walletPubKeyHash].amount += anchorAmount;", ""],
+  ["R28 custody remove: count not reduced", RES, "self.walletAnchoredInfo[walletPubKeyHash].count -= 1;", ""],
+  ["R29 custody remove: amount not reduced", RES, "self.walletAnchoredInfo[walletPubKeyHash].amount -= anchorAmount;", ""],
+  // proofs
+  ["P01 acceptance settle: custody not added", PRF, `Reservation.addAnchoredCustody(\n${ind(12)}self,\n${ind(12)}reservation.walletPubKeyHash,\n${ind(12)}reservation.anchorAmount\n${ind(8)});`, ""],
+  ["P02 late/first settle: target custody not added", PRF, `Reservation.addAnchoredCustody(\n${ind(12)}self,\n${ind(12)}targetWalletPubKeyHash,\n${ind(12)}anchorAmount\n${ind(8)});`, ""],
+  ["P03 reanchor settle: old custody not removed", PRF, `Reservation.removeAnchoredCustody(\n${ind(12)}self,\n${ind(12)}oldWalletPubKeyHash,\n${ind(12)}oldAnchorAmount\n${ind(8)});`, ""],
+  ["P04 reanchor settle: new custody not added", PRF, `Reservation.addAnchoredCustody(\n${ind(12)}self,\n${ind(12)}newWalletPubKeyHash,\n${ind(12)}newAnchorAmount\n${ind(8)});`, ""],
+  ["P05 settle: Closing wallet strands at once", PRF, `walletState == Wallets.WalletState.Closed ||\n${ind(12)}walletState == Wallets.WalletState.Terminated`, `walletState == Wallets.WalletState.Closing ||\n${ind(12)}walletState == Wallets.WalletState.Closed ||\n${ind(12)}walletState == Wallets.WalletState.Terminated`],
+  ["P06 settle: Terminated wallet not stranded", PRF, `walletState == Wallets.WalletState.Closed ||\n${ind(12)}walletState == Wallets.WalletState.Terminated`, `walletState == Wallets.WalletState.Closed`],
+  ["P07 settle: Closed wallet not stranded", PRF, `walletState == Wallets.WalletState.Closed ||\n${ind(12)}walletState == Wallets.WalletState.Terminated`, `walletState == Wallets.WalletState.Terminated`],
+  // router funding-proof wrapper
+  ["W01 wrapper: no proof validation", RTR, `bytes32 fundingTxHash = BitcoinTx.validateProof(\n${ind(12)}self,\n${ind(12)}fundingTx,\n${ind(12)}fundingProof\n${ind(8)});`, `bytes32 fundingTxHash = sha256(\n${ind(12)}abi.encodePacked(\n${ind(16)}sha256(\n${ind(20)}abi.encodePacked(\n${ind(24)}fundingTx.version,\n${ind(24)}fundingTx.inputVector,\n${ind(24)}fundingTx.outputVector,\n${ind(24)}fundingTx.locktime\n${ind(20)})\n${ind(16)})\n${ind(12)})\n${ind(8)});\n${ind(8)}fundingProof;`],
+  ["W02 wrapper: output index ignored in key", RTR, "abi.encodePacked(fundingTxHash, fundingOutputIndex)", "abi.encodePacked(fundingTxHash, uint32(0))"],
+  ["W03 wrapper: key is the bare hash", RTR, "abi.encodePacked(fundingTxHash, fundingOutputIndex)", "abi.encodePacked(fundingTxHash)"],
+]
+
+const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")
+const results = fs.existsSync(outPath) ? JSON.parse(fs.readFileSync(outPath, "utf8")) : {}
+const mine = mutants.filter((m, i) => i % shardCount === shardIndex && (!only || only.has(m[0].split(" ")[0])))
+
+for (const [name, file, find, replace] of mine) {
+  const id = name.split(" ")[0]
+  if (results[id]) continue
+  const path = `${sol}/${file}`
+  const original = fs.readFileSync(path, "utf8")
+  const before = sha(path)
+  const first = original.indexOf(find)
+  if (first < 0 || original.indexOf(find, first + 1) >= 0) {
+    results[id] = { name, verdict: first < 0 ? "PATTERN_NOT_FOUND" : "PATTERN_NOT_UNIQUE" }
+    fs.writeFileSync(outPath, JSON.stringify(results, null, 1))
+    continue
+  }
+  const start = Date.now()
+  let verdict = "ERROR"
+  let note = ""
+  try {
+    fs.writeFileSync(path, original.slice(0, first) + replace + original.slice(first + find.length))
+    const r = cp.spawnSync(
+      "bash",
+      ["-c", `cd ${sol} && env -u FORKING_URL -u FORKING_BLOCK TEST_USE_STUBS_TBTC=true USE_EXTERNAL_DEPLOY=true NODE_OPTIONS=--max-old-space-size=4096 npx hardhat test ${killset}`],
+      { encoding: "utf8", maxBuffer: 1 << 28, timeout: 40 * 60 * 1000 }
+    )
+    const out = (r.stdout || "") + (r.stderr || "")
+    const failing = /(\d+) failing/.exec(out)
+    const passing = /(\d+) passing/.exec(out)
+    if (/HH600|Compilation failed|CompilerError|TypeError:|DeclarationError|ParserError/.test(out) && !passing) {
+      verdict = "NOT_VIABLE"
+      note = (out.match(/(Error|TypeError|DeclarationError)[^\n]{0,120}/) || [""])[0]
+    } else if (failing) {
+      verdict = "KILLED"
+      note = `${failing[1]} failing`
+    } else if (passing && r.status === 0) {
+      verdict = "SURVIVED"
+      note = `${passing[1]} passing`
+    } else {
+      verdict = r.error ? "TIMEOUT" : "ERROR"
+      note = `status ${r.status}`
+    }
+    fs.writeFileSync(`${outPath}.${id}.log`, out.slice(-6000))
+  } finally {
+    fs.writeFileSync(path, original)
+  }
+  if (sha(path) !== before) throw new Error(`restore failed for ${file}`)
+  results[id] = { name, verdict, note, seconds: Math.round((Date.now() - start) / 1000) }
+  fs.writeFileSync(outPath, JSON.stringify(results, null, 1))
+  console.log(id, verdict, note)
+}
+console.log("shard done")

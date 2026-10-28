@@ -1,0 +1,11 @@
+reconcile.sh /dev/shm/public-merge/rec2 (c5cb387cf) 357b8d943 40bdfe4d4 456d8bdfd
+(a verification-tooling branch @ b8b1405a8)
+
+files the PR changed under contracts and deploy (357b8d943 to 40bdfe4d4): 116
+  formatting only (identical after normalizing): 69
+  real change, already present in c5cb387cf: 45
+  not clean: 2 (contracts: 0)
+    deploy/97_set_reservation_parameters.ts: PR change is not in the head under test (or conflicts with it)
+    deploy/98_generate_reservation_mainnet_calldata.ts: PR change is not in the head under test (or conflicts with it)
+contracts at 456d8bdfd against the head under test, both normalized: 0 differing files
+exit 0

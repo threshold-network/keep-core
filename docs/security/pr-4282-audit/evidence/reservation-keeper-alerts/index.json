@@ -1,0 +1,50 @@
+{
+  "keepCore": "d53c0c8d2",
+  "monitoring": "be2e89ddd for the earlier stages; 52401a693 for monitor-age-rehearsal-head-age.json and rehearsal-head-testnet4-startup.json",
+  "files": [
+    {
+      "file": "legacy-testnet4-startup.json",
+      "sha256": "26a4c230f8407cfdc774f6c49d0ac8eeef5878a5bef93f039bf0b13f3b830c48"
+    },
+    {
+      "file": "monitor-age-fixed-age.json",
+      "sha256": "d68a4c84e57aef822ac4cbeb73ac010aec85dd2510f9bfbc0dfc8990b58c7de5"
+    },
+    {
+      "file": "monitor-age-rehearsal-head-age.json",
+      "sha256": "214334b7b4199a026f0acf0737920ef3e8f2cc3a6f66cf87e343c80edd812435"
+    },
+    {
+      "file": "monitor-baseline-original-baseline.json",
+      "sha256": "fa45be0a6234071225f87848e18c20f9b6e05ba36864628e410e6477abd10b92"
+    },
+    {
+      "file": "monitor-fee-original-fee.json",
+      "sha256": "ab781cebdc0df9b6262791dd0c632ed48dba5899dc76745b8b91c5cd7f70bab9"
+    },
+    {
+      "file": "monitor-no-target-fixed-no-target.json",
+      "sha256": "00281d69adc922e89eef07799d9746a4cd63f8ee5b00483d4a701c698b6cc289"
+    },
+    {
+      "file": "monitor-no-target-original-no-target-red.json",
+      "sha256": "3888a279e391aa12a1e45c619428223d72f3704c31b4c929f4a17e4f895353e8"
+    },
+    {
+      "file": "monitor-repay-original-repay.json",
+      "sha256": "dca8da369929ad8cea7aa06a11268ff7ff4258090ea0f6350377e53652195973"
+    },
+    {
+      "file": "monitor-stale-fixed-outage.json",
+      "sha256": "ab0a8d8994658cde5434a1ec2acd19eec16700ca6a2c136385ad9a443b7e0213"
+    },
+    {
+      "file": "rehearsal-head-testnet4-startup.json",
+      "sha256": "599b9da9a051678abd4712d40e74219575bf23248a24f06a495acc78716099a3"
+    },
+    {
+      "file": "testnet4-network-proof.json",
+      "sha256": "3954d661e4ffba1c7301a342f49e36ee804f08555c9636ee31ea4aa8008bf064"
+    }
+  ]
+}

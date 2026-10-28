@@ -1,0 +1,25 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/9 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 9/9 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 10133 (3372/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 6s, execs: 17936 (2605/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 9s, execs: 32574 (4879/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 12s, execs: 48542 (5322/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 15s, execs: 64604 (5354/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 18s, execs: 80848 (5412/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 21s, execs: 92317 (3825/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 24s, execs: 106236 (4640/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 27s, execs: 117426 (3730/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 30s, execs: 131244 (4606/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 33s, execs: 149050 (5936/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 36s, execs: 167515 (6156/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 39s, execs: 186832 (6439/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 42s, execs: 203668 (5610/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 45s, execs: 220103 (5480/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 48s, execs: 237914 (5936/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 51s, execs: 250935 (4335/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 54s, execs: 261468 (3515/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 57s, execs: 273351 (3962/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 1m0s, execs: 287160 (4593/sec), new interesting: 0 (total: 9)
+fuzz: elapsed: 1m0s, execs: 287160 (0/sec), new interesting: 0 (total: 9)
+PASS
+ok  	github.com/keep-network/keep-core/pkg/tbtcpg	60.442s
