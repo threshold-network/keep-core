@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"strings"
@@ -769,13 +770,25 @@ func isMatchingReservationAcceptanceTransaction(
 	); err != nil {
 		return false
 	} else if found {
+		if depositRequest.Amount > math.MaxInt64 {
+			return false
+		}
 		fee := int64(depositRequest.Amount) - transaction.Outputs[0].Value
-		if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
+		if fee <= 0 {
+			return false
+		}
+		if event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee {
 			return false
 		}
 	} else {
+		if event.DepositAmount > math.MaxInt64 {
+			return false
+		}
 		fee := int64(event.DepositAmount) - transaction.Outputs[0].Value
-		if fee <= 0 || (event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee) {
+		if fee <= 0 {
+			return false
+		}
+		if event.TxMaxFee > 0 && uint64(fee) > event.TxMaxFee {
 			return false
 		}
 	}

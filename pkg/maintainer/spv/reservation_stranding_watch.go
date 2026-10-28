@@ -194,6 +194,10 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 	}
 
 	var headTime time.Time
+	// headNow mirrors headTime as the uint32 UNIX timestamp the on-chain
+	// deadlines use, bounded so it serves the comparisons below in the same
+	// form as DissolutionEligibleAt (see tbtc.UnixSecondsToUint32).
+	var headNow uint32
 	if requireDissolutionEligible {
 		headTime, err = rsw.spvChain.GetLatestBlockTimestamp()
 		if err != nil {
@@ -203,6 +207,7 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 				err,
 			)
 		}
+		headNow = tbtc.UnixSecondsToUint32(headTime.Unix())
 	}
 
 	// Best-effort: the termination cause is operational context for the
@@ -276,7 +281,7 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 
 		if requireDissolutionEligible &&
 			(reservation.DissolutionEligibleAt == 0 ||
-				uint64(headTime.Unix()) < uint64(reservation.DissolutionEligibleAt)) {
+				uint64(headNow) < uint64(reservation.DissolutionEligibleAt)) {
 			logger.Debugf(
 				"reservation [%v] on Closing wallet [0x%x] is not yet "+
 					"dissolution-eligible; flagging the wallet for a later pass",

@@ -282,7 +282,7 @@ func (rsdw *ReservationStaleDepositWatcher) checkStaleReservedDeposit(
 	if headTime.IsZero() {
 		return StaleDepositResolutionKeep, nil
 	}
-	headNow := uint32(max(headTime.Unix(), 0))
+	headNow := tbtc.UnixSecondsToUint32(headTime.Unix())
 
 	// Until the snapshotted refund deadline has STRICTLY passed in chain
 	// time the contract rejects the notification and nothing about this
@@ -599,7 +599,7 @@ func (rsdw *ReservationStaleDepositWatcher) pollTick(now uint32) (int, bool) {
 	// notified recently is not re-read before the renotify interval
 	// elapses: the notification needs time to land.
 	headTime := reservationChainHeadTime(rsdw.spvChain)
-	headNow := uint32(max(headTime.Unix(), 0))
+	headNow := tbtc.UnixSecondsToUint32(headTime.Unix())
 	checksLeft := reservationStaleDepositMaxChecksPerTick
 	exhaustedBudget := false
 	for _, key := range rsdw.nextCheckOrder() {
@@ -735,7 +735,7 @@ func (rsdw *ReservationStaleDepositWatcher) Run(
 		case <-ticker.C:
 		}
 
-		now := uint32(time.Now().Unix())
+		now := tbtc.UnixSecondsToUint32(time.Now().Unix())
 		rsdw.pollTick(now)
 	}
 }

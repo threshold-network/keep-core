@@ -3,6 +3,7 @@ package ethereum
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -16,6 +17,13 @@ func (tc *TbtcChain) GetLatestBlockTimestamp() (time.Time, error) {
 	header, err := tc.currentBlock()
 	if err != nil {
 		return time.Time{}, fmt.Errorf("cannot get the latest block header: %w", err)
+	}
+
+	if header.Time > math.MaxInt64 {
+		return time.Time{}, fmt.Errorf(
+			"block timestamp [%v] does not fit in int64",
+			header.Time,
+		)
 	}
 
 	return time.Unix(int64(header.Time), 0), nil

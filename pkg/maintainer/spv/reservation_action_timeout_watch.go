@@ -237,8 +237,11 @@ func NewReservationActionTimeoutWatcher(
 
 // defaultActionTimeoutNowFn returns time.Now() as a uint32 UNIX timestamp.
 // Kept separate from the struct to allow tests to swap it deterministically.
+// The conversion saturates at the uint32 bounds instead of wrapping, so a
+// clock outside 1970-2106 cannot flip the side of a deadline it is compared
+// against (see tbtc.UnixSecondsToUint32).
 func defaultActionTimeoutNowFn() uint32 {
-	return uint32(time.Now().Unix())
+	return tbtc.UnixSecondsToUint32(time.Now().Unix())
 }
 
 // scanActionRequests scans one kind of action-request event from *cursor
@@ -487,7 +490,7 @@ func (ratw *ReservationActionTimeoutWatcher) pollPendingActions() error {
 		if headTime.IsZero() {
 			continue
 		}
-		headNow := uint32(max(headTime.Unix(), 0))
+		headNow := tbtc.UnixSecondsToUint32(headTime.Unix())
 		if headNow >= deadline {
 			ratw.alertOverdueAction(item, action, headTime)
 			notified, err := ratw.checkReservationActionTimeout(

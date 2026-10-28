@@ -168,7 +168,7 @@ func buildReservationProofTxInfo(
 func buildReservationProofTxProof(
 	proof *bitcoin.SpvProof,
 ) *tbtc.BitcoinTxProof {
-	txIndexInBlock := big.NewInt(int64(proof.TxIndexInBlock))
+	txIndexInBlock := new(big.Int).SetUint64(uint64(proof.TxIndexInBlock))
 
 	return &tbtc.BitcoinTxProof{
 		MerkleProof:      proof.MerkleProof,

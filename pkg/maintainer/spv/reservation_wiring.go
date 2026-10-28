@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"math"
 	"sync"
 	"time"
 
@@ -185,13 +186,24 @@ func reservationOperatorStaggerOffset(
 	uniqueKey string,
 	interval time.Duration,
 ) uint32 {
-	intervalSeconds := uint64(interval / time.Second)
-	if intervalSeconds == 0 {
+	intervalSeconds := interval / time.Second
+	if intervalSeconds <= 0 {
 		return 0
+	}
+	if intervalSeconds > math.MaxUint32 {
+		// The offset below is taken modulo intervalSeconds, so it cannot
+		// exceed a representable interval; an interval this large only
+		// means the caller configured years, where any offset fits.
+		intervalSeconds = math.MaxUint32
 	}
 
 	hash := crypto.Keccak256(append(operatorAddress.Bytes(), []byte(uniqueKey)...))
-	return uint32(binary.BigEndian.Uint64(hash[:8]) % intervalSeconds)
+	offset := binary.BigEndian.Uint64(hash[:8]) % uint64(intervalSeconds)
+	if offset > math.MaxUint32 {
+		offset = math.MaxUint32
+	}
+
+	return uint32(offset)
 }
 
 // recordReservationWatcherDeath bumps the watcher-death counter
@@ -533,7 +545,9 @@ func WireReservationWatchers(
 			}()
 
 			if !resultSent {
-				initialCount, initialOK := staleDepositWatcher.pollTick(uint32(time.Now().Unix()))
+				initialCount, initialOK := staleDepositWatcher.pollTick(
+					tbtc.UnixSecondsToUint32(time.Now().Unix()),
+				)
 				result = scanResult{
 					name:   "stale-deposit",
 					count:  initialCount,

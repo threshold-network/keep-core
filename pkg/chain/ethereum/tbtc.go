@@ -660,6 +660,13 @@ func convertReservationFromAbiType(
 		return nil, fmt.Errorf("cannot parse reservation state: [%v]", err)
 	}
 
+	if abiReservation.AnchorAmount > math.MaxInt64 {
+		return nil, fmt.Errorf(
+			"reservation anchor amount [%v] does not fit in int64",
+			abiReservation.AnchorAmount,
+		)
+	}
+
 	anchorUtxo := &bitcoin.UnspentTransactionOutput{
 		Outpoint: &bitcoin.TransactionOutpoint{
 			TransactionHash: abiReservation.AnchorTxHash,
@@ -1221,6 +1228,13 @@ func (tc *TbtcChain) NotifyMovingFundsBelowDust(
 ) error {
 	var utxo tbtcabi.BitcoinTxUTXO
 	if mainUtxo != nil {
+		if mainUtxo.Value < 0 {
+			return fmt.Errorf(
+				"invalid main UTXO value: [%v]",
+				mainUtxo.Value,
+			)
+		}
+
 		utxo = tbtcabi.BitcoinTxUTXO{
 			TxHash:        mainUtxo.Outpoint.TransactionHash,
 			TxOutputIndex: mainUtxo.Outpoint.OutputIndex,

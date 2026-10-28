@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -455,6 +456,13 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 			return nil, err
 		}
 
+		if rds.Amount > math.MaxInt64 {
+			return nil, fmt.Errorf(
+				"scenario deposit amount [%v] does not fit in int64",
+				rds.Amount,
+			)
+		}
+
 		outputs := make([]*bitcoin.TransactionOutput, rds.FundingOutputIndex+1)
 		for i := range outputs {
 			outputs[i] = &bitcoin.TransactionOutput{
@@ -498,7 +506,9 @@ func (rds *ReservedDepositScenario) Materialize() (*ReservedDeposit, error) {
 		// scenarios that intentionally exercise the gate separately.
 		timeoutAt := rds.PendingAcceptanceAction.TimeoutAt
 		if timeoutAt == 0 {
-			timeoutAt = uint32(time.Now().Add(24 * time.Hour).Unix())
+			timeoutAt = tbtc.UnixSecondsToUint32(
+				time.Now().Add(24 * time.Hour).Unix(),
+			)
 		}
 		rds.parsedPendingAction = &tbtc.ReservationAction{
 			ActionType:                tbtc.ReservationActionTypeAcceptance,

@@ -114,7 +114,11 @@ func FindDepositRevealedEventByRevealTime(
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	blocksAgo := uint64(elapsed / averageBlockTime)
+	blocksElapsed := elapsed / averageBlockTime
+	if blocksElapsed < 0 {
+		blocksElapsed = 0
+	}
+	blocksAgo := uint64(blocksElapsed)
 
 	estimatedBlock := uint64(0)
 	if currentBlock > blocksAgo {

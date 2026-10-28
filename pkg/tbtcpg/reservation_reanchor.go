@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"slices"
 	"strings"
@@ -242,6 +243,10 @@ func (rrt *ReservationReanchorTask) Run(
 			err,
 		)
 	}
+	// The request gates below compare the chain head against uint32
+	// deadlines, so convert it once, bounded, in the form they use (see
+	// tbtc.UnixSecondsToUint32).
+	headTimeUnix := tbtc.UnixSecondsToUint32(headTime.Unix())
 	walletParameters, err := rrt.chain.GetWalletParameters()
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -347,7 +352,7 @@ reservationLoop:
 			// that boundary is skipped rather than proposed and rejected;
 			// a fresh request may be issued instead once the generation
 			// times out and the resulting re-anchor cooldown ends.
-			if uint64(headTime.Unix())+
+			if uint64(headTimeUnix)+
 				uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 				uint64(action.TimeoutAt) {
 				taskLogger.Infof(
@@ -467,7 +472,14 @@ reservationLoop:
 			return proposal, true, nil
 
 		case tbtc.ReservationStateActive:
-			if reservation.AnchorUtxo == nil || reservation.AnchorUtxo.Value <= 0 {
+			if reservation.AnchorUtxo == nil {
+				taskLogger.Errorf(
+					"reservation [0x%x] has no anchor UTXO, skipping",
+					reservationKey,
+				)
+				continue reservationLoop
+			}
+			if reservation.AnchorUtxo.Value <= 0 {
 				taskLogger.Errorf(
 					"reservation [0x%x] has no positive anchor value, skipping",
 					reservationKey,
@@ -481,7 +493,7 @@ reservationLoop:
 			// request after a target search: no request before
 			// reanchorCooldownUntil, and the anchor must stay above
 			// txMaxFee + minAmount.
-			if uint64(headTime.Unix()) < uint64(reservation.ReanchorCooldownUntil) {
+			if uint64(headTimeUnix) < uint64(reservation.ReanchorCooldownUntil) {
 				taskLogger.Infof(
 					"reservation [0x%x] is in its re-anchor cooldown until "+
 						"[%d], skipping",
@@ -1539,6 +1551,13 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 		// zero UTXO, so this is reported as an error instead.
 		return nil, false, fmt.Errorf(
 			"wallet main UTXO hash is set but could not be resolved on the Bitcoin chain",
+		)
+	}
+
+	if params.DustThreshold > math.MaxInt64 {
+		return nil, false, fmt.Errorf(
+			"moving funds dust threshold [%v] does not fit in int64",
+			params.DustThreshold,
 		)
 	}
 

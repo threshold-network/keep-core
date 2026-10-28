@@ -3,6 +3,7 @@ package tbtcpg
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"strings"
@@ -437,6 +438,10 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidates(
 			err,
 		)
 	}
+	// The timeout gates below compare the chain head against uint32
+	// deadlines, so convert it once, bounded, in the form they use (see
+	// tbtc.UnixSecondsToUint32).
+	nowUnix := tbtc.UnixSecondsToUint32(now.Unix())
 
 	rat.revealCacheMutex.Lock()
 	previousReveals := rat.revealCache[walletPublicKeyHash]
@@ -456,7 +461,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidates(
 
 		// The event's own timeout lets a generation whose signing window
 		// has closed be dropped without any RPC.
-		if uint64(now.Unix())+
+		if uint64(nowUnix)+
 			uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 			uint64(requestEvent.TimeoutAt) {
 			continue
@@ -532,7 +537,7 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceCandidates(
 		// window has closed (now + margin >= TimeoutAt, using the
 		// addition form to avoid the underflow the contract guards
 		// against) is skipped rather than proposed and rejected.
-		if uint64(now.Unix())+
+		if uint64(nowUnix)+
 			uint64(reservationRequestTimeoutSafetyMarginSeconds) >=
 			uint64(action.TimeoutAt) {
 			taskLogger.Infof(
@@ -749,9 +754,25 @@ func (rat *ReservationAcceptanceTask) reservationAcceptanceRequestedEvents(
 	actionTimeoutSeconds uint32,
 	averageBlockTime time.Duration,
 ) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
-	lookBackBlocks := uint64(
-		time.Duration(actionTimeoutSeconds)*time.Second/averageBlockTime,
-	) + reservationAcceptanceRequestLookBackMarginBlocks
+	// A non-positive average block time would panic on the division below;
+	// the caller defaults it, so reaching this means a misconfigured chain
+	// adapter rather than a normal value.
+	if averageBlockTime <= 0 {
+		return nil, fmt.Errorf(
+			"invalid average block time for the acceptance request "+
+				"look-back window: [%v]",
+			averageBlockTime,
+		)
+	}
+	lookBack := time.Duration(actionTimeoutSeconds) * time.Second / averageBlockTime
+	if lookBack < 0 {
+		// A negative window cannot occur with a uint32 timeout and a
+		// positive block time; folding it to zero keeps the block
+		// arithmetic below non-negative without a sign-trusting cast.
+		lookBack = 0
+	}
+	lookBackBlocks := uint64(lookBack) +
+		reservationAcceptanceRequestLookBackMarginBlocks
 
 	startBlock := uint64(0)
 	if currentBlock > lookBackBlocks {
@@ -836,10 +857,25 @@ func (rat *ReservationAcceptanceTask) findReservationAcceptanceReveal(
 		return cached, nil
 	}
 
-	lookBackBlocks := uint64(
-		(time.Duration(termSeconds)*time.Second +
-			reservationAcceptanceRevealLookBackMargin) / averageBlockTime,
-	)
+	// A non-positive average block time would panic on the division below;
+	// the caller defaults it, so reaching this means a misconfigured chain
+	// adapter rather than a normal value.
+	if averageBlockTime <= 0 {
+		return nil, fmt.Errorf(
+			"invalid average block time for the deposit reveal "+
+				"look-back window: [%v]",
+			averageBlockTime,
+		)
+	}
+	lookBack := (time.Duration(termSeconds)*time.Second +
+		reservationAcceptanceRevealLookBackMargin) / averageBlockTime
+	if lookBack < 0 {
+		// A negative window cannot occur with a uint32 term and a positive
+		// block time; folding it to zero keeps the block arithmetic below
+		// non-negative without a sign-trusting cast.
+		lookBack = 0
+	}
+	lookBackBlocks := uint64(lookBack)
 	fromBlock := uint64(0)
 	if requestBlock > lookBackBlocks {
 		fromBlock = requestBlock - lookBackBlocks
@@ -930,6 +966,15 @@ func (rat *ReservationAcceptanceTask) completeReservationAcceptanceCandidate(
 		return nil
 	}
 	anchorFee := feeEstimate.fee
+	if anchorFee < 0 {
+		taskLogger.Errorf(
+			"negative acceptance transaction fee estimate [%d] for "+
+				"reserved deposit [%v]; skipping",
+			anchorFee,
+			depositKey,
+		)
+		return nil
+	}
 
 	// Mirror WalletProposalValidator.validateReservationAnchorProposal's
 	// minimum check against this generation's own snapshotted values:
@@ -950,6 +995,16 @@ func (rat *ReservationAcceptanceTask) completeReservationAcceptanceCandidate(
 			depositRequest.Amount,
 			action.MinAmount,
 			anchorFee,
+		)
+		return nil
+	}
+
+	if depositRequest.Amount > math.MaxInt64 {
+		taskLogger.Errorf(
+			"reserved deposit [%v] amount [%d] does not fit in int64; "+
+				"skipping",
+			depositKey,
+			depositRequest.Amount,
 		)
 		return nil
 	}

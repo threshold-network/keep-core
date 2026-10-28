@@ -2,6 +2,7 @@ package spv
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -157,11 +158,15 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 			uint64(reanchorSigningWindowActionTimeoutFloor)
 	// The anchor floor: the anchor must stay above the minimum
 	// amount plus the max fee, the check privileged re-anchors do
-	// NOT skip (the per-wallet caps are the skipped ones).
-	anchorFloor := int64(
-		reservationParameters.ReservationMinAmount +
-			reservationParameters.ReservationTxMaxFee,
-	)
+	// NOT skip (the per-wallet caps are the skipped ones). The sum is
+	// compared against signed anchor values, so clamp it into the int64
+	// range first; a floor above MaxInt64 is above any real anchor value.
+	anchorFloorSats := reservationParameters.ReservationMinAmount +
+		reservationParameters.ReservationTxMaxFee
+	anchorFloor := int64(math.MaxInt64)
+	if anchorFloorSats <= math.MaxInt64 {
+		anchorFloor = int64(anchorFloorSats)
+	}
 
 	count := 0
 	for sourcePkh, state := range oko.cachedWallets {
@@ -263,7 +268,9 @@ func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 		// already inside the margin) means the request window is
 		// closing right now and counts as at risk.
 		var lastRequest uint64
-		if deposit.refundDeadline > uint32(margin+actionTimeout) {
+		marginAndTimeout := margin + actionTimeout
+		if marginAndTimeout <= math.MaxUint32 &&
+			deposit.refundDeadline > uint32(marginAndTimeout) {
 			lastRequest = uint64(deposit.refundDeadline) - margin - actionTimeout
 		}
 		if lastRequest <= riskWindowEnd {
