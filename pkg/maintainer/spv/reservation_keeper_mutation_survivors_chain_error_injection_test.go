@@ -10,7 +10,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-
 // TestReservationKeeperObserver_HeadTimeErrorFailsPass checks that a
 // failed chain-head-time read fails the observation pass at the first
 // read, before any gauge is published.

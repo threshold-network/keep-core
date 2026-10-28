@@ -2066,7 +2066,6 @@ func (lc *LocalChain) SetNextReservationReanchorRequestPending() {
 	lc.pendingNextReanchorRequest = true
 }
 
-
 // NotifyMovingFundsBelowDust records a submitted below-dust notification
 // for assertion in tests.
 func (lc *LocalChain) NotifyMovingFundsBelowDust(

@@ -1421,7 +1421,6 @@ func newHandoffFallbackFixture(
 	})
 	tbtcChain.SetWalletReservations(source, []*big.Int{resKey})
 
-
 	return tbtcChain, btcChain, resKey
 }
 
@@ -1534,7 +1533,7 @@ func TestReservationReanchorTask_MemberFallsBackToLeastLoadedFullWallet(t *testi
 		}
 		if !found {
 			t.Fatalf(
-				"expected the member request to fall back to the least-loaded "+
+				"expected the member request to fall back to the least-loaded " +
 					"full Live target, got no proposal",
 			)
 		}
