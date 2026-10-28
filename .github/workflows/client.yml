@@ -851,12 +851,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: securego/gosec@master
         with:
+          # third_party/ holds vendored upstream modules (btcsuite/btcec,
+          # go-electrum) whose provenance and every local patch are recorded
+          # in their own VENDOR.md and enforced by btcec-vendor-byte-identity
+          # and electrum-vendor-byte-identity. They are local `replace`
+          # targets, so newer gosec images analyse them as part of ./... and
+          # report upstream's own conversions as if they were this repo's;
+          # scanning them here adds nothing the byte-identity jobs do not
+          # already guarantee.
           args: |
             -exclude=G118
             -exclude-dir=pkg/chain/ethereum/beacon/gen
             -exclude-dir=pkg/chain/ethereum/ecdsa/gen
             -exclude-dir=pkg/chain/ethereum/threshold/gen
             -exclude-dir=pkg/chain/ethereum/tbtc/gen
+            -exclude-dir=third_party
             ./...
 
   client-format:
