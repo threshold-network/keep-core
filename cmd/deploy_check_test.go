@@ -201,9 +201,14 @@ func TestCheckReservationFlagsScript_MissingConfig(t *testing.T) {
 
 	gotExit := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			gotExit = exitErr.ExitCode()
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			// The script could not be executed at all (absent, not
+			// executable, bad interpreter). Report that instead of letting
+			// gotExit stay 0, which would otherwise look like a clean run.
+			t.Fatalf("cannot run deploy-check script at %s: %v", scriptPath, err)
 		}
+		gotExit = exitErr.ExitCode()
 	}
 
 	if gotExit != 3 {
