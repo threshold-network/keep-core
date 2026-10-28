@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/pkg/bitcoin"

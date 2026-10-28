@@ -10,7 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"

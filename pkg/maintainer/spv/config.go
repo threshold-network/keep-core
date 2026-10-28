@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 const (

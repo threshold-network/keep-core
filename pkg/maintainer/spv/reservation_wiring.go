@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"

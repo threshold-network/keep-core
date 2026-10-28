@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/keep-network/keep-core/internal/testutils"

@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/internal/pb"
 
 	"golang.org/x/sync/semaphore"

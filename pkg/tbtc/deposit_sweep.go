@@ -11,7 +11,7 @@ import (
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
