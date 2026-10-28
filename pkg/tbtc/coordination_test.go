@@ -1190,9 +1190,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 // TestCoordinationExecutor_GetActionsChecklist_PostActivation verifies
 // post-activation behavior where DepositSweep and MovedFundsSweep appear
 // on every coordination window, MovingFunds remains gated to every 4th
-// window, and the leading action rotates: DepositSweep leads on windows
-// where windowIndex%depositSweepLeadPeriodWindows == 1 and Redemption leads
-// on all other windows. Safety invariants are explicitly asserted beyond
+// window, and Redemption leads the checklist. Safety invariants are
+// explicitly asserted beyond
 // simple checklist comparison to guard against regressions that a
 // full-list deep-equal alone might miss.
 //
@@ -1205,13 +1204,13 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		expectedChecklist []WalletActionType
 		is4thWindow       bool
 	}{
-		// Non-4th window (window 27289, 27289%3 == 1): DepositSweep
-		// leads, MovedFundsSweep present, MovingFunds absent.
+		// Non-4th window (window 27289): Redemption leads,
+		// MovedFundsSweep present, MovingFunds absent.
 		"post-activation non-4th window 27289": {
 			coordinationBlock: 24560100,
 			expectedChecklist: []WalletActionType{
-				ActionDepositSweep,
 				ActionRedemption,
+				ActionDepositSweep,
 				ActionMovedFundsSweep,
 			},
 			is4thWindow: false,
@@ -1234,14 +1233,13 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			},
 			is4thWindow: false,
 		},
-		// 4th window (window 27292, divisible by 4, 27292%3 == 1):
-		// DepositSweep leads and MovingFunds appears. Heartbeat is NOT
-		// triggered for this seed.
+		// 4th window (window 27292, divisible by 4): MovingFunds
+		// appears. Heartbeat is NOT triggered for this seed.
 		"post-activation 4th window 27292 no heartbeat": {
 			coordinationBlock: 24562800,
 			expectedChecklist: []WalletActionType{
-				ActionDepositSweep,
 				ActionRedemption,
+				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionMovingFunds,
 			},
@@ -1256,14 +1254,14 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			},
 			is4thWindow: false,
 		},
-		// Non-4th window (window 27310, 27310%3 == 1) with heartbeat
-		// triggered by seed, verifying heartbeat works independently of
-		// the 4th-window gate and stays last on a DepositSweep-led window.
+		// Non-4th window (window 27310) with heartbeat triggered by
+		// seed, verifying heartbeat works independently of the
+		// 4th-window gate and stays last in the checklist.
 		"post-activation non-4th window 27310 with heartbeat": {
 			coordinationBlock: 24579000,
 			expectedChecklist: []WalletActionType{
-				ActionDepositSweep,
 				ActionRedemption,
+				ActionDepositSweep,
 				ActionMovedFundsSweep,
 				ActionHeartbeat,
 			},
@@ -1344,19 +1342,18 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 					window.index(),
 					test.is4thWindow,
 				)
-				assertChecklistOrdering(t, checklist, window.index())
+				assertChecklistOrdering(t, checklist)
 			},
 		)
 	}
 }
 
 // TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActivation
-// verifies that the SET of actions in the checklist is invariant under the
-// post-activation order rotation. The membership is what the rollout
-// depends on: because the post-activation order change only permutes the
-// set, and the pre-activation membership was left untouched, old and new
-// nodes compute identical membership sets and therefore accept each
-// other's proposals without a coordinated activation.
+// verifies the membership of the checklist on both sides of the activation
+// block and across the 4th-window gate. The membership is what the rollout
+// depends on: followers reject a proposal for an action they do not allow
+// with FaultLeaderMistake, so an unexpected member would break coordination
+// between operators that disagree on the activation state.
 //
 // For every window in a range crossing the activation block, the set must
 // equal:
@@ -1453,77 +1450,6 @@ func TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActi
 			)
 		}
 	}
-}
-
-// TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations
-// verifies that on a post-activation 4th coordination window where
-// DepositSweep leads the checklist (windowIndex%3 == 1 and
-// windowIndex%4 == 0, i.e. window 27292), both reservation actions are
-// present when reservations are active (ethereum.Developer), and absent
-// when they are not (ethereum.Mainnet, which falls through to
-// ReservationsActivationBlock == MaxUint64 and never activates).
-//
-// If the leading-action alternation is undone and the code reverts to
-// always appending ActionDepositSweep after ActionRedemption, the
-// expected full checklists below will no longer match because
-// DepositSweep will be at index 1 instead of index 0.
-func TestCoordinationExecutor_GetActionsChecklist_DepositSweepLedWindow_Reservations(t *testing.T) {
-	// Window 27292: 27292 % 3 == 1 (DepositSweep leads post-activation)
-	// and 27292 % 4 == 0 (MovingFunds is frequency-gated in).
-	coordinationBlock := uint64(24562800) // = 27292 * 900
-	windowIndex := uint64(27292)
-
-	seed := sha256.Sum256(
-		big.NewInt(int64(coordinationBlock) + 2).Bytes(),
-	)
-
-	t.Run("reservations active (ethereum.Developer)", func(t *testing.T) {
-		executor := &coordinationExecutor{
-			ethereumNetwork: ethereum.Developer,
-		}
-
-		checklist := executor.getActionsChecklist(
-			windowIndex,
-			seed,
-			coordinationBlock,
-		)
-
-		expected := []WalletActionType{
-			ActionDepositSweep,
-			ActionRedemption,
-			ActionMovedFundsSweep,
-			ActionMovingFunds,
-			ActionReservationAnchor,
-			ActionReservationReanchor,
-		}
-
-		if diff := deep.Equal(checklist, expected); diff != nil {
-			t.Errorf("checklist mismatch: %v\nactual:   %v\nexpected: %v", diff, checklist, expected)
-		}
-	})
-
-	t.Run("reservations inactive (ethereum.Mainnet)", func(t *testing.T) {
-		executor := &coordinationExecutor{
-			ethereumNetwork: ethereum.Mainnet,
-		}
-
-		checklist := executor.getActionsChecklist(
-			windowIndex,
-			seed,
-			coordinationBlock,
-		)
-
-		expected := []WalletActionType{
-			ActionDepositSweep,
-			ActionRedemption,
-			ActionMovedFundsSweep,
-			ActionMovingFunds,
-		}
-
-		if diff := deep.Equal(checklist, expected); diff != nil {
-			t.Errorf("checklist mismatch: %v\nactual:   %v\nexpected: %v", diff, checklist, expected)
-		}
-	})
 }
 
 // TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
@@ -1646,10 +1572,7 @@ func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 
 // assertPostActivationSafety verifies the safety invariants that must hold
 // for every non-nil post-activation checklist:
-//   - ActionDepositSweep is at index 0 and ActionRedemption at index 1 on
-//     windows where windowIndex%depositSweepLeadPeriodWindows == 1.
-//   - ActionRedemption is at index 0 and ActionDepositSweep at index 1 on
-//     all other windows.
+//   - ActionRedemption is at index 0 and ActionDepositSweep at index 1.
 //   - ActionMovedFundsSweep is present.
 //   - ActionMovingFunds is absent on non-4th windows.
 func assertPostActivationSafety(
@@ -1668,9 +1591,6 @@ func assertPostActivationSafety(
 	}
 
 	expectedLead := []WalletActionType{ActionRedemption, ActionDepositSweep}
-	if windowIndex%depositSweepLeadPeriodWindows == 1 {
-		expectedLead = []WalletActionType{ActionDepositSweep, ActionRedemption}
-	}
 
 	for i, expected := range expectedLead {
 		if checklist[i] != expected {
@@ -1702,35 +1622,24 @@ func assertPostActivationSafety(
 }
 
 // assertChecklistOrdering verifies that actions appear in the canonical
-// priority order, which depends on the window index: on windows where
-// windowIndex%depositSweepLeadPeriodWindows == 1 DepositSweep leads
-// (DepositSweep < Redemption < MovedFundsSweep < MovingFunds <
-// ReservationAnchor < ReservationReanchor < Heartbeat), and on all other
-// windows Redemption leads (Redemption < DepositSweep < MovedFundsSweep <
-// MovingFunds < ReservationAnchor < ReservationReanchor < Heartbeat).
-// Each consecutive pair of actions must have strictly increasing priority
-// values.
+// post-activation priority order: Redemption < DepositSweep <
+// MovedFundsSweep < MovingFunds < ReservationAnchor < ReservationReanchor <
+// Heartbeat. Each consecutive pair of actions must have strictly
+// increasing priority values.
 func assertChecklistOrdering(
 	t *testing.T,
 	checklist []WalletActionType,
-	windowIndex uint64,
 ) {
 	t.Helper()
 
 	actionPriority := map[WalletActionType]int{
+		ActionRedemption:          0,
+		ActionDepositSweep:        1,
 		ActionMovedFundsSweep:     2,
 		ActionMovingFunds:         3,
 		ActionReservationAnchor:   4,
 		ActionReservationReanchor: 5,
 		ActionHeartbeat:           6,
-	}
-
-	if windowIndex%depositSweepLeadPeriodWindows == 1 {
-		actionPriority[ActionDepositSweep] = 0
-		actionPriority[ActionRedemption] = 1
-	} else {
-		actionPriority[ActionRedemption] = 0
-		actionPriority[ActionDepositSweep] = 1
 	}
 
 	for i := 1; i < len(checklist); i++ {
