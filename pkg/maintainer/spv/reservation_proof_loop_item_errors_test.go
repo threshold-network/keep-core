@@ -148,10 +148,10 @@ func TestProveReservationAcceptanceActions_AggregatesItemErrors(t *testing.T) {
 	} else {
 		// The failed item must still be tracked for the next pass; the
 		// aggregate error is not a scan error (chunkScanError), it is the
-		// spvItemErrors aggregate.
-		if _, isItemErrs := err.(spvItemErrors); !isItemErrs {
+		// reservationRoundErrors aggregate.
+		if _, isItemErrs := err.(reservationRoundErrors); !isItemErrs {
 			t.Fatalf(
-				"expected the per-item aggregate (spvItemErrors), got %T: %v",
+				"expected the per-item aggregate (reservationRoundErrors), got %T: %v",
 				err,
 				err,
 			)
@@ -399,9 +399,9 @@ func TestProveReservationReanchorActions_AggregatesItemErrors(t *testing.T) {
 		nil,
 	); err == nil {
 		t.Fatal("expected the failed re-anchor submission to surface as a per-item error")
-	} else if _, isItemErrs := err.(spvItemErrors); !isItemErrs {
+	} else if _, isItemErrs := err.(reservationRoundErrors); !isItemErrs {
 		t.Fatalf(
-			"expected the per-item aggregate (spvItemErrors), got %T: %v",
+			"expected the per-item aggregate (reservationRoundErrors), got %T: %v",
 			err,
 			err,
 		)
@@ -418,7 +418,7 @@ func TestIsRetryableReservationRoundError(t *testing.T) {
 	if isRetryableReservationRoundError(nil) {
 		t.Fatal("a nil error is not retryable")
 	}
-	if !isRetryableReservationRoundError(spvItemErrors{fmt.Errorf("one item")}) {
+	if !isRetryableReservationRoundError(reservationRoundErrors{fmt.Errorf("one item")}) {
 		t.Fatal("a per-item aggregate must be retryable")
 	}
 	if !isRetryableReservationRoundError(&chunkScanError{err: fmt.Errorf("scan chunk")}) {

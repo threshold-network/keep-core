@@ -33,30 +33,28 @@ func (e *chunkScanError) Unwrap() error {
 	return e.err
 }
 
-// spvItemErrors aggregates the per-item errors encountered while a single
-// reservation proof round processed its items. It is returned whenever at
-// least one item was skipped with an error, even if the other items of the
-// round were proved: the skipped items are left to the next round instead
-// of being hidden behind a partial result. A chain-wide failure is reported
-// as an ordinary (non-aggregate) error instead.
-type spvItemErrors []error
+// reservationRoundErrors collects the errors of the reservations a proof
+// round could not handle. The round returns it when any reservation failed,
+// so those reservations are tried again in the next round. A failure that
+// affects the whole round is returned as a plain error.
+type reservationRoundErrors []error
 
 // Error implements error.
-func (e spvItemErrors) Error() string {
+func (e reservationRoundErrors) Error() string {
 	return fmt.Sprintf(
 		"skipped %d item(s) with errors: [%s]",
 		len(e),
-		strings.Join(collectItemErrors(e), "; "),
+		strings.Join(flattenRoundErrors(e), "; "),
 	)
 }
 
-// collectItemErrors flattens nested spvItemErrors so an aggregate of
-// aggregates still renders every leaf error.
-func collectItemErrors(errs []error) []string {
+// flattenRoundErrors lists every error in a reservationRoundErrors value,
+// including the errors of nested values.
+func flattenRoundErrors(errs []error) []string {
 	out := make([]string, 0, len(errs))
 	for _, err := range errs {
-		if nested, ok := err.(spvItemErrors); ok {
-			out = append(out, collectItemErrors(nested)...)
+		if nested, ok := err.(reservationRoundErrors); ok {
+			out = append(out, flattenRoundErrors(nested)...)
 			continue
 		}
 		out = append(out, err.Error())
@@ -75,7 +73,7 @@ func isRetryableReservationRoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if _, ok := err.(spvItemErrors); ok {
+	if _, ok := err.(reservationRoundErrors); ok {
 		return true
 	}
 	var chunkErr *chunkScanError
@@ -98,7 +96,7 @@ func mergeSpvPassErrors(scanErr error, itemErrs []error) error {
 	}
 
 	if len(itemErrs) > 0 {
-		return spvItemErrors(itemErrs)
+		return reservationRoundErrors(itemErrs)
 	}
 
 	return nil

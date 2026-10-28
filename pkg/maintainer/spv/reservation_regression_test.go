@@ -245,8 +245,8 @@ func TestFailedSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected the failed first submission to surface as a per-item error")
-	} else if _, isItemErrs := err.(spvItemErrors); !isItemErrs {
-		t.Fatalf("expected the per-item aggregate (spvItemErrors), got %T: %v", err, err)
+	} else if _, isItemErrs := err.(reservationRoundErrors); !isItemErrs {
+		t.Fatalf("expected the per-item aggregate (reservationRoundErrors), got %T: %v", err, err)
 	}
 
 	if len(submittedNonces) != 2 || submittedNonces[0] != 2 || submittedNonces[1] != fixture.requestNonce {
@@ -325,8 +325,8 @@ func TestFailedReanchorSubmissionDoesNotBlockSiblingGeneration(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected the failed first re-anchor submission to surface as a per-item error")
-	} else if _, isItemErrs := err.(spvItemErrors); !isItemErrs {
-		t.Fatalf("expected the per-item aggregate (spvItemErrors), got %T: %v", err, err)
+	} else if _, isItemErrs := err.(reservationRoundErrors); !isItemErrs {
+		t.Fatalf("expected the per-item aggregate (reservationRoundErrors), got %T: %v", err, err)
 	}
 
 	if len(submittedNonces) != 2 || submittedNonces[0] != 3 || submittedNonces[1] != fixture.requestNonce {
