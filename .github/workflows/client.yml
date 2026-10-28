@@ -191,7 +191,7 @@ jobs:
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to commit 947bf51fd on the `reservations-upgrade`
+    # tbtc-v2 ref: pinned to commit 4c98e6b82 on the `reservations-upgrade`
     # integration branch, where the reservation contracts live (they are
     # not on tbtc-v2's `main`). A full commit hash is pinned rather than
     # a branch name because a branch can move after this repo's bindings,
@@ -202,7 +202,7 @@ jobs:
     # so bump both together.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: 947bf51fd520c34f6661d9c6b7ceb5d8a3212f75
+      TBTC_V2_REF: 4c98e6b82d75a5fdbb3c3504979245defe300846
     steps:
       - uses: actions/checkout@v4
 
