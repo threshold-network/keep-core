@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -30,6 +31,37 @@ func (e *chunkScanError) Error() string {
 
 func (e *chunkScanError) Unwrap() error {
 	return e.err
+}
+
+// spvItemErrors aggregates the per-item errors encountered while a single
+// reservation proof round processed its items. It is returned whenever at
+// least one item was skipped with an error, even if the other items of the
+// round were proved: the skipped items are left to the next round instead
+// of being hidden behind a partial result. A chain-wide failure is reported
+// as an ordinary (non-aggregate) error instead.
+type spvItemErrors []error
+
+// Error implements error.
+func (e spvItemErrors) Error() string {
+	return fmt.Sprintf(
+		"skipped %d item(s) with errors: [%s]",
+		len(e),
+		strings.Join(collectItemErrors(e), "; "),
+	)
+}
+
+// collectItemErrors flattens nested spvItemErrors so an aggregate of
+// aggregates still renders every leaf error.
+func collectItemErrors(errs []error) []string {
+	out := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if nested, ok := err.(spvItemErrors); ok {
+			out = append(out, collectItemErrors(nested)...)
+			continue
+		}
+		out = append(out, err.Error())
+	}
+	return out
 }
 
 // isRetryableReservationRoundError reports whether a reservation proof
