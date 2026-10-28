@@ -31,6 +31,7 @@ func TestNode_RestoresTransactionMonitor(t *testing.T) {
 	saveTransactionMonitorFixture(t, handle, hash, broadcastAt, false)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		&GroupParameters{GroupSize: 5, GroupQuorum: 4, HonestThreshold: 3},
 		Connect(),
 		newLocalBitcoinChain(),

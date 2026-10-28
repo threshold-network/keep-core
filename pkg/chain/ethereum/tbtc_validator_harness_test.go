@@ -44,7 +44,6 @@ import (
 	hostchainabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -53,11 +52,11 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 
-	"github.com/keep-network/keep-common/pkg/chain/ethereum"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil/ethutil"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -266,8 +265,7 @@ func (s *noOpSubscription) Err() <-chan error {
 func newHarnessBackend() *harnessBackend {
 	shared, _ := state.New(
 		types.EmptyRootHash,
-		state.NewDatabase(rawdb.NewMemoryDatabase()),
-		nil,
+		state.NewDatabaseForTesting(),
 	)
 
 	// AllDevChainProtocolChanges mirrors the go-ethereum simulated
@@ -315,10 +313,10 @@ func (b *harnessBackend) runCall(
 	callData []byte,
 ) ([]byte, error) {
 	ret, _, err := b.evm.Call(
-		vm.AccountRef(caller),
+		caller,
 		target,
 		callData,
-		math.MaxUint64,
+		vm.NewGasBudget(math.MaxUint64),
 		uint256.NewInt(0),
 	)
 	return ret, err
@@ -436,7 +434,7 @@ func (b *harnessBackend) BlockByNumber(
 ) (*types.Block, error) {
 	return types.NewBlock(
 		&types.Header{Number: new(big.Int).SetUint64(b.blockNumber)},
-		nil, nil, nil, nil,
+		nil, nil, nil,
 	), nil
 }
 
@@ -482,6 +480,16 @@ func (b *harnessBackend) TransactionReceipt(
 	txHash common.Hash,
 ) (*types.Receipt, error) {
 	return nil, fmt.Errorf("TransactionReceipt is not supported in harness")
+}
+
+func (b *harnessBackend) SubscribeTransactionReceipts(
+	ctx context.Context,
+	q *hostchain.TransactionReceiptsQuery,
+	ch chan<- []*types.Receipt,
+) (hostchain.Subscription, error) {
+	return nil, fmt.Errorf(
+		"SubscribeTransactionReceipts is not supported in harness",
+	)
 }
 
 func (b *harnessBackend) SendTransaction(

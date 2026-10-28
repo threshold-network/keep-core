@@ -663,7 +663,10 @@ func (raa *reservationAnchorAction) execute() error {
 		return fmt.Errorf("no matching DepositRevealed event for deposit")
 	}
 
-	deposit := matchingEvent.unpack(depositRequest.ExtraData)
+	deposit, unpackErr := matchingEvent.unpack(depositRequest.ExtraData)
+	if unpackErr != nil {
+		return fmt.Errorf("cannot unpack deposit revealed event: [%w]", unpackErr)
+	}
 
 	// m1 identity: the reservation key is the deposit key, mirroring the
 	// convention documented in pkg/maintainer/spv/reservation_stale_deposit_watch.go.

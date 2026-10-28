@@ -2,6 +2,7 @@
 package signing
 
 import (
+	"fmt"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"

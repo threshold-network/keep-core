@@ -24,7 +24,7 @@ import (
 // estimated anchor transaction vsize (142 vBytes) because the test fixture's
 // 1 sat/vByte fee rate oracle response is clamped to the 5 sat/vByte floor by
 // applyWalletTxFeeFloor (see fee.go).
-const testAnchorFeeSat = uint64(710)
+const testAnchorFeeSat = uint64(994)
 
 // testReservationVaultAddress is the reservation vault address used across
 // this file's fixtures, so a deposit's Vault field targets the same vault
@@ -1409,7 +1409,7 @@ func TestReservationAcceptanceTask_BoundaryChecks(t *testing.T) {
 			expectAccept:             true,
 		},
 		// The fixture's 1 sat/vByte oracle rate is clamped by
-		// applyWalletTxFeeFloor (see fee.go) to 5 sat/vByte, a 710 sat
+		// applyWalletTxFeeFloor (see fee.go) to 7 sat/vByte, a 994 sat
 		// fee (testAnchorFeeSat). Deposit amounts are offset by
 		// testAnchorFeeSat to test the exact net-of-fee boundary.
 		"ReservationMinAmount: exactly at minimum accepts": {
@@ -1751,7 +1751,7 @@ func strictValidatorFixture(
 		DepositFundingTxHash:      fundingTxHash,
 		DepositFundingOutputIndex: 0,
 		RequestNonce:              2,
-		AnchorTxFee:               big.NewInt(710),
+		AnchorTxFee:               big.NewInt(994),
 	}
 	extraInfo := struct {
 		*tbtc.Deposit
@@ -2013,7 +2013,7 @@ func TestLocalChain_ValidateReservationReanchorProposal_RejectsInsideTimeoutMarg
 		ReservationKey:            new(big.Int).Set(resKey),
 		RequestNonce:              1,
 		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-		ReanchorTxFee:             big.NewInt(550),
+		ReanchorTxFee:             big.NewInt(770),
 	}
 
 	// Far-future TimeoutAt: validation passes.
@@ -2090,7 +2090,7 @@ func TestReservationAcceptanceTask_FeeErrorSkipsCandidate(t *testing.T) {
 
 	lowCap := defaultPendingDepositOptions(currentBlock)
 	lowCap.seed = 0x10
-	lowCap.txMaxFee = 500 // below the 710 sat estimate
+	lowCap.txMaxFee = 500 // below the 994 sat estimate
 	lowCap.timeoutAt = uint32(time.Now().Add(20 * time.Hour).Unix())
 	addPendingDeposit(t, ralc, btcChain, testWalletPublicKeyHash, lowCap)
 

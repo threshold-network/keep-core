@@ -579,7 +579,7 @@ func TestReservationReanchorTask_OneRequestPerPass(t *testing.T) {
 				ReservationKey:            reservationKey,
 				RequestNonce:              1,
 				TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-				ReanchorTxFee:             big.NewInt(550),
+				ReanchorTxFee:             big.NewInt(770),
 			},
 			false,
 		); err != nil {

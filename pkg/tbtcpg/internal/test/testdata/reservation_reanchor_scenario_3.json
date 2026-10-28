@@ -30,6 +30,6 @@
     "ReservationKey": "0xdddd04",
     "RequestNonce": 4,
     "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
-    "ReanchorTxFee": 550
+    "ReanchorTxFee": 770
   }
 }

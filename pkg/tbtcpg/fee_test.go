@@ -306,7 +306,7 @@ func TestEstimateReservationFixedSizeTxFee(t *testing.T) {
 			estimateSatPerVByte: 1,
 			txMaxFee:            100000,
 			exceedsMaxErrMsg:    acceptanceErrMsg,
-			expectedFee:         5 * size, // max(5, ceil(1*1.25)=2)=5 sat/vByte * size
+			expectedFee:         7 * size, // max(1,5)=5 -> ceil(5*1.25)=7 sat/vByte * size
 		},
 		"estimate above the floor is buffered by 25%": {
 			estimateSatPerVByte: 20,

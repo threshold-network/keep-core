@@ -1889,7 +1889,7 @@ func TestProposeReservationReanchor_ValidatesOnlyAfterRequestMined(t *testing.T)
 		ReservationKey:            new(big.Int).Set(resKey),
 		RequestNonce:              1,
 		TargetWalletPublicKeyHash: targetWalletPublicKeyHash,
-		ReanchorTxFee:             big.NewInt(550),
+		ReanchorTxFee:             big.NewInt(770),
 	}
 	if err := tbtcChain.ValidateReservationReanchorProposal(
 		sourceWalletPublicKeyHash,
