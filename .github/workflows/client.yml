@@ -191,8 +191,7 @@ jobs:
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to commit eec999aa, the merge of
-    # threshold-network/tbtc-v2#1161 into the `reservations-upgrade`
+    # tbtc-v2 ref: pinned to commit 947bf51fd on the `reservations-upgrade`
     # integration branch, where the reservation contracts live (they are
     # not on tbtc-v2's `main`). A full commit hash is pinned rather than
     # a branch name because a branch can move after this repo's bindings,
@@ -242,7 +241,25 @@ jobs:
           # checkout is a scratch clone of the upstream repo used only to
           # compile and diff the real ABI below - never committed back -
           # so an unpinned, job-local lockfile resolution is safe here.
+          #
+          # tbtc-v2 has migrated solidity/ to yarn 4 (berry):
+          # solidity/package.json declares
+          # "packageManager": "yarn@4.12.0". The runner image ships the
+          # classic global yarn 1.22.22, which refuses to run against a
+          # project naming a different packageManager ("This project's
+          # package.json defines "packageManager": "yarn@4.12.0". However
+          # the current global version of Yarn is 1.22.22.") - so a bare
+          # `yarn install` fails before touching a single dependency.
+          # corepack ships with Node and dispatches to the version named
+          # in packageManager; enabling it and pinning it to that declared
+          # version (as tbtc-v2's own .github/workflows/contracts.yml
+          # does) makes `yarn` below resolve to yarn 4.12.0.
+          # COREPACK_ENABLE_DOWNLOAD_PROMPT=0 keeps the first-run download
+          # of that version non-interactive.
           git config --global url."https://github.com/".insteadOf "git://github.com/"
+          export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+          corepack enable
+          corepack prepare yarn@4.12.0 --activate
           yarn install
           yarn build
 
