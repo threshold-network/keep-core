@@ -17,7 +17,7 @@ Do not start the drill before O6 is complete.
 7. Require its vault address to match the deployed ReservationVault.
 8. Activate the trusted vault only at or after B.
 
-The keeper fix is on the drill-fix branch at `d53c0c8d2` or a descendant.
+The keeper fix is the one published as `9c4e1b221`; use that commit or a descendant.
 The release still needs the real Sepolia bindings and activation block.
 The fork-only Go overlay in the acceptance run must never enter a release build.
 
@@ -102,10 +102,10 @@ Do not publish the SDK to npm as part of this procedure.
 Do not substitute the old registry SDK after the private build.
 Record the source commit and the produced image digest in the drill log.
 
-Verified source: tbtc-v2 branch the Sepolia rehearsal branch on the private remote, head `52401a693`.
+Verified source: tbtc-v2, the reservation upgrade line at `8eb26c2e2`.
 On the host it builds, passes 51 of 51 monitor tests, and completes a manager run against Testnet4 and read-only Sepolia with report `success`.
 The readiness plan records an earlier Docker image pass; the image was not rebuilt here.
-Use `52401a693` or a descendant (for example an earlier Sepolia rehearsal branch @ `ec50d8e3e`, which contains it), not the older `be2e89ddd`: that older monitor fails on Sepolia because the tBTC total supply is 0.
+Use `8eb26c2e2` or a descendant (for example `ab9f6c010`, which contains it), not the older monitor: that one fails on Sepolia because the tBTC total supply is 0.
 
 ## 4. Monitor environment and first run
 

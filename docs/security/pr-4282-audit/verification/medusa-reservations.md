@@ -1,6 +1,6 @@
 # Stateful invariant suite for reservation accounting
 
-- Repo: tbtc-v2, branch a fuzz-tooling branch, head `6d32ed45c`, based on `29e84a35c` (the integrated reservation branch, which includes `releaseReservedDepositToPool`). The accounting suite is `4d9136877`; the liveness property is `6d32ed45c`.
+- Repo: tbtc-v2, fuzz-tooling branch, based on `d20cf74ba` (the published reservation upgrade line, which includes `releaseReservedDepositToPool`). The accounting suite and the liveness property are both on that branch.
 - Files: `solidity/test-foundry/reservations/` (7 Solidity files, each under 500 lines), `solidity/medusa-reservations.json`, `solidity/medusa-reservations-liveness.json`, a section in `solidity/test-foundry/README.md`.
 - Test-only change. No production contract changed.
 - Tools: Foundry 1.5.1 (forge invariant tests) and Medusa 1.5.1 (property mode). Both run the same handler.
@@ -78,7 +78,7 @@ Raw outputs: `medusa-raw/` beside this report (`medusa-resv-30m.log`, `medusa-re
 
 ## Hand-off liveness property
 
-`ReservationLivenessHandler` (`6d32ed45c`) extends the handler with `property_everyRetiringPositionHasAnExit`. For every Active position on a MovingFunds or Closing wallet, the property requires an exit now:
+`ReservationLivenessHandler` (on the fuzz-tooling branch) extends the handler with `property_everyRetiringPositionHasAnExit`. For every Active position on a MovingFunds or Closing wallet, the property requires an exit now:
 
 - a re-anchor request that the capacity and amount rules accept, or
 - a strand, when the wallet is Closing and the position is dissolution-eligible.
@@ -111,14 +111,14 @@ Medusa campaign (`medusa fuzz --config medusa-reservations-liveness.json --timeo
 
 | Item | Commit (private) | Check |
 |---|---|---|
-| Contract: `requestReservationAcceptance` requires `deposit.amount > minAmount + 2 * txMaxFee` | tbtc-v2 the integrated reservation branch `ffd9a62db` | "guard 11" tests: 2 failing before the change, 3 passing after. All 21 reservation-related Hardhat suites: 834 passing. Reservation library 16,937 bytes (7,639 left); Bridge unchanged. |
-| SDK pre-checks (`checkReserveFeasibility`, `checkAcceptancePreflight`) and README | `0d5bfcaf1` | 2 failing before, 48 passing after; `tsc`, ESLint and Prettier clean. |
-| Spec (requirements, architecture, verification EC-06, inventory rows) | keep-core `docs/reservations-spec-acceptance-floor` `29981e97f` (separate branch: the main spec worktree has another session's uncommitted edits) | text only |
-| Suite tests for the new rule | tbtc-v2 a fuzz-tooling branch `e001440d6` | 18 forge tests pass (`ci` invariant 25,600 calls). |
+| Contract: `requestReservationAcceptance` requires `deposit.amount > minAmount + 2 * txMaxFee` | tbtc-v2 the integrated reservation branch `d4397f208` | "guard 11" tests: 2 failing before the change, 3 passing after. All 21 reservation-related Hardhat suites: 834 passing. Reservation library 16,937 bytes (7,639 left); Bridge unchanged. |
+| SDK pre-checks (`checkReserveFeasibility`, `checkAcceptancePreflight`) and README | `dc5c2ed71` | 2 failing before, 48 passing after; `tsc`, ESLint and Prettier clean. |
+| Spec (requirements, architecture, verification EC-06, inventory rows) | keep-core, the reservation specification work (a separate worktree: the main spec worktree has another session's uncommitted edits) | text only |
+| Suite tests for the new rule | tbtc-v2, the fuzz-tooling branch | 18 forge tests pass (`ci` invariant 25,600 calls). |
 
 Unchanged on purpose: `WalletProposalValidator.sol:1049` and keep-core `reservation_acceptance.go:944` check that the anchor stays at or above `min` after the wallet's fee; that rule is still correct.
 
-After the fix, on `e001440d6`, 10 minutes each:
+After the fix, on the fuzz-tooling branch, 10 minutes each:
 
 - Accounting config: 9/9 properties pass, 367,887 calls.
 - Liveness config: the property still fails, 388,236 calls. Medusa's shortest failure is now the capacity case: every other wallet retires, so no Live target exists (7 calls). The floor case now needs two hops that each pay the full fee (`test_secondHandOffCanStillBeBlocked`); the acceptance floor guarantees one hand-off, not every one.

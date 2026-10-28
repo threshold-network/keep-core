@@ -14,7 +14,7 @@ Files: `pkg/clientinfo/performance.go`, `pkg/clientinfo/rpc_health.go`, `pkg/cli
 `pkg/net/local/broadcast_channel_manager.go`, `pkg/beacon/dkg/marshaling.go`,
 `pkg/beacon/dkg/result/marshaling.go`, `pkg/beacon/registry/marshaling.go`,
 `pkg/protocol/inactivity/marshaling.go`.
-HEAD `50dd97a4b` (keep-core `reservations-epic` @ `49c4df13d`); PR diff base `a7ac8989`.
+HEAD: the audit head (keep-core `reservations-epic` @ `49c4df13d`); PR diff base `a7ac8989`.
 On-chain reference: `tbtc-v2@eec999aad:solidity/contracts/relay/LightRelay.sol`.
 
 ## Counts
@@ -296,6 +296,6 @@ about; the execution, not the commit-message reading, is the ground truth.
   modules, since deleted); the remaining items are confirmed by direct code read with the specific
   unverified preconditions named above.
 - Raw agent outputs cited bundle-relative line numbers; the repo line numbers above were re-pinned by reading
-  the live files at HEAD `14c68e486`.
+  the live files at the audit head.
 - No tracked source file was modified. The scan ledger and full report are unchanged by this supplement.
   Scratch modules and the temporary supplement bundle were cleaned up at the end of the task.

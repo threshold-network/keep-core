@@ -2,7 +2,7 @@
 
 Written 2026-10-12 from the current code and spec, not from memory.
 - Contracts: tbtc-v2 the integrated reservation branch @ `9d208696` (worktree `tbtc-v2-resv-merge`). It includes the third-party hold cap and the feasibility guard.
-- Client: keep-core the drill-fix branch @ `c102f4b85` (worktree `pr-4282-drill`).
+- Client: keep-core `f99ef96e3` (the drill build).
 - Spec: keep-core `docs/reservations-spec-reanchor-cap` (`docs/spec/reservations/`; the `pr-4282-spec` worktree was removed 2026-10-15, recreate with `git worktree add <path> docs/reservations-spec-reanchor-cap`).
 - Research notes with full file:line citations: `local://m1-research-{spec,contracts,client}.md` (session-local).
 
@@ -290,12 +290,12 @@ Epic tracker (public): `docs/plans/reservations-epic-tracker.md` on `reservation
 
 ## 12. Doc vs code drift (so nobody catches you out)
 
-Resolved 2026-10-12 on the private spec branch `docs/reservations-spec-reanchor-cap` @ `93fde0d6b` (goes public with the fixes after the drill). If you read the public `docs/reservations-spec`, these points are still wrong there:
+Resolved 2026-10-12 in the reservation specification work (it goes public with the fixes after the drill). If you read the public `docs/reservations-spec`, these points are still wrong there:
 
 1. `feature-spec.md` describes the **full** feature (the M2 target), not M1. Its top banner already lists the M1 differences; no change was needed.
 2. `roadmap.md` §0.2 called acceptance "permissionless". Now corrected: depositor-only in M1.
 3. `requirements.md` lacked `maxThirdPartyReanchorHoldsPerWallet` and `pendingThirdPartyReanchorHolds`. Now in FR-29 and the §9 cap table.
-4. The keep-core readiness docs listed "no stranding trigger for a Closing wallet past eligibility" as an open Major gap. Now marked resolved (`checkReservationStrandingForClosingWallet`, `146e3206d`; a private fix).
+4. The keep-core readiness docs listed "no stranding trigger for a Closing wallet past eligibility" as an open Major gap. Now marked resolved (`checkReservationStrandingForClosingWallet`, fixed in `41fb820a5`).
 5. The readiness docs said re-anchor proofs are found through `ReservationByAnchorUtxo`. Now corrected: the proof loop matches on the re-anchor request events (outpoint plus fee).
 6. EIP-170 figure: NFR-GAS-1 now says 23,567 B with 1,009 B left (measured on `84ea4dda`). The older 22,914 B figures in other files are kept as dated history, each with a re-measurement note.
 7. `pr-strategy.md` row F now says inline that the pause-flag plan was superseded by Option B.

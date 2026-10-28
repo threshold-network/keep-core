@@ -1,6 +1,6 @@
 {
-  "keepCore": "d53c0c8d2",
-  "monitoring": "be2e89ddd for the earlier stages; 52401a693 for monitor-age-rehearsal-head-age.json and rehearsal-head-testnet4-startup.json",
+  "keepCore": "9c4e1b221",
+  "monitoring": "the earlier monitor for the earlier stages; 8eb26c2e2 for monitor-age-rehearsal-head-age.json and rehearsal-head-testnet4-startup.json",
   "files": [
     {
       "file": "legacy-testnet4-startup.json",

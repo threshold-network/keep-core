@@ -1,5 +1,5 @@
 go test ./pkg/tbtc -run 'TestReservationAnchorAction_BroadcastError|TestReservationReanchorAction_BroadcastError|TestReservationBroadcastTransaction_BroadcastError' -v -count=1 -timeout 40m
-env: RESERVATION_BROADCAST_ERROR_TEST=1, keep-core a test-only branch @ fb26f3971, Go 1.25.7
+env: RESERVATION_BROADCAST_ERROR_TEST=1, keep-core, a test-only branch, Go 1.25.7
 
 === RUN   TestReservationBroadcastTransaction_BroadcastError
 --- PASS: TestReservationBroadcastTransaction_BroadcastError (0.30s)

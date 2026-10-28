@@ -1,8 +1,8 @@
 # Invariant Map
 
-> tBTC v2 UTXO Reservations Epic (PR #4282, merged head `9f99f364a`) | 67 guards | 19 single | 8 cross | 4 economic | 2 not enforced
+> tBTC v2 UTXO Reservations Epic (PR #4282, merged head) | 67 guards | 19 single | 8 cross | 4 economic | 2 not enforced
 
-Line numbers are from the frozen worktree at `9f99f364a`. The previous run's single Enforced=No invariant ("all reservation watcher deadline decisions on the host wall clock") is now Enforced=Yes (I-11); the two surviving wall-clock sites moved to I-18 and I-19.
+Line numbers are from the frozen worktree at the merged fix head. The previous run's single Enforced=No invariant ("all reservation watcher deadline decisions on the host wall clock") is now Enforced=Yes (I-11); the two surviving wall-clock sites moved to I-18 and I-19.
 
 ---
 
@@ -53,7 +53,7 @@ Per-call preconditions. Heading IDs below (`G-N`) are anchor targets from x-ray.
 `if rra.expiryBlock < reservationActionSigningTimeoutSafetyMarginBlocks` · `pkg/tbtc/reservation.go:979` · Avoids unsigned integer underflow when calculating re-anchor transaction signing deadline against the 300-block safety margin.
 
 #### G-15
-`if !IsReanchorTargetAged(targetWallet.CreatedAt, walletParams.CreationPeriod, headTimestamp, ReanchorTargetAgeTolerance)` · `pkg/tbtc/reservation.go:901` · NEW (fix `30dac8c0f`/`fb520f1fe`): follower refuses to co-sign a re-anchor unless the target wallet has aged out of its creation period, judged on the chain head timestamp; all three reads (`GetWallet`, `GetWalletParameters`, `GetLatestBlockTimestamp`) fail closed into rejection.
+`if !IsReanchorTargetAged(targetWallet.CreatedAt, walletParams.CreationPeriod, headTimestamp, ReanchorTargetAgeTolerance)` · `pkg/tbtc/reservation.go:901` · NEW (fix `a83ba04ef`/`5a7b125fd`): follower refuses to co-sign a re-anchor unless the target wallet has aged out of its creation period, judged on the chain head timestamp; all three reads (`GetWallet`, `GetWalletParameters`, `GetLatestBlockTimestamp`) fail closed into rejection.
 
 #### G-16
 `if err := rejectIfProposedWalletTxFeeBelowProtocolMin(raa.proposal.AnchorTxFee, anchorTxSize, "reservation anchor")` · `pkg/tbtc/reservation.go:713` · NEW hard reject: follower refuses to co-sign a reservation anchor transaction whose fee is below the fixed 5 sat/vB protocol minimum for the estimated size.
@@ -134,7 +134,7 @@ Per-call preconditions. Heading IDs below (`G-N`) are anchor targets from x-ray.
 `if wallet.State != tbtc.StateLive && wallet.State != tbtc.StateMovingFunds` · `pkg/tbtcpg/reservation_acceptance.go:366` · Restricts reservation acceptance proposal generation strictly to wallets in Live or MovingFunds state.
 
 #### G-42
-`if uint64(now.Unix())+uint64(reservationRequestTimeoutSafetyMarginSeconds) >= uint64(requestEvent.TimeoutAt)` · `pkg/tbtcpg/reservation_acceptance.go:459` · NEW chain-time form (fix `768707517`): skips generating an acceptance proposal for a request event within 2 hours of its timeout, judged on the chain head timestamp read at pass start (`reservation_acceptance.go:433`).
+`if uint64(now.Unix())+uint64(reservationRequestTimeoutSafetyMarginSeconds) >= uint64(requestEvent.TimeoutAt)` · `pkg/tbtcpg/reservation_acceptance.go:459` · NEW chain-time form (fix `7c34c4e12`): skips generating an acceptance proposal for a request event within 2 hours of its timeout, judged on the chain head timestamp read at pass start (`reservation_acceptance.go:433`).
 
 #### G-43
 `if action.ActionType != tbtc.ReservationActionTypeAcceptance || action.State != tbtc.ReservationActionStatePending` · `pkg/tbtcpg/reservation_acceptance.go:505` · Skips candidate deposits whose on-chain action generation drifted away from pending acceptance.
@@ -146,7 +146,7 @@ Per-call preconditions. Heading IDs below (`G-N`) are anchor targets from x-ray.
 `if uint64(now.Unix())+uint64(reservationRequestTimeoutSafetyMarginSeconds) >= uint64(action.TimeoutAt)` · `pkg/tbtcpg/reservation_acceptance.go:535` · NEW chain-time form: skips a pending generation within 2 hours of its action-level timeout.
 
 #### G-46
-`if !now.After(matureAt)` · `pkg/tbtcpg/reservation_acceptance.go:617` · Ensures candidate deposits have reached minimum age since reveal, measured on the chain head timestamp (was host wall clock before fix `768707517`).
+`if !now.After(matureAt)` · `pkg/tbtcpg/reservation_acceptance.go:617` · Ensures candidate deposits have reached minimum age since reveal, measured on the chain head timestamp (was host wall clock before fix `7c34c4e12`).
 
 #### G-47
 `if lookup.confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations` · `pkg/tbtcpg/reservation_acceptance.go:896` · Requires at least 6 Bitcoin funding transaction confirmations before assembling an acceptance proposal.
@@ -173,7 +173,7 @@ Per-call preconditions. Heading IDs below (`G-N`) are anchor targets from x-ray.
 `if reservation.State != tbtc.ReservationStateActive` · `pkg/tbtcpg/reservation_reanchor.go:698` · Requires the reservation to be Active before submitting a new on-chain requestReservationReanchor transaction.
 
 #### G-55
-`if !tbtc.IsReanchorTargetAged(s.createdAt[candidate], s.creationPeriod, s.headTime, 0)` · `pkg/tbtcpg/reservation_reanchor.go:1101` · NEW (fix `fb520f1fe`): excludes a candidate re-anchor target wallet that has not aged out of its creation period, measured on the chain head; the target search sets `waitingOnAgedTarget` instead of proposing.
+`if !tbtc.IsReanchorTargetAged(s.createdAt[candidate], s.creationPeriod, s.headTime, 0)` · `pkg/tbtcpg/reservation_reanchor.go:1101` · NEW (fix `5a7b125fd`): excludes a candidate re-anchor target wallet that has not aged out of its creation period, measured on the chain head; the target search sets `waitingOnAgedTarget` instead of proposing.
 
 #### G-56
 `if count+1 > s.maxReservationsPerWallet` · `pkg/tbtcpg/reservation_reanchor.go:1128` · Excludes candidate target wallets that would exceed the per-wallet reservation count cap.
@@ -188,7 +188,7 @@ Per-call preconditions. Heading IDs below (`G-N`) are anchor targets from x-ray.
 `if !headTime.IsZero() && uint64(max(headTime.Unix(), 0)) > uint64(action.TimeoutAt)+uint64(action.TermSeconds)` · `pkg/maintainer/spv/reservation_proof_loop.go:494` · NEW chain-time form: evicts a TimedOut acceptance generation from the SPV proof scan only once the chain head has passed the snapshotted custody term; when the head is unreadable the generation is kept, not evicted.
 
 #### G-60
-`if reservationActionAbandoned(action, headTime)` · `pkg/maintainer/spv/reservation_proof_loop.go:528` · NEW (fix `146e3206d`, G2-F16): evicts a Pending acceptance generation whose notification evidently will not land, once the chain head is past `TimeoutAt + 4*(TimeoutAt-RequestedAt)`; zero head time disables the eviction.
+`if reservationActionAbandoned(action, headTime)` · `pkg/maintainer/spv/reservation_proof_loop.go:528` · NEW (fix `41fb820a5`, G2-F16): evicts a Pending acceptance generation whose notification evidently will not land, once the chain head is past `TimeoutAt + 4*(TimeoutAt-RequestedAt)`; zero head time disables the eviction.
 
 #### G-61
 `if _, submitted := submittedReservations[reservationKey]; submitted` · `pkg/maintainer/spv/reservation_proof_loop.go:1023` · Enforces at most one re-anchor proof submission per reservation key per proof loop pass.
@@ -290,7 +290,7 @@ Each block is classified into one of five categories: `Conservation` / `Bound` /
 
 `Temporal` · Enforced: **Yes**
 
-> Proposal generators refuse to propose or resume acceptance or re-anchor actions within 2 hours (`7200s`) of `action.TimeoutAt`, and the margin is judged on the chain head's block time, not the host wall clock (per spec; fix `768707517`).
+> Proposal generators refuse to propose or resume acceptance or re-anchor actions within 2 hours (`7200s`) of `action.TimeoutAt`, and the margin is judged on the chain head's block time, not the host wall clock (per spec; fix `7c34c4e12`).
 
 **Derivation** - temporal: `pkg/tbtcpg/reservation_acceptance.go:433,459,535` (`now` from `chain.GetLatestBlockTimestamp()`) and `pkg/tbtcpg/reservation_reanchor.go:227,306` (`headTime` read once per pass; the pass fails when the read fails).
 
@@ -326,7 +326,7 @@ Each block is classified into one of five categories: `Conservation` / `Bound` /
 
 `Bound` · Enforced: **Yes**
 
-> Re-anchor proposal generation strictly filters candidate target wallets to those in `StateLive` whose current reservation count does not exceed `maxReservationsPerWallet`, whose aggregate amount does not exceed `maxReservationsAmountPerWallet`, and which have aged out of their wallet creation period (per spec; target-age gate added in fixes `fb520f1fe`/`30dac8c0f`).
+> Re-anchor proposal generation strictly filters candidate target wallets to those in `StateLive` whose current reservation count does not exceed `maxReservationsPerWallet`, whose aggregate amount does not exceed `maxReservationsAmountPerWallet`, and which have aged out of their wallet creation period (per spec; target-age gate added in fixes `5a7b125fd`/`a83ba04ef`).
 
 **Derivation** - guard-lift: `pkg/tbtcpg/reservation_reanchor.go:1128` (`count+1 > maxCount`), `1148` (`amount+anchorValue > maxAmount`), `1265` (`wallet.State != StateLive`), `1101` (`!tbtc.IsReanchorTargetAged(...)`); target search `reanchorTargetSearch.pick` (`pkg/tbtcpg/reservation_reanchor.go:1091-1127`), and the follower co-sign mirror `pkg/tbtc/reservation.go:901-916`.
 
@@ -348,7 +348,7 @@ Each block is classified into one of five categories: `Conservation` / `Bound` /
 
 #### I-11
 
-`Temporal` · Enforced: **Yes** (was the single Enforced=No invariant of the first run; closed by fix `ad0575e0e`/`768707517`/`146e3206d`)
+`Temporal` · Enforced: **Yes** (was the single Enforced=No invariant of the first run; closed by fix `a17044076`/`7c34c4e12`/`41fb820a5`)
 
 > All reservation watcher, proof-loop, and generator deadline decisions compare the chain head's block time (via `GetLatestBlockTimestamp`) against contract timestamps (`action.TimeoutAt`, `refundDeadline`, `ReanchorCooldownUntil`, `DissolutionEligibleAt`, deposit maturity). The node wall clock remains in use only for the 10-minute renotify backoff and `notifiedAt` stamps. When the chain head time cannot be read, deadline decisions are skipped for that pass - nothing is notified and nothing is evicted on a guess.
 
@@ -400,7 +400,7 @@ Each block is classified into one of five categories: `Conservation` / `Bound` /
 
 > Peer-supplied wire proposal protobufs with non-positive fees, oversized fee integers (>8 bytes), oversized keys (>32 bytes), zero nonces, all-zero hashes, or mismatched public key hash lengths are rejected during unmarshaling; ephemeral public key maps and beacon private key shares are validated as in-range curve values at unmarshal time.
 
-**Derivation** - guard-lift: `pkg/tbtc/marshaling.go:505,540,543,547,557,578,607,613,616,619,625,632,637,645` + write-sites: `unmarshalCoordinationProposal` (`pkg/tbtc/marshaling.go:219-260`); out-of-range key rejections: `pkg/tecdsa/dkg/marshaling.go` and `pkg/tecdsa/signing/marshaling.go` (compressed-point parse, fix `eb8c3d39f`), `pkg/beacon/dkg/marshaling.go:76` (`privateKeyShare.Sign() <= 0 || privateKeyShare.Cmp(bn256.Order) >= 0`, fix `bc1a0aa10`).
+**Derivation** - guard-lift: `pkg/tbtc/marshaling.go:505,540,543,547,557,578,607,613,616,619,625,632,637,645` + write-sites: `unmarshalCoordinationProposal` (`pkg/tbtc/marshaling.go:219-260`); out-of-range key rejections: `pkg/tecdsa/dkg/marshaling.go` and `pkg/tecdsa/signing/marshaling.go` (compressed-point parse, fix `c5688f92c`), `pkg/beacon/dkg/marshaling.go:76` (`privateKeyShare.Sign() <= 0 || privateKeyShare.Cmp(bn256.Order) >= 0`, fix `f25747bc7`).
 
 **If violated** - Malformed or malicious peer messages could crash nodes via nil pointer dereferences or trigger out-of-bounds memory allocations during proposal processing.
 
@@ -448,7 +448,7 @@ Each block is classified into one of five categories: `Conservation` / `Bound` /
 
 > The deposit-sweep proposal generator decides deposit maturity (minimum deposit age since reveal) on the host wall clock, not on chain time: `timeNow := time.Now()` at pass start is used for the `!timeNow.After(matureAt)` skip.
 
-**Derivation** - temporal: `pkg/tbtcpg/deposit_sweep.go:223` (`timeNow := time.Now()`) and `:288` (`if !timeNow.After(matureAt)` where `matureAt := depositRequest.RevealedAt.Add(depositMinAge)`). The reservation tasks in the same checklist window use `GetLatestBlockTimestamp` (fix `768707517`); the sweep generator was not re-pointed.
+**Derivation** - temporal: `pkg/tbtcpg/deposit_sweep.go:223` (`timeNow := time.Now()`) and `:288` (`if !timeNow.After(matureAt)` where `matureAt := depositRequest.RevealedAt.Add(depositMinAge)`). The reservation tasks in the same checklist window use `GetLatestBlockTimestamp` (fix `7c34c4e12`); the sweep generator was not re-pointed.
 
 **If violated** - With a fast host clock the generator proposes a sweep for a deposit the on-chain `ValidateDepositSweepProposal` still considers too young, wasting the proposal round; with a slow host clock it misses mature deposits. The asymmetry between the two generators' clock domains in the same window is the residual gap.
 
@@ -508,7 +508,7 @@ Enforced: **Yes** (upgraded from warn-only; mixed-version divergence remains)
 
 > The follower-side fee check is a two-layer policy: a hard reject at the fixed protocol minimum (5 sat/vB x (vsize-1)) that no follower crosses, plus a log-only warn at the operator's own bare floor. The leader hard-bounds its fee with `applyWalletTxFeeFloor`; the on-chain `WalletProposalValidator` bounds fees from above.
 
-**Producer side** (Generator) - `pkg/tbtcpg/fee.go:136,147,169,182` - Applies the buffered fee floor during proposal generation (commit `30dac8c0f` added the overflow-checked ceiling math and the fixed protocol minimum).
+**Producer side** (Generator) - `pkg/tbtcpg/fee.go:136,147,169,182` - Applies the buffered fee floor during proposal generation (commit `a83ba04ef` added the overflow-checked ceiling math and the fixed protocol minimum).
 
 **Consumer side** (Follower) - `pkg/tbtc/proposal_fee_check.go:183-258` - `rejectIfProposedWalletTxFeeBelowProtocolMin` hard-rejects below the protocol minimum on every wallet-tx path; `warnIfProposedWalletTxFeeBelowBareFloor` logs below the operator floor.
 
@@ -562,7 +562,7 @@ Enforced: **Yes** (enforced on-chain, out of scope)
 
 Enforced: **Yes** (failure mode upgraded: bounded and per-key, no genesis fallback)
 
-> Wallet registration block memoization bounds historical event query windows to wallet lifetime, preventing genesis-to-tip RPC scans; a failed registration lookup now fails the pass instead of degrading to a full-history scan, and one unreadable reservation no longer aborts the lookup for the rest of the wallet (fix `4ca44edad`).
+> Wallet registration block memoization bounds historical event query windows to wallet lifetime, preventing genesis-to-tip RPC scans; a failed registration lookup now fails the pass instead of degrading to a full-history scan, and one unreadable reservation no longer aborts the lookup for the rest of the wallet (fix `a29a69690`).
 
 **Producer side** (Memoizer) - `pkg/chain/ethereum/tbtc.go:1390-1488` - `earliestWalletRegistrationBlock` caches in `walletRegistrationBlockCache` and walks back in doubling windows; errors propagate instead of falling back to `startBlock = 0`.
 

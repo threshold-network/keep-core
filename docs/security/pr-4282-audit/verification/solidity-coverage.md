@@ -1,11 +1,11 @@
 # Solidity coverage of the reservation contracts
 
-- Repo: tbtc-v2, branch a coverage-tooling branch, head `020220857`, based on `29e84a35c` (the integrated reservation branch):
-  - `7cdd94fd4` adds `solidity-coverage` 0.8.17, the `coverage` script and `.solcover.js` (skips `contracts/test/`; lcov, json and text reports into `coverage/`).
-  - `7a9a676d1` adds a coverage-only hardfork pin.
-  - `967caa2f8` applies the pin only when `COVERAGE_HARDFORK` is set. The earlier form broke every normal Hardhat run (HH11 "Invalid hardfork name undefined").
-  - `020220857` documents the coverage command, artifacts, and instrumentation limits.
-- Raw data: `lcov-29e84a35c.info`, `coverage-final-29e84a35c.json` (this directory); older base: `lcov-9d208696.info`, `coverage-final-9d208696.json`.
+- Repo: tbtc-v2, coverage-tooling branch, based on `d20cf74ba` (the published reservation upgrade line):
+  - one commit adds `solidity-coverage` 0.8.17, the `coverage` script and `.solcover.js` (skips `contracts/test/`; lcov, json and text reports into `coverage/`).
+  - one adds a coverage-only hardfork pin.
+  - one applies the pin only when `COVERAGE_HARDFORK` is set. The earlier form broke every normal Hardhat run (HH11 "Invalid hardfork name undefined").
+  - the branch head documents the coverage command, artifacts, and instrumentation limits.
+- Raw data: `lcov-d20cf74ba.info`, `coverage-final-d20cf74ba.json` (this directory); older base: `lcov-9d208696.info`, `coverage-final-9d208696.json`.
 
 ## How to run
 
@@ -22,7 +22,7 @@ Checks run by the orchestrator after the fix:
 - Coverage of `Bridge.ReservationStrandingLibrary.test.ts` (one of the two suites that ran out of gas): 34 passing.
 - `yarn install --immutable` completed successfully with the existing peer-dependency warnings.
 
-## Results (full suite, base 29e84a35c)
+## Results (full suite, base d20cf74ba)
 
 The full run: 3,496 passing, 19 failing. 18 failures are gas-amount checks that instrumentation breaks (BitcoinTx, StarkNet gas analysis, MaintainerProxy and LightRelayMaintainerProxy refunds). The 19th is a real test defect, see below.
 
@@ -38,7 +38,7 @@ The full run: 3,496 passing, 19 failing. 18 failures are gas-amount checks that 
 
 Base 9d208696 (reservation test files only, before the ethers v6 test repair): Reservation.sol 88.4% statements and 72.0% branches, ReservationProofs.sol 85.6% and 68.5%. At that base `ReservationProofs.test.ts` failed in every hook, so its 38 tests contributed nothing.
 
-## Uncovered branches (base 29e84a35c)
+## Uncovered branches (base d20cf74ba)
 
 Almost all are the revert side of a `require`: no test checks that the guard rejects.
 
@@ -68,9 +68,9 @@ ReservationProofs.sol (14 of 92):
 
 ## Finding: one test regression on the private merge branch
 
-`test/bridge/Bridge.Parameters.test.ts:65` (updateDepositParameters, "before all" hook) fails with "Single-reservation cap below dust threshold", with and without coverage, at `29e84a35c` and on the Sepolia rehearsal branch (`e77dbc033`). The feasibility guard from `84ea4dda2` correctly rejects a new dust threshold that sits above the fixture's single-reservation cap. The test fixture needs to change (lower the new dust value, or raise the cap first); the guard is right. The public PR head does not have the guard, so it is not affected.
+`test/bridge/Bridge.Parameters.test.ts:65` (updateDepositParameters, "before all" hook) fails with "Single-reservation cap below dust threshold", with and without coverage, at `d20cf74ba` and on the Sepolia rehearsal branch (`30caf4bbd`). The feasibility guard from `84ea4dda2` correctly rejects a new dust threshold that sits above the fixture's single-reservation cap. The test fixture needs to change (lower the new dust value, or raise the cap first); the guard is right. The public PR head does not have the guard, so it is not affected.
 
-Fixed in `6798e8eae` on the integrated reservation branch: the test now halves the dust threshold (500,000). That stays at or below the fixture caps (1,000,000) and above the new tx max fee (300,000). `Bridge.Parameters.test.ts`: 95 passing, 0 failing (before: 90 passing, 1 failing, with 5 tests blocked by the hook). The the Sepolia rehearsal branch branch still carries the old fixture until it merges the dev-merge branch again.
+Fixed in `b4d9fe8aa` on the integrated reservation branch: the test now halves the dust threshold (500,000). That stays at or below the fixture caps (1,000,000) and above the new tx max fee (300,000). `Bridge.Parameters.test.ts`: 95 passing, 0 failing (before: 90 passing, 1 failing, with 5 tests blocked by the hook). The the Sepolia rehearsal branch branch still carries the old fixture until it merges the dev-merge branch again.
 
 ## Limits
 

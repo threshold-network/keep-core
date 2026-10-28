@@ -3,7 +3,7 @@
 # Sequential (one at a time) to reduce self-contention. GOCACHE on disk.
 set -u
 # kc-mutation was removed on 2026-10-15; recreate it first with
-# git worktree add --detach <checkout> fe73e9799
+# git worktree add --detach <checkout> 58bb4c694
 cd <checkout>
 export GOCACHE=<gocache> GOMODCACHE=<gomodcache>
 run() { # $1=label $2=pkg $3=exclusions...

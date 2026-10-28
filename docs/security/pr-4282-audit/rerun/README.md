@@ -1,10 +1,10 @@
 # PR #4282 Phase C re-audit (merged head, 2026-10-06 to 2026-10-08)
 
 ## What was audited
-- **Go:** head `9f99f364a`. This is the epic `49c4df13d` plus all Phase A fixes, merged with keep-core
+- **Go:** the merged fix head. This is the epic `49c4df13d` plus all Phase A fixes, merged with keep-core
   `origin/dev` `d72bca6fc`.
   - The PR diff is now `git diff origin/dev <head>`: 73 non-test Go files.
-- **Solidity:** `b7a7cac7d`. Its `solidity/` is byte-identical to `origin/dev`; the PR changes no Solidity.
+- **Solidity:** the frozen merge worktree. Its `solidity/` is byte-identical to `origin/dev`; the PR changes no Solidity.
   - Dev changed 80 contract files since the first audit, including the vendored sortition contracts.
   - Those suites' results concern pre-existing code and are not part of this record.
 - **Methods (decision D7):**
@@ -60,16 +60,16 @@ restarted under a new stamp; the empty stamp `20261006-144140` is kept as a reco
   [pr-fixes.md](./pr-fixes.md) and [pr-fixes-2.md](./pr-fixes-2.md).
   - The scan Origin labels were often wrong in both directions. Final origin comes from function-body hashes
     at `a7ac8989`, the epic, `origin/dev` and the head.
-- **Fixed in the PR**, on the audit-fix line merged into the integrated head `f4d1e410d`. Each fix has a test
+- **Fixed in the PR**, on the audit-fix line merged into the integrated fix line. Each fix has a test
   that fails without it, checked in scratch worktrees.
 
   | Item | Fix |
   |---|---|
-  | G1-R6 | bare-floor int64 overflow (`8787cb64f`) |
-  | G2-R1, G2-R2, G2-R6 | stale-deposit cursor, one head read per tick, budget judged on chain time (`cb0e62c29`) |
-  | G1-R11 | parked RPC goroutines bounded by a global slot pool that does not block independent queries (`88a6339e0`) |
-  | G1-R29 | reveal lookup centered on chain time (`b16d8d960`, test `7c4ae4b7b`) |
-  | gas margin | saturating margin helper (`4efad711f`) and the integer margin at the 8 reservation call sites (`1b7306183`) |
+  | G1-R6 | bare-floor int64 overflow (`95a3a7c64`) |
+  | G2-R1, G2-R2, G2-R6 | stale-deposit cursor, one head read per tick, budget judged on chain time (`0b0c89cb1`) |
+  | G1-R11 | parked RPC goroutines bounded by a global slot pool that does not block independent queries (`106322562`) |
+  | G1-R29 | reveal lookup centered on chain time (`d92646e8f`, test `2a8134a8f`) |
+  | gas margin | saturating margin helper (`fc9cf18d5`) and the integer margin at the 8 reservation call sites (`f9235d320`) |
 
 - **Disputed or false positive PR-code items (no change), with reasons in the files above:**
   - G2-R3 (Electrum history includes spends).
@@ -86,11 +86,11 @@ restarted under a new stamp; the empty stamp `20261006-144140` is kept as a reco
 - **Pre-existing and dev items:** every item whose final origin is pre-existing code routes outside this
   record; none of them is listed here.
 
-## Verification of the final head (`f4d1e410d`)
+## Verification of the final head
 - `GOTOOLCHAIN=go1.25.7 GOFLAGS=-mod=readonly`: `go build ./...` passes.
 - `go vet ./...` shows only the known `tssResult` copylocks warning.
 - `go test -count=1 ./...`: one failure under full-suite load, `TestRateLimiter_RequestsPerSecondLimitOnly`
   (dev's ethutil package, identical to `origin/dev`). It passed when re-run alone.
-- `-race` on maintainer/..., tbtc, tbtcpg/... and clientinfo (run at `9f99f364a`): the only failures are the
+- `-race` on maintainer/..., tbtc, tbtcpg/... and clientinfo (run at the merged fix head): the only failures are the
   btcdiff and clientinfo fixture races, which `origin/dev` shows identically (26 races, 3 tests). E3's
   `RACE_EXCLUDE` already lists both packages.

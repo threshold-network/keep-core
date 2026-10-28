@@ -1,5 +1,5 @@
 ## Old-base snapshot (base 9d2086965; the run log is an internal run record, not published)
-- 603 passing, 4 failing (2 OOG coverage-specific: stranding library + third-party reanchor holds; 2 ethers-v6 pre-existing: WalletProposalValidator BigInt mix, ReservationProofs null target - both repaired at 29e84a35c)
+- 603 passing, 4 failing (2 OOG coverage-specific: stranding library + third-party reanchor holds; 2 ethers-v6 pre-existing: WalletProposalValidator BigInt mix, ReservationProofs null target - both repaired at d20cf74ba)
 - Reservation.sol: 88.44/71.95/89.47/88.37 (stmts/branch/funcs/lines)
 - ReservationProofs.sol: 85.58/68.48/92.86/90.26
 - ReservationRouter.sol: 80/41.67/79.17/86.84

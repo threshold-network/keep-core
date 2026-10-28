@@ -7,14 +7,14 @@ seeded faults. This is the final report; all numbers are from completed runs.
 ## Bases
 
 - Go: worktree `<checkout>` (removed 2026-10-15; recreate
-  with `git worktree add --detach <path> fe73e9799`), detached at
-  the reservation review branch @ `fe73e97991a52b0d946754eff172d4570ae97d5c`.
+  with `git worktree add --detach <path> 58bb4c694`), detached at
+  the reservation review branch @ `58bb4c694`.
 - Solidity main campaigns: worktree
   `<host path>`, detached at
   the integrated reservation branch @ `9d208696588a86d0d139a6142b27ac502e356a89`.
 - Solidity proof re-run: worktree
   `<host path>`, detached at
-  `29e84a35c32e012ce65b45c565b4f1dca775efc4` ("test(reservations): repair
+  `d20cf74ba` ("test(reservations): repair
   reservation proof and validator suites that never ran under ethers v6").
   The proof mutation score is quoted from this base because at `9d208696` the
   `ReservationProofs.test.ts` file failed in a setup hook and never ran.
@@ -262,7 +262,7 @@ Per-contract results:
 | `ReservationVault.sol` | 9d208696 | 34/34 | 72/85 | 13 uncaught | 61 | 106/119 = 89.1% |
 | `Reservation.sol` | 9d208696 | 2/2 | 4/4 | 0 | 16 | 6/6 = 100% |
 | `ReservationProofs.sol` | 9d208696 (narrow kill) | 2/2 | 0/0 | 0 | 7 | 100% |
-| `ReservationProofs.sol` | **29e84a35c (repaired test)** | 2/2 | 0/0 | 0 | 7 | 100% |
+| `ReservationProofs.sol` | **d20cf74ba (repaired test)** | 2/2 | 0/0 | 0 | 7 | 100% |
 | `ReservationRouter.sol` | 9d208696 | 23/33 | 0/0 | 10 uncaught | 4 | 69.7% |
 
 Mutation scope was narrower than a whole-contract campaign:
@@ -321,14 +321,14 @@ invariant) gives **2/2 revert and 4/4 tweak mutants caught, 0 survived**.
 The line-1327 revert mutant is therefore *killed*, not a survivor. No
 `Reservation.sol` mutant survives.
 
-### `ReservationProofs.sol` - base `29e84a35c`
+### `ReservationProofs.sol` - base `d20cf74ba`
 
 At `9d208696` the `ReservationProofs.test.ts` file failed in its `before
 each` hook (see section 4), so no proof test could kill any mutant. At
-`29e84a35c` the test file is repaired (38 passing baseline), and the same
+`d20cf74ba` the test file is repaired (38 passing baseline), and the same
 `parseSingleOutput`-targeted campaign gives **2/2 revert mutants caught,
 0 survived, 0 tweak mutants generated**. The proof score is quoted from
-`29e84a35c`; the `9d208696` figure (also 2/2) was produced with a
+`d20cf74ba`; the `9d208696` figure (also 2/2) was produced with a
 substitute kill command and is noted for completeness but is not the
 authoritative proof score.
 
@@ -343,7 +343,7 @@ pass 2 and all Solidity verdicts):
   one independently reproduced accounting-test gap, and five other
   changes requiring interpretation.
 - Reservation library: all six viable sampled mutants killed.
-- Proof library at `29e84a35c`: both viable sampled mutants killed.
+- Proof library at `d20cf74ba`: both viable sampled mutants killed.
 - Router: 23/33 killed under a two-file kill set.
 
 Not covered / limited:
@@ -360,7 +360,7 @@ Not covered / limited:
 - These campaigns predate the new native Go fuzz targets and the new
   reservation Medusa suite. They measure the existing example tests only.
 
-## 4. Pre-existing test-suite bugs (fixed at `29e84a35c`, not here)
+## 4. Pre-existing test-suite bugs (fixed at `d20cf74ba`, not here)
 
 At `9d208696`, two reservation test files fail in a setup hook before any
 assertion runs, independent of any mutation:
@@ -369,18 +369,18 @@ assertion runs, independent of any mutation:
   `Mock` handle, but the `Mock` type in `test/helpers/mock.ts` exposes
   `.address`, not `.target`, so the value was `null` and ethers rejected it
   (`unsupported addressable value ... target=null`), failing the whole file in
-  `before each`. `29e84a35c` changes the call to `relay.address` (verified in
-  the `29e84a35c` worktree).
+  `before each`. `d20cf74ba` changes the call to `relay.address` (verified in
+  the `d20cf74ba` worktree).
 - `test/bridge/WalletProposalValidator.test.ts` line ~3588 mixed a BigInt
   (from `DEPOSIT_REFUND_SAFETY_MARGIN()`) with a number, producing
-  `Cannot mix BigInt and other types`. `29e84a35c` wraps it in `Number(...)`
+  `Cannot mix BigInt and other types`. `d20cf74ba` wraps it in `Number(...)`
   (verified).
 
 Both fail identically at the clean `9d208696` baseline in the `resv-merge`
 and sibling worktrees, so they are pre-existing test-harness bugs, not
-mutation results. `29e84a35c` repairs both. `ReservationProofs.test.ts` and
+mutation results. `d20cf74ba` repairs both. `ReservationProofs.test.ts` and
 `WalletProposalValidator.test.ts` were excluded from all `9d208696` kill
-commands and `ReservationProofs.test.ts` is included in the `29e84a35c`
+commands and `ReservationProofs.test.ts` is included in the `d20cf74ba`
 proofs kill command.
 
 ## 5. Limits
@@ -393,7 +393,7 @@ proofs kill command.
   (kill scripts, worktrees, GOCACHE redirection) plus the slither-mutate
   source rewrites that are reverted between mutants. The two pre-existing
   test bugs in section 4 are reported, not fixed, in this agent's worktrees
-  (they are fixed on the base branch at `29e84a35c`).
+  (they are fixed on the base branch at `d20cf74ba`).
 - Survivor equivalence is partial. A state-preserving extra zero-amount
   operation or an additional event is not automatically a missing
   consumer-behavior test.
@@ -412,8 +412,8 @@ proofs kill command.
 
 | Gap | Test added | Branch and commit | Red check |
 |---|---|---|---|
-| `sweepFees` `-=` replaced by `%=` | "should reduce the debt by exactly the repaid amount" in `ReservationVault.test.ts` (debt 500,000, about 200,000 repaid) | tbtc-v2 the integrated reservation branch `46b136039` | With `%=` injected in the isolated worktree: 48 passing, 1 failing, "expected 100000 to equal 300000". Real code: 49 passing. |
-| Acceptance matcher `fee <= 0` replaced by `fee < 0` | "skips a transaction with a zero fee" in `TestFindReservationAcceptanceTransaction` | keep-core the reservation review branch `70cd22942` | With the mutant injected: the subtest fails at `reservation_proof_loop_test.go:278`. Real code: passes. |
+| `sweepFees` `-=` replaced by `%=` | "should reduce the debt by exactly the repaid amount" in `ReservationVault.test.ts` (debt 500,000, about 200,000 repaid) | tbtc-v2 the integrated reservation branch `d9abace82` | With `%=` injected in the isolated worktree: 48 passing, 1 failing, "expected 100000 to equal 300000". Real code: 49 passing. |
+| Acceptance matcher `fee <= 0` replaced by `fee < 0` | "skips a transaction with a zero fee" in `TestFindReservationAcceptanceTransaction` | keep-core, the reservation review branch | With the mutant injected: the subtest fails at `reservation_proof_loop_test.go:278`. Real code: passes. |
 | Acceptance matcher `fee > TxMaxFee` replaced by `>=` | "accepts a fee exactly at TxMaxFee" in the same test | same commit | With the mutant injected: the subtest fails at line 296. Real code: passes. |
 
 Both isolated worktrees were restored and checked clean after each red run.
@@ -450,7 +450,7 @@ Raw outputs (also copied into this directory):
 - Solidity: `raw-solidity/mut-vault.log`, `raw-solidity/mut-resv2.log`
   (corrected kill), `raw-solidity/mut-resv.log` (narrow kill, superseded),
   `raw-solidity/mut-proofs.log` (9d208696), `raw-solidity/mut-proofs2.log`
-  (29e84a35c, authoritative proof score), `raw-solidity/mut-router.log`.
+  (d20cf74ba, authoritative proof score), `raw-solidity/mut-router.log`.
 - Kill scripts: `verification/replay/kill_vault.sh`, `verification/replay/kill_resv.sh`,
   `verification/replay/kill_proofs2.sh`, `verification/replay/kill_router.sh`.
 - Clean pre-campaign source backup: `<mutation backup>/`.

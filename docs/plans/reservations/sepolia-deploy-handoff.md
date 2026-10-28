@@ -5,7 +5,7 @@ Decision D21: the human runs the rehearsed script with the deployer key. The age
 ## What you need
 
 - The private key for the deployer EOA `0xb9B8a92677fcad86dc8d36fe947184283B03b3C8`. It owns the Sepolia ProxyAdmin `0x0E9bD483CC8Fb649636e0cd7a60BC48b6C040103` and BridgeGovernance `0x61700ebaCCfd9FB0100C35DDd38e4cC3e9057c5A` (checked read-only on 2026-10-09).
-- A checkout of the reservation contracts at `6237b2741`. Do not use an earlier Sepolia rehearsal branch @ `0b9c55399` or `-v2` @ `ec50d8e3e`: neither contains the moved public PR head `c27b71281`. Do not use the older the Sepolia rehearsal branch @ `52401a693` either: it also lacks the 8 public contract fixes and the funding-proof acceptance request. The deploy script is unchanged; the contracts come from the integrated line `reservations-public-reconcile` @ `d47be35eb`. It contains the runbook, the deploy script, and the contracts with the hold cap, the feasibility guard, release to pool and the hand-off reserve. Run `yarn install --immutable` and `yarn build` in `solidity/`.
+- A checkout of the reservation contracts at the reconciled contracts commit. Do not use an earlier Sepolia rehearsal build, and not the older rehearsal build either: neither contains the moved public PR head `c27b71281`, and the older one also lacks the 8 public contract fixes and the funding-proof acceptance request. The deploy script is unchanged; the contracts come from the integrated reservation line, which the published `reservations-upgrade` branch carries. It contains the runbook, the deploy script, and the contracts with the hold cap, the feasibility guard, release to pool and the hand-off reserve. Run `yarn install --immutable` and `yarn build` in `solidity/`.
 - npm publish rights for `@keep-network/tbtc-v2` (step 7).
 
 ## Order
@@ -24,7 +24,7 @@ Decision D21: the human runs the rehearsed script with the deployer key. The age
    PHASE=prepare npx hardhat run --network sepolia scripts/reservations-sepolia-rehearsal.ts
    ```
    It does runbook steps 1-6 and 10 (deploy, upgrade, new governance, router, caps and parameters, fee reserve 0), waits out the two 60 s governance delays in real time, and prints the addresses keep-core needs. If the first account is not the deployer EOA it stops before sending anything. If it fails or you interrupt it, run the same command again: it checks each step on-chain and resumes. Send the agent the printed addresses.
-3. **Off-chain, runbook steps 7-9:** publish npm `sepolia` (step 7); the agent sets the activation block B in keep-core on the drill-fix branch (`d53c0c8d2`: the five-argument caps setter and member-proof hand-off bindings, the keeper gauges and the keeper wallet-discovery fix), builds and releases the client (step 8; tell the agent when to pick B, it must be a future block); confirm every drill operator runs that build (step 9).
+3. **Off-chain, runbook steps 7-9:** publish npm `sepolia` (step 7); the agent sets the activation block B in keep-core on the drill-fix branch (`9c4e1b221`: the five-argument caps setter and member-proof hand-off bindings, the keeper gauges and the keeper wallet-discovery fix), builds and releases the client (step 8; tell the agent when to pick B, it must be a future block); confirm every drill operator runs that build (step 9).
 4. **Run the script, phase 2**, only when the chain is at or past B:
    ```sh
    PHASE=activate ACTIVATION_BLOCK=<B> npx hardhat run --network sepolia scripts/reservations-sepolia-rehearsal.ts

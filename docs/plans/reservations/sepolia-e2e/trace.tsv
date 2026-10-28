@@ -59,10 +59,10 @@ SM-X6	sepolia	S-39	-	-
 SM-X7	not-testable			design-only: the Vetoed state is not in M1 code (matrix status design-only)
 INV-101	sepolia	S-17	-	-
 INV-102	sepolia	S-50	-	stranding on a Closed wallet that still custodies a live reservation is the reachable form of this statement
-INV-103	offchain	-	tbtc-v2@6237b2741:solidity/test/bridge/Bridge.ReservationStranding.test.ts:564 'strands an Active reservation on a wallet driven to Terminated by a real moving-funds-timeout call chain, not direct state injection'	a real Terminated wallet only arises from a coordinated operator outage plus walletClosingPeriod plus movingFundsTimeout on testnet4, which cannot be forced on Sepolia
+INV-103	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Bridge.ReservationStranding.test.ts:564 'strands an Active reservation on a wallet driven to Terminated by a real moving-funds-timeout call chain, not direct state injection'	a real Terminated wallet only arises from a coordinated operator outage plus walletClosingPeriod plus movingFundsTimeout on testnet4, which cannot be forced on Sepolia
 INV-104	sepolia	S-55	-	-
 INV-105	sepolia	S-23	-	-
-INV-106	offchain	-	tbtc-v2@6237b2741:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	the Closed position state is unreachable on chain (closeReservation has no entry point); the guard is only observable in a local EVM
+INV-106	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	the Closed position state is unreachable on chain (closeReservation has no entry point); the guard is only observable in a local EVM
 INV-107	sepolia	S-38	-	-
 INV-108	sepolia	S-17	-	-
 INV-109	sepolia	S-10	-	-
@@ -227,7 +227,7 @@ EC-18	sepolia	S-40	-	-
 EC-19	sepolia	S-92	-	-
 EC-20	sepolia	S-28	-	-
 EC-21	not-testable	-	-	needs every Live wallet on Sepolia to close or terminate, which requires four consecutive walletCreationPeriod rotations and destroys the drill's own capacity; substitute: Bridge.MovingFunds.test.ts 'No target wallets available' and 'Live wallets count must be zero'
-EC-22	offchain	-	tbtc-v2@6237b2741:solidity/test/prepare-artifact-guard.test.ts:350 'rejects the wrong chain id', :356 'rejects a different Bridge proxy', :363 'rejects the rehearsal-node artifact on the Sepolia key network'	the guard reads local files; its happy and negative paths run before every rehearsal invocation and a tampered deployment reference cannot be installed on Sepolia
+EC-22	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/prepare-artifact-guard.test.ts:350 'rejects the wrong chain id', :356 'rejects a different Bridge proxy', :363 'rejects the rehearsal-node artifact on the Sepolia key network'	the guard reads local files; its happy and negative paths run before every rehearsal invocation and a tampered deployment reference cannot be installed on Sepolia
 EC-23	sepolia	S-07	-	the drill clients are released before B and their diagnostics are checked, so wallets registered earlier are discovered once the block passes
 EC-24	sepolia	S-76	-	-
 FM-01	sepolia	S-72	-	-
@@ -265,7 +265,7 @@ TM-06	sepolia	S-92	-	-
 TM-07	sepolia	S-50	-	-
 TM-08	sepolia	S-33	-	-
 TM-09	sepolia	S-98	-	-
-TM-10	offchain	-	tbtc-v2@6237b2741:solidity/test/bridge/Bridge.StorageLayout.test.ts:45 'upgrade-safe against the deployed TIP-109 Bridge layout'	storage-layout parity is a compile-time property of the layout diff; S-01 exercises the live upgrade but cannot produce a colliding layout
+TM-10	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Bridge.StorageLayout.test.ts:45 'upgrade-safe against the deployed TIP-109 Bridge layout'	storage-layout parity is a compile-time property of the layout diff; S-01 exercises the live upgrade but cannot produce a colliding layout
 TM-11	sepolia	S-65	-	-
 TM-12	sepolia	S-53	-	-
 TM-13	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/maintainer/spv/reservation_event_scan_test.go:146 TestFetchPastEventsInChunks_ChunkBoundaries	the bounded scan is proven against chunk boundaries locally; a hostile RPC provider cannot be staged on Sepolia
@@ -341,7 +341,7 @@ AR-03	not-testable	-	-	The ReservationVault has no proxy and no upgrade entry po
 AR-04	not-testable	-	-	The M2 migration ceremony has no code in the M1 contracts; design-only. Substitute: none; it becomes testable when the migration code lands.
 AR-05	not-testable	-	-	Compensation for a stranded position is an off-chain policy with no on-chain surface; design-only. Substitute: S-50, the stranding transition that creates the claim.
 AR-06	sepolia	S-92	-	-
-AR-07	offchain	-	tbtc-v2@6237b2741:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	closeReservation has no entry point in M1, so the unreachable closed-position guard is only observable in a local EVM
+AR-07	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	closeReservation has no entry point in M1, so the unreachable closed-position guard is only observable in a local EVM
 AR-08	sepolia	S-33	-	-
 AR-09	sepolia	S-31	-	-
 AR-10	sepolia	S-72	-	-

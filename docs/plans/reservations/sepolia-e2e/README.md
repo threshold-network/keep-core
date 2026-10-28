@@ -13,16 +13,16 @@ Files:
 
 | Item | Value |
 |---|---|
-| Contracts and deploy script | the reservation contracts at `6237b2741` |
+| Contracts and deploy script | the reservation contracts at the reconciled contracts commit |
 | Public contracts PR | tbtc-v2 #1116 (`reservations-upgrade`), open, draft, mergeable, head `c27b71281` (checked 2026-10-21) |
-| #1116 against the deploy source | `git rev-list --left-right --count c27b71281...6237b2741` = `0 112`: the PR head is fully contained, and the deploy source adds 112 commits. Contracts differ in 11 files (+975/-133): the private fixes that go public at merge step 6 (`d47be35eb`). The deploy source adds 36 commits and 22 files (deploy script, prepare guard, rehearsal artifact) on top of `d47be35eb`, none under `solidity/contracts` |
+| #1116 against the deploy source | `git rev-list --left-right --count c27b71281...<deploy source>` = `0 112`: the PR head is fully contained, and the deploy source adds 112 commits. Contracts differ in 11 files (+975/-133): the private fixes that go public at merge step 6. The deploy source adds 36 commits and 22 files (deploy script, prepare guard, rehearsal artifact) on top of the reconciled contracts, none under `solidity/contracts` |
 | Open #1116 review item | comment of 2026-10-15: script 98 trusts the BridgeGovernance address in the deployments record and only checks its owner. Mainnet activation only; not used on Sepolia (the Sepolia script is separate), but unresolved |
-| Client | keep-core the drill-fix branch @ `5799d58b0`, plus the Sepolia bindings and activation block commit (not yet made) |
+| Client | keep-core, the drill build, plus the Sepolia bindings and activation block commit (not yet made) |
 | SDK and depositor tooling | tbtc-v2 SDK `ReservationsService` from the same tbtc-v2 line |
 | Networks | Ethereum Sepolia; Bitcoin testnet4 |
 | Parameters | caps 2,000,000 / 2,000,000 / max active 2 / 1 per wallet; max total 4,000,000; hand-off reserve 2; third-party hold cap 1; term 90 days; action timeout 86,400 s (script header and drill runbook section 1) |
 
-So Sepolia tests the #1116 contracts **plus** the private fixes, not #1116 alone. A pass on Sepolia is evidence for the tbtc-v2 candidate `d47be35eb`; it says nothing about #1116 as it stands today.
+So Sepolia tests the #1116 contracts **plus** the private fixes, not #1116 alone. A pass on Sepolia is evidence for the tbtc-v2 candidate at the reconciled head; it says nothing about #1116 as it stands today.
 
 ## 1a. Own contract copy
 
@@ -33,11 +33,11 @@ So Sepolia tests the #1116 contracts **plus** the private fixes, not #1116 alone
 | Deploy method | the tbtc-v2 and keep-core deploy scripts at the base commit, on a new Hardhat network name with its own `deployments/` record, so the `sepolia` record of the shared deployment is not changed. The lab's deploy path (`lib/deploy.sh`) is the model |
 | Operators | own test operators, staked and registered in the copy's sortition pool; enough for the copy's group size. Wallet group size and DKG parameters are set by governance of the copy |
 | Wallets | create enough wallets by DKG before the schedule starts (section 5, item 1) |
-| Upgrade | `PHASE=prepare` then `PHASE=activate` from `6237b2741`, with the deployment record of the copy; the client bindings use the copy's addresses |
+| Upgrade | `PHASE=prepare` then `PHASE=activate` from the reconciled contracts, with the deployment record of the copy; the client bindings use the copy's addresses |
 
 Changes that this needs before step 1a:
 - a deploy profile for the copy (network name, deployments record, owner accounts) on a tooling branch;
-- the prepare and activate scripts must read the copy's record; check every hard-coded Sepolia address in `6237b2741` scripts and the drill runbook;
+- the prepare and activate scripts must read the copy's record; check every hard-coded Sepolia address in the reconciled contract scripts and the drill runbook;
 - keep-core client config and bindings for the copy's addresses;
 - Sepolia test ETH and test T for the deployer, the operators and the depositor.
 
@@ -45,7 +45,7 @@ What a shared-deployment upgrade would have tested and the copy does not: the re
 
 ## 2. Coverage
 
-The spec is the verification specification at keep-core `c9bfa021f` (`docs/spec/reservations/verification/`). Its traceability matrix lists **352** canonical IDs, one row each. The count comes from `tools/sepolia-plan/check_trace.py`, which reads those rows.
+The spec is the verification specification in the reservation specification work (keep-core, `docs/spec/reservations/verification/`). Its traceability matrix lists **352** canonical IDs, one row each. The count comes from `tools/sepolia-plan/check_trace.py`, which reads those rows.
 
 Every ID has exactly one disposition in `trace.tsv`:
 
@@ -75,7 +75,7 @@ Counts (output of the checker, 0 errors):
 Check command:
 
 ```
-python3 tools/sepolia-plan/check_trace.py --repo <keep-core checkout> --spec-rev c9bfa021f \
+python3 tools/sepolia-plan/check_trace.py --repo <keep-core checkout> --spec-rev <spec revision> \
   --trace docs/security/pr-4282-audit/sepolia-e2e/trace.tsv \
   --steps docs/security/pr-4282-audit/sepolia-e2e/steps-1.md docs/security/pr-4282-audit/sepolia-e2e/steps-2.md
 ```
@@ -84,8 +84,8 @@ It fails on a missing, extra or duplicated ID, an unknown disposition, a step th
 
 Limits of this mapping:
 - A row's disposition is a judgment. The checker proves that every ID is assigned to a defined step, not that the step really exercises the behavior. The human or a reviewer must read the steps.
-- The spec is pinned at older commits (`9d2086965`, D31 at `985740b21`). It was not re-pinned to `6237b2741`. Two spec entries disagree with the code at `6237b2741` (section 6).
-- Every revert string in quotes in the catalog was checked to exist in `solidity/contracts` at `6237b2741` (2026-10-21). Events were checked by name only.
+- The spec is pinned at older commits (`9d2086965`, D31 in a later revision). It was not re-pinned to the reconciled contracts. Two spec entries disagree with the code at the reconciled contracts (section 6).
+- Every revert string in quotes in the catalog was checked to exist in `solidity/contracts` at the reconciled contracts (2026-10-21). Events were checked by name only.
 
 ## 3. Entry gates (before `PHASE=prepare`)
 
@@ -95,7 +95,7 @@ Limits of this mapping:
 4. The fault-injection method for D10 and D11 is chosen, or both are marked "not run" with the reason.
 5. A decision on D8 (fraud stranding): a coordinated test-wallet setup, or "not run".
 6. The Sepolia RPC endpoint and the deployer key are available to the human who runs the script.
-7. The prepare fork rehearsal is re-run on `6237b2741` against a Sepolia fork that contains the own copy (the 2026-10-17 run, 24 pass / 0 fail / 3 off-chain skips, was against the shared deployment).
+7. The prepare fork rehearsal is re-run on the reconciled contracts against a Sepolia fork that contains the own copy (the 2026-10-17 run, 24 pass / 0 fail / 3 off-chain skips, was against the shared deployment).
 8. The heavy jobs (merge step 0a) and the lab scenarios L-01 to L-08 (merge step 0b) passed on the same contracts and client. A lab failure blocks step 1a.
 
 ## 4. Phases
@@ -114,15 +114,15 @@ Duration: not estimated yet. Known lower bounds from the parameters: an acceptan
 
 ## 5. Open items
 
-1. **Live wallet count for D7 and D8 (blocking).** The hand-off reserve gate requires `active count after the acceptance <= (Live wallets - 2) * 1` (`Reservation.sol:1064-1079` at `6237b2741`). The schedule retires W1 (D3+D5), then Wx and W2 (D6). With 4 Live wallets at the start, only 1 is Live after D6, so the fresh acceptances for D7 and D8 revert with `Hand-off reserve exceeded` unless new wallets are created first: each needs at least `count + 3` Live wallets (4 when the count is 1). With the own copy this is solved in phase P-1: create at least 7 Live wallets before the schedule starts (4 for D7 or D8 after the 3 retirements), or create new wallets between D6 and D7.
+1. **Live wallet count for D7 and D8 (blocking).** The hand-off reserve gate requires `active count after the acceptance <= (Live wallets - 2) * 1` (`Reservation.sol:1064-1079` at the reconciled contracts). The schedule retires W1 (D3+D5), then Wx and W2 (D6). With 4 Live wallets at the start, only 1 is Live after D6, so the fresh acceptances for D7 and D8 revert with `Hand-off reserve exceeded` unless new wallets are created first: each needs at least `count + 3` Live wallets (4 when the count is 1). With the own copy this is solved in phase P-1: create at least 7 Live wallets before the schedule starts (4 for D7 or D8 after the 3 retirements), or create new wallets between D6 and D7.
 2. Own-copy parameters not chosen yet (they set the schedule, and the copy's governance can set them): `depositRevealAheadPeriod`, wallet creation period, moving-funds timeout, closing period, governance delay, and the current Live wallet count. They set the schedule.
 3. Drill runbook TBDs: activation block, operator set, SPV maintainer, keeper operator and receiver (runbook section 1).
 4. Fault injection for D10 (watcher panic) and D11 (chain-read failure): method TBD.
 5. D8 (fraud stranding, Story 5) needs a test operator setup.
-6. Spec re-pin to `6237b2741`, and the two corrections in section 6.
+6. Spec re-pin to the reconciled contracts, and the two corrections in section 6.
 7. Optional: staging #455 on the drill line (human decision pending); it does not change the reservation steps.
 
-## 6. Spec entries that disagree with the code at `6237b2741`
+## 6. Spec entries that disagree with the code at the reconciled contracts
 
 Found while mapping; both checked at the cited lines.
 - **INV-102.** The spec says the moving-funds path checks the wallet's reservation count. The code checks `walletAnchoredInfo[w].count == 0` (proven anchors) when it chooses between closing and moving funds (`Wallets.sol:628-637`). Fix the spec text; the catalog tests the code's behavior.

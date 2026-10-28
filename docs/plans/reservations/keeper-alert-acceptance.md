@@ -19,11 +19,11 @@ Each successful monitoring run advanced its checkpoint and left no pending Sentr
 ## Runtime and boundaries
 
 - Ethereum: a separate loopback Anvil fork at mainnet block 26154824, chain ID 1.
-- Contracts: the unmodified activation script at tbtc-v2 `d53635ee4`; 22 checks passed, none failed or skipped.
+- Contracts: the unmodified activation script at tbtc-v2 on the reservation upgrade line; 22 checks passed, none failed or skipped.
 - Keeper: actual `keep-client maintainer --mainnet --spv`, with reservation proofs enabled and an unstaked local account.
-- Client code before the fix: keep-core `51fdd1a65`.
-- Client code after the fix: keep-core `d53c0c8d2`, integrated into the drill-fix branch on `security`.
-- Monitoring: the normal `node dist/index.js` entry point at tbtc-v2 `be2e89ddd`, including all six existing chain monitors.
+- Client code before the fix: keep-core `d8fce4707`.
+- Client code after the fix: keep-core `9c4e1b221`, integrated into the drill-fix branch.
+- Monitoring: the normal `node dist/index.js` entry point of the tbtc-v2 `monitoring/` package, including all six existing chain monitors.
 - Alert receiver: the actual Sentry SDK and HTTP envelope transport, pointed only at a local capture server.
 - Bitcoin: a real mainnet Electrum server for application startup and existing monitoring reads.
 
@@ -107,32 +107,32 @@ The acceptance evidence includes actual metric samples, manager reports, checkpo
 The expected missing-alert run is retained alongside passing controls.
 All endpoint values, passwords and keys are excluded from committed evidence.
 
-Monitor build per stage: baseline, fee, repay, no-target and stale ran on the older `be2e89ddd` monitor.
-Only the `age` stage was repeated on `52401a693`.
+Monitor build per stage: baseline, fee, repay, no-target and stale ran on the older monitor.
+Only the `age` stage was repeated on `8eb26c2e2`.
 
 Harness note: the Testnet4 startup smoke appends to its log and reuses its data directory, so a stale `status: 'failure'` line from an earlier run ends a later run after about one second.
 Clear the log, result file and data directory before each run.
 
 ## Monitor build for Sepolia and Bitcoin Testnet4
 
-The monitor to use is tbtc-v2 the Sepolia rehearsal branch on the private remote, head `52401a693`.
+The monitor to use is the one on tbtc-v2's reservation upgrade line, which carries `8eb26c2e2`.
 It already builds against the in-repo SDK (`4.0.0-dev`), maps `ENVIRONMENT=testnet` to Sepolia and Bitcoin Testnet4, guards the zero-supply case, and has the repaired Docker build.
 Nothing is published to npm.
 
-The first acceptance runs used the older `be2e89ddd` monitor, which the local rehearsal checkout still held.
-The checks below repeat the relevant ones on `52401a693`.
+The first acceptance runs used the older monitor, which the local rehearsal checkout still held.
+The checks below repeat the relevant ones on `8eb26c2e2`.
 
 | Check | Result |
 |---|---|
 | Registry SDK `v2.5.0-dev.5` network check | Does not recognize Testnet4 |
 | Registry SDK `latest` (3.2.0) and `development` (3.2.1-dev.1) | No Testnet4; no 4.x is published |
-| Older `be2e89ddd` monitor started against Testnet4 | Failed during setup |
-| `52401a693` monitor: `tsc`, test compile, `node dist-test/test/run.js` | Pass; 51 of 51 tests ok |
-| `52401a693` monitor `age` stage on the fork | Pass; fatal late-proof, fatal no-eligible-target, warning unrequested-deadline, each delivered once; manager success, checkpoint advanced, outbox empty |
-| `52401a693` monitor startup on Testnet4 with a real Testnet4 Electrum server and read-only Sepolia | Setup completes, network is Testnet4, manager report `success` with no errors |
+| Older monitor started against Testnet4 | Failed during setup |
+| `8eb26c2e2` monitor: `tsc`, test compile, `node dist-test/test/run.js` | Pass; 51 of 51 tests ok |
+| `8eb26c2e2` monitor `age` stage on the fork | Pass; fatal late-proof, fatal no-eligible-target, warning unrequested-deadline, each delivered once; manager success, checkpoint advanced, outbox empty |
+| `8eb26c2e2` monitor startup on Testnet4 with a real Testnet4 Electrum server and read-only Sepolia | Setup completes, network is Testnet4, manager report `success` with no errors |
 
 The host build was checked in this pass.
-The Docker image of `52401a693` was not rebuilt here.
+The Docker image of `8eb26c2e2` was not rebuilt here.
 
 Evidence: `monitor-age-rehearsal-head-age.json`, `rehearsal-head-testnet4-startup.json`, `legacy-testnet4-startup.json`, `testnet4-network-proof.json`.
 

@@ -1,8 +1,8 @@
 # X-Ray Report
 
-> keep-core - tBTC v2 UTXO Reservations Epic (PR #4282, merged head) | 64,468 nSLOC (17,960 in-scope hand-written) | `9f99f364a` (detached, the integrated branch + the audit-fix branch) | Go off-chain client | 06/10/26
+> keep-core - tBTC v2 UTXO Reservations Epic (PR #4282, merged head) | 64,468 nSLOC (17,960 in-scope hand-written) | merged fix head (detached, the integrated branch + the audit-fix branch) | Go off-chain client | 06/10/26
 
-Analyzed head: `9f99f364a28a7dd361f1942b635476bea723a8af`. This is the final merged head of the reservations epic plus the audit-fix branch (fixes for 36 findings and 13 leads) merged with `origin/dev` (`d72bca6fc`). Scope: the 73 non-test Go files in the Phase C re-run scope list (an internal run record, not part of this record) (50 hand-written files, 17,960 nSLOC in 8 subsystems; 23 generated ABI-binding files, 46,508 nSLOC, listed for reference but out of analysis scope). The PR diff is `git diff origin/dev 9f99f364a` (73 files, +33,378 / -204).
+Analyzed head: the final merged head of the reservations epic plus the audit-fix branch (fixes for 36 findings and 13 leads) merged with `origin/dev` (`d72bca6fc`). Scope: the 73 non-test Go files in the Phase C re-run scope list (an internal run record, not part of this record) (50 hand-written files, 17,960 nSLOC in 8 subsystems; 23 generated ABI-binding files, 46,508 nSLOC, listed for reference but out of analysis scope). The PR diff is `git diff origin/dev <merged head>` (73 files, +33,378 / -204).
 
 **Adaptation note.** This skill targets Solidity protocols; here it is applied to the Go off-chain client. Mapping used throughout: contract -> component, on-chain guard -> Go validation guard, "On-chain" enforcement -> `Enforced` (Yes/No in `invariants.md`), Solidity entry-point grep gate -> Go grep gate (see `entry-points.md`), forge coverage -> `go test -cover`. The on-chain reservation contracts (`ReservationRouter`/`ReservationVault`/`Bridge`/`WalletProposalValidator`, tbtc-v2) are out of scope and treated as external trust boundaries; spec claims tagged `(per spec)` come from `docs/spec/reservations/**` on branch `origin/docs/reservations-spec`, which is not merged into this head.
 
@@ -16,7 +16,7 @@ Analyzed head: `9f99f364a28a7dd361f1942b635476bea723a8af`. This is the final mer
 
 - **Users**: keep-core wallet signing groups, SPV maintainer operators, tBTC depositors requesting reservation acceptance
 - **Core flow**: coordinator proposes a reservation anchor/re-anchor; followers simulate against `WalletProposalValidator` (plus the new follower-side re-anchor target-age gate), threshold-sign a 1-in-1-out P2WPKH transaction; SPV maintainer submits the proof when confirmed
-- **Key mechanism**: UTXO reservation lifecycle (Pending action -> Settled/TimedOut) with 2-hour signing margins, 300-block safety margins, and permissionless housekeeping watchers that now judge every deadline on chain head time (per spec, per fix `ad0575e0e`/`768707517`)
+- **Key mechanism**: UTXO reservation lifecycle (Pending action -> Settled/TimedOut) with 2-hour signing margins, 300-block safety margins, and permissionless housekeeping watchers that now judge every deadline on chain head time (per spec, per fix `a17044076`/`7c34c4e12`)
 - **Token model**: tBTC minted to `ReservationVault` at acceptance (per spec); in-kind fee debt (`inKindFeeDebtSat`) tracked on-chain
 - **Admin model**: operator CLI/config (activation, fee floor/buffer, watchers); on-chain governance (Threshold Council Safe, 48h timelock per spec) sets reservation parameters
 
@@ -120,8 +120,8 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 **Adversary Ranking** (ordered by threat level for this component type, adjusted by git evidence):
 
 1. **Malicious minority of signers** - an adversarial quorum-minus-one can still propose or co-sign; the Go client's pre-signing checks (on-chain action record + `WalletProposalValidator` view + the new target-age gate) are the last off-chain line before threshold signature.
-2. **Malicious libp2p peer** - untrusted protobuf payloads and forged coordinator identities enter the signing path; malformed input must be rejected, not crash or stall honest signers. The ephemeral-key map and beacon private-key-share unmarshalers now reject out-of-range values at unmarshal time (`eb8c3d39f`, `bc1a0aa10`).
-3. **Malicious coordination leader** - proposes bad fees, wrong targets, or off-checklist actions; the follower now hard-rejects any proposed fee below the 5 sat/vB protocol minimum on every wallet-tx path (`rejectIfProposedWalletTxFeeBelowProtocolMin`, `30dac8c0f`).
+2. **Malicious libp2p peer** - untrusted protobuf payloads and forged coordinator identities enter the signing path; malformed input must be rejected, not crash or stall honest signers. The ephemeral-key map and beacon private-key-share unmarshalers now reject out-of-range values at unmarshal time (`c5688f92c`, `f25747bc7`).
+3. **Malicious coordination leader** - proposes bad fees, wrong targets, or off-checklist actions; the follower now hard-rejects any proposed fee below the 5 sat/vB protocol minimum on every wallet-tx path (`rejectIfProposedWalletTxFeeBelowProtocolMin`, `a83ba04ef`).
 4. **Malicious on-chain keeper** - can race the client's watchers on housekeeping notifications; client paths assume idempotency and re-verify before submit.
 5. **Unreliable infrastructure (Electrum/RPC)** - stale or adversarial data feeds proposal generation, fee estimation, and SPV proof assembly; a slow/unreadable chain head now simply defers deadline decisions rather than firing them early.
 
@@ -154,8 +154,8 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 - **Peer -> signer P2P boundary** - untrusted bytes; strict unmarshal bounds (`pkg/tbtc/marshaling.go:505-645`) + membership/leader checks (`pkg/tbtc/coordination.go:880,898`); ephemeral public-key maps (`pkg/tecdsa/dkg/marshaling.go`, `pkg/tecdsa/signing/marshaling.go`) and beacon private key shares (`pkg/beacon/dkg/marshaling.go:76`) reject out-of-range values at unmarshal; no time delay - a bad message is dropped per-message, not throttled.
 - **Signer -> on-chain boundary** - every signature path gates on a pending on-chain action record and a `WalletProposalValidator` view call (`pkg/tbtc/reservation.go:671-692,852-870`), plus the target-age gate (`pkg/tbtc/reservation.go:901-916`) and the protocol fee minimum (`pkg/tbtc/reservation.go:713,950`); the on-chain contracts are the external trust boundary, out of scope.
 - **Operator host -> chain-time boundary (FIXED)** - the previous single Enforced=No invariant is closed: every reservation deadline decision (timeout-notify gate, stale-deposit refund gate, late-window eviction, abandon gate, dissolve gate, acceptance candidate gate, re-anchor cooldown/margin/age gates) now reads the chain head's block time via `GetLatestBlockTimestamp` and skips the decision when the head is unreadable (`pkg/maintainer/spv/reservation_action_timeout_watch.go:461-465`, `reservation_stale_deposit_watch.go:272-281`, `reservation_proof_loop.go:494-498,1166-1172`, `reservation_stranding_watch.go:177,256-258`). Host wall clock remains at two non-reservation sites (I-11, I-18).
-- **Client -> deployment config boundary** - the activation-block table is still empty at this head, so the feature is off on all public networks; double CLI opt-in (`Tbtc.ReservationsEnabled` + `Spv.ReservationProofsEnabled`), plus a new out-of-band deploy check that compares the two flags across the two config files (`scripts/check-reservation-flags.sh`, `7c8269d6a`).
-- **Electrum/RPC -> proof boundary** - UTXO values and confirmations from Electrum feed on-chain submissions; SPV difficulty + Merkle verification happens on-chain, but fee estimates and target search read untrusted data. Registration-block lookups now fail the pass instead of degrading to genesis scans (`4ca44edad`).
+- **Client -> deployment config boundary** - the activation-block table is still empty at this head, so the feature is off on all public networks; double CLI opt-in (`Tbtc.ReservationsEnabled` + `Spv.ReservationProofsEnabled`), plus a new out-of-band deploy check that compares the two flags across the two config files (`scripts/check-reservation-flags.sh`, `bc9bb78fe`).
+- **Electrum/RPC -> proof boundary** - UTXO values and confirmations from Electrum feed on-chain submissions; SPV difficulty + Merkle verification happens on-chain, but fee estimates and target search read untrusted data. Registration-block lookups now fail the pass instead of degrading to genesis scans (`a29a69690`).
 
 ### Key Attack Surfaces
 
@@ -181,7 +181,7 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 
 - **Reserved-deposit sweep exclusion split across two components** &nbsp;[I-3](invariants.md#i-3), [X-1](invariants.md#x-1), [E-4](invariants.md#e-4) - the generator pre-filters (`pkg/tbtcpg/deposit_sweep.go:268-275`) and the follower hard-rejects (`pkg/tbtc/deposit_sweep.go:620`) via `chain.IsReservedDeposit`; worth confirming both read the same on-chain source and no third sweep path bypasses the check.
 
-- **Registration-block memoization bounded lookups** &nbsp;[X-8](invariants.md#x-8) - `earliestWalletRegistrationBlock` failures now fail the wallet query instead of falling back to `startBlock = 0` (`pkg/chain/ethereum/tbtc.go:1390-1488`, `4ca44edad`); one unreadable reservation no longer aborts the whole wallet lookup. Worth checking the failure mode stays bounded.
+- **Registration-block memoization bounded lookups** &nbsp;[X-8](invariants.md#x-8) - `earliestWalletRegistrationBlock` failures now fail the wallet query instead of falling back to `startBlock = 0` (`pkg/chain/ethereum/tbtc.go:1390-1488`, `a29a69690`); one unreadable reservation no longer aborts the whole wallet lookup. Worth checking the failure mode stays bounded.
 
 - **Re-anchor request once-per-pass discipline** &nbsp;[I-8](invariants.md#i-8) - the post-submit failure sentinel (`pkg/tbtcpg/reservation_reanchor.go:504`) terminates the pass after the single `RequestReservationReanchor` submit.
 
@@ -195,11 +195,11 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 
 - **Empty activation-block table** - `reservationsActivationBlocks` (`pkg/tbtc/coordination.go:94`) is empty at this head; every non-Developer network returns `math.MaxUint64` (feature off). Worth confirming a real block is chosen before any public-network rollout.
 
-- **Dual CLI opt-in flags + out-of-band deploy check** - `Tbtc.ReservationsEnabled` (`pkg/tbtc/tbtc.go`) and `Spv.ReservationProofsEnabled` must both be set; mispairing warns in-process (`cmd/start.go:235-241`, `reservation_wiring.go` self-check) and is now additionally cross-checked by `scripts/check-reservation-flags.sh` at deploy time (`7c8269d6a`).
+- **Dual CLI opt-in flags + out-of-band deploy check** - `Tbtc.ReservationsEnabled` (`pkg/tbtc/tbtc.go`) and `Spv.ReservationProofsEnabled` must both be set; mispairing warns in-process (`cmd/start.go:235-241`, `reservation_wiring.go` self-check) and is now additionally cross-checked by `scripts/check-reservation-flags.sh` at deploy time (`bc9bb78fe`).
 
-- **pprof removed from the metrics server** - the `EnablePprof` setting and `/debug/pprof/*` registration are gone (`pkg/clientinfo/clientinfo.go`, `38f8673e4`); the metrics port serves `/metrics` only. The old surface that let an exposed clientinfo port leak runtime profiles is closed.
+- **pprof removed from the metrics server** - the `EnablePprof` setting and `/debug/pprof/*` registration are gone (`pkg/clientinfo/clientinfo.go`, `d8dacd993`); the metrics port serves `/metrics` only. The old surface that let an exposed clientinfo port leak runtime profiles is closed.
 
-- **Gas margin math** - `ethereum.go` `GasEstimateWithMargin` now uses ceiling integer math (`(estimate*20+99)/100`, `4c9ace3ad`), but `tbtc.go` still carries 8 inline `float64(gasEstimate) * 1.2` sites (around L849/902/953/981/1006/1031/1170/1212) that were not migrated to the shared helper. Worth confirming the two margin implementations agree.
+- **Gas margin math** - `ethereum.go` `GasEstimateWithMargin` now uses ceiling integer math (`(estimate*20+99)/100`, `cf9c78db2`), but `tbtc.go` still carries 8 inline `float64(gasEstimate) * 1.2` sites (around L849/902/953/981/1006/1031/1170/1212) that were not migrated to the shared helper. Worth confirming the two margin implementations agree.
 
 ### Protocol-Type Concerns
 
@@ -234,11 +234,11 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 > **Ethereum RPC** - via `pkg/chain/ethereum` TbtcChain views, `eth_getLogs`, gas estimates, `GetLatestBlockTimestamp`
 > - Assumes: views reflect current state; provider supports 10,000-block log chunks; head timestamp is the latest header time
 > - Validates: active health probe; ABI enum range checks; 20% gas margin (ceiling integer math in `GasEstimateWithMargin`, inline float math in `tbtc.go`)
-> - On failure: a lagging head defers watcher notifications (fail-safe direction); unreadable head disables eviction for the pass; registration-block lookup failure fails the wallet query (`4ca44edad`)
+> - On failure: a lagging head defers watcher notifications (fail-safe direction); unreadable head disables eviction for the pass; registration-block lookup failure fails the wallet query (`a29a69690`)
 
 > **libp2p peer messages** - via `pkg/tbtc/marshaling.go` unmarshalers and `pkg/tecdsa/{dkg,signing}`, `pkg/beacon/dkg`
 > - Assumes: proposal/ephemeral-key/key-share bytes are well-formed
-> - Validates: strict fee/nonce/key/PKH bounds (`marshaling.go:505-645`); compressed-point parse for every ephemeral key map entry (`eb8c3d39f`); bn256 private-key-share range `[1, order)` (`bc1a0aa10`); membership + leader-identity checks (`coordination.go:880,898`)
+> - Validates: strict fee/nonce/key/PKH bounds (`marshaling.go:505-645`); compressed-point parse for every ephemeral key map entry (`c5688f92c`); bn256 private-key-share range `[1, order)` (`f25747bc7`); membership + leader-identity checks (`coordination.go:880,898`)
 > - On failure: message rejected, sender marked inactive, or fault attributed
 
 > **tbtc-v2 contracts (ABI)** - via generated bindings + vendored fallback JSON
@@ -277,7 +277,7 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 | Godoc (NatSpec analog) | Adequate-Thorough | Self-containment passes committed in the epic; per-file breadcrumbs; fix commits carry G/L finding IDs in comments (`G2-L11`, `G1-S4` style) |
 | Spec/Whitepaper | Present (separate branch) | `docs/spec/reservations/**` on `origin/docs/reservations-spec`, not merged into this head; spec-derived claims tagged `(per spec)` |
 | Inline Comments | Adequate | Notable gap unchanged: `TODO(test-coverage)` at `pkg/chain/ethereum/tbtc.go:477` - `ValidateReservationAnchorProposal` has no direct unit test |
-| Docs changed in fixes | `docs/profiling.md` deleted | pprof removal commit `38f8673e4` deletes the profiling doc alongside the endpoint |
+| Docs changed in fixes | `docs/profiling.md` deleted | pprof removal commit `d8dacd993` deletes the profiling doc alongside the endpoint |
 
 ---
 
@@ -312,7 +312,7 @@ The code signs and proves movement of custodied BTC value (bridge + custody prof
 
 ## 6. Developer & Git History
 
-> Repo shape: normal_dev - 144 commits in `origin/dev..9f99f364a` touch the 73 in-scope files; 5 unique authors. The fix-epic slice `49c4df13d..9f99f364a` is 214 commits: 16 fix-epic commits + 3 merges by the epic author, and a 195-commit dev-merge tail from `origin/dev`.
+> Repo shape: normal_dev - 144 commits in `origin/dev..<merged head>` touch the 73 in-scope files; 5 unique authors. The fix-epic slice from `49c4df13d` to the merged head is 214 commits: 16 fix-epic commits + 3 merges by the epic author, and a 195-commit dev-merge tail from `origin/dev`.
 
 ### Contributors
 
@@ -347,20 +347,20 @@ Single-developer concentration persists: one author's name variants account for 
 
 | SHA | Subject | Signal |
 |-----|---------|--------|
-| `ad0575e0e` | judge reservation deadlines on chain time | I-11 (old) closed; G2-L11/G2-L13 |
-| `768707517` | use chain time for tbtcpg reservation deadlines | G1-S4; head read once per pass, pass fails on read failure |
-| `146e3206d` | harden reservation watchers and proof loops | G2-L10 abandon, G2-F16/F17/F18/F19, bounded per-tick reads |
-| `7944269c6` | alert on reservation actions past their deadline | new Warn + `spv_reservation_action_overdue_total` metric |
-| `4ca44edad` | keep reservation lookups bounded and per-key on read errors | X-8 fix: registration lookup failure fails the pass |
-| `30dac8c0f` | enforce a protocol fee minimum, re-anchor target age and bounded chain calls | I-9 target-age gate, follower hard-reject floor |
-| `fb520f1fe` | only re-anchor to wallets older than the creation period | target-age gate (I-9/E-3) |
-| `2a8c1085e` | expose chain head time and wallet parameters to bridge chain users | `GetLatestBlockTimestamp` + `GetWalletParameters` |
-| `bc1a0aa10` | reject out-of-range private key shares on unmarshal | beacon DKG hardening |
-| `4c9ace3ad` | apply the gas estimate margin with ceiling integer math | `GasEstimateWithMargin` (float sites in `tbtc.go` remain) |
-| `bd3e7c53a` | isolate released broadcast sessions from later channels | session-scoped channel lists |
-| `38f8673e4` | remove pprof endpoints from the metrics server | attack surface removed |
-| `eb8c3d39f` | reject malformed ephemeral public keys at unmarshal | tecdsa DKG/signing hardening |
-| `7c8269d6a` | add a deploy check for the paired reservation flags | out-of-band config validation |
+| `a17044076` | judge reservation deadlines on chain time | I-11 (old) closed; G2-L11/G2-L13 |
+| `7c34c4e12` | use chain time for tbtcpg reservation deadlines | G1-S4; head read once per pass, pass fails on read failure |
+| `41fb820a5` | harden reservation watchers and proof loops | G2-L10 abandon, G2-F16/F17/F18/F19, bounded per-tick reads |
+| `dd6c32ea4` | alert on reservation actions past their deadline | new Warn + `spv_reservation_action_overdue_total` metric |
+| `a29a69690` | keep reservation lookups bounded and per-key on read errors | X-8 fix: registration lookup failure fails the pass |
+| `a83ba04ef` | enforce a protocol fee minimum, re-anchor target age and bounded chain calls | I-9 target-age gate, follower hard-reject floor |
+| `5a7b125fd` | only re-anchor to wallets older than the creation period | target-age gate (I-9/E-3) |
+| `d59e38fd4` | expose chain head time and wallet parameters to bridge chain users | `GetLatestBlockTimestamp` + `GetWalletParameters` |
+| `f25747bc7` | reject out-of-range private key shares on unmarshal | beacon DKG hardening |
+| `cf9c78db2` | apply the gas estimate margin with ceiling integer math | `GasEstimateWithMargin` (float sites in `tbtc.go` remain) |
+| `6cf4251e9` | isolate released broadcast sessions from later channels | session-scoped channel lists |
+| `d8dacd993` | remove pprof endpoints from the metrics server | attack surface removed |
+| `c5688f92c` | reject malformed ephemeral public keys at unmarshal | tecdsa DKG/signing hardening |
+| `bc9bb78fe` | add a deploy check for the paired reservation flags | out-of-band config validation |
 
 ### Dangerous Area Evolution
 
@@ -382,7 +382,7 @@ Unchanged from the first run: tss-lib fork, in-tree btcec copy, keep-network/go-
 
 ### Cross-Reference Synthesis
 
-- **The chain-time re-pointing is the dominant new structural fact**: 6 fix commits (`ad0575e0e`, `768707517`, `146e3206d`, `2a8c1085e`, `fb520f1fe`, `30dac8c0f`) close the old I-11 across all reservation paths; the audit delta file tracks each.
+- **The chain-time re-pointing is the dominant new structural fact**: 6 fix commits (`a17044076`, `7c34c4e12`, `41fb820a5`, `d59e38fd4`, `5a7b125fd`, `a83ba04ef`) close the old I-11 across all reservation paths; the audit delta file tracks each.
 - **`proof_submission` churn now maps to bounded/abandon logic** (`reservationActionAbandoned`, reanchor backoff, wallet-tx cache eviction) rather than wall-clock gates.
 - **Marshaling hardening tracks I-15** - the out-of-range key/share rejections landed in the same files the first audit flagged as the fuzz gap; the gap narrowed (2 fuzz targets exist) but the reservation unmarshalers remain uncovered.
 - **Activation-block churn still settles on X-6** - `ReservationsActivationBlock` remains the single leader/follower source of truth; the table is still empty at this head.

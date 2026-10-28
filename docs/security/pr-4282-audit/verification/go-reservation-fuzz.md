@@ -1,8 +1,8 @@
 # Go reservation fuzz targets
 
-- Branch: a fuzz-tooling branch (from the reservation review branch @ `fe73e9799`)
-- Head: `9162e0c76`. Tests are in `59d15a614`; `9162e0c76` adds the developer run instructions.
-- Worktree: `<checkout>` (removed 2026-10-15; recreate with `git worktree add <path> a fuzz-tooling branch`)
+- Branch: a fuzz-tooling branch (from the reservation review branch @ `58bb4c694`)
+- Head: the last fuzz-tooling commit. It adds the developer run instructions; the tests are in the earlier fuzz-tooling commits.
+- Worktree: `<checkout>` (removed 2026-10-15; recreate with `git worktree add <path> <tooling branch>`)
 - New files: `pkg/tbtc/reservation_fuzz_test.go`, `pkg/tbtcpg/reservation_fuzz_test.go`, `pkg/maintainer/spv/reservation_fuzz_test.go`
 
 No production source changed. Seed inputs are checked in through `f.Add`.

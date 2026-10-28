@@ -61,7 +61,7 @@ The human approved all four items. They do not change production logic.
 
 ### Solidity coverage
 
-Branch: tbtc-v2, a coverage-tooling branch, based on `29e84a35c`.
+Branch: tbtc-v2, coverage-tooling branch, based on `d20cf74ba`.
 Tool: `solidity-coverage` 0.8.17. The coverage script selects Prague and
 permits instrumented oversized contracts; normal tests retain deployment limits.
 
@@ -82,7 +82,7 @@ See link: [coverage report](../../security/pr-4282-audit/verification/solidity-c
 
 ### Native Go fuzzing
 
-Branch: keep-core, a fuzz-tooling branch, based on `fe73e9799`.
+Branch: keep-core, fuzz-tooling branch, based on `58bb4c694`.
 Ten native `testing.F` targets check wire round trips, transaction matching,
 fees, feasibility, and re-anchor headroom. Each ran for at least 60 seconds.
 The retained logs show 1,723,870 executions and no invariant violations.
@@ -112,8 +112,8 @@ See link: [mutation report](../../security/pr-4282-audit/verification/mutation-p
 
 ### Reservation state-machine invariants
 
-Branch: tbtc-v2, a fuzz-tooling branch, commit `4d9136877`, based on
-`29e84a35c`. One handler drives the real `Reservation` and
+Branch: tbtc-v2, fuzz-tooling branch, based on
+`d20cf74ba`. One handler drives the real `Reservation` and
 `ReservationProofs` code, run by both forge invariant tests and Medusa.
 Nine properties check active count, total amount, per-wallet counters,
 third-party holds, pending deposits, the anchor index, final action
@@ -136,17 +136,17 @@ See link: [invariant suite report](../../security/pr-4282-audit/verification/med
 
 | Item | Result |
 |---|---|
-| Vault partial-repayment test | tbtc-v2 `46b136039`. Fails against the `%=` mutant, passes on real code (49 passing). |
-| Acceptance matcher boundary tests | keep-core `70cd22942`. Zero-fee and exact-`TxMaxFee` subtests each fail against their mutant and pass on real code. |
-| `Bridge.Parameters` fixture | tbtc-v2 `6798e8eae`. 95 passing, 0 failing. |
-| Hand-off liveness property | tbtc-v2 `6d32ed45c`. Medusa-only, expected to fail. Three Foundry tests show it agrees with the real re-anchor code. |
+| Vault partial-repayment test | tbtc-v2 `d9abace82`. Fails against the `%=` mutant, passes on real code (49 passing). |
+| Acceptance matcher boundary tests | keep-core, the reservation review branch. Zero-fee and exact-`TxMaxFee` subtests each fail against their mutant and pass on real code. |
+| `Bridge.Parameters` fixture | tbtc-v2 `b4d9fe8aa`. 95 passing, 0 failing. |
+| Hand-off liveness property | tbtc-v2, the fuzz-tooling branch. Medusa-only, expected to fail. Three Foundry tests show it agrees with the real re-anchor code. |
 | CI adoption plan | link: [plan](../../security/pr-4282-audit/verification/ci-adoption-plan.md). Needs four decisions from the human. |
 
 ### New finding from the liveness property
 
 A position whose anchor is at most `reservationMinAmount + reservationTxMaxFee` passes acceptance but fails the re-anchor amount floor, so it can never be handed off. Deposits at or near the minimum produce such positions. If the custodian retires, the position has no exit until the wallet closes or is terminated, or the closing wallet's dissolution date passes; then stranding turns it into a pooled claim. Medusa found this in 4 calls. It was introduced by the reservations PR, and a fix needs a design choice. Details: link: [invariant suite report](../../security/pr-4282-audit/verification/medusa-reservations.md).
 
-Fixed (human decision: raise the acceptance floor). Acceptance now requires `deposit.amount > minAmount + 2 * txMaxFee`, so every new position can make its first hand-off. Contract `ffd9a62db` and SDK `0d5bfcaf1` on tbtc-v2, the integrated reservation branch; spec on keep-core branch `docs/reservations-spec-acceptance-floor` `29981e97f`. Each code change has a test that failed before it. After the fix, Medusa's shortest liveness failure is the capacity case; a second hand-off can still be blocked after two full-fee hops.
+Fixed (human decision: raise the acceptance floor). Acceptance now requires `deposit.amount > minAmount + 2 * txMaxFee`, so every new position can make its first hand-off. Contract `d4397f208` and SDK `dc5c2ed71` on tbtc-v2, the integrated reservation branch; spec in the reservation specification work (keep-core). Each code change has a test that failed before it. After the fix, Medusa's shortest liveness failure is the capacity case; a second hand-off can still be blocked after two full-fee hops.
 
 Raw `.log` files are committed under `docs/` with a `.log.txt` suffix,
 because `docs/.gitignore` ignores `*.log`.

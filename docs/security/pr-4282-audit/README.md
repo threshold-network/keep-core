@@ -2,7 +2,7 @@
 
 Repo: `threshold-network/keep-core`, branch `reservations-epic` (PR #4282). The audit describes the epic
 head `49c4df13d`; the re-audit in `rerun/` describes the epic with the audit fixes applied and merged with
-`dev` (`9f99f364a`). At audit time the PR was 128 commits ahead of and 187 behind `dev` and conflicting,
+`dev` (the merged fix head; its fixes are in the published head `f03cc61dc`). At audit time the PR was 128 commits ahead of and 187 behind `dev` and conflicting,
 so every result here describes the epic branch, not a merged result. Merge-base with `dev`: `a7ac8989`;
 the PR diff is `git diff a7ac8989 49c4df13d`. The PR changes no Solidity contract logic; its real change
 is the Go UTXO-reservation client.

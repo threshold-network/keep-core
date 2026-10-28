@@ -1,10 +1,10 @@
 # Entry Point Map
 
-> keep-core (PR #4282 UTXO Reservations Epic, merged head `9f99f364a`) | 54 entry points | 21 permissionless | 24 role-gated | 9 admin-only
+> keep-core (PR #4282 UTXO Reservations Epic, merged head) | 54 entry points | 21 permissionless | 24 role-gated | 9 admin-only
 >
-> Phase C delta vs the first run: `clientinfo.registerPprofHandlers()` REMOVED (commit `38f8673e4` deletes the pprof wiring and the `EnablePprof` setting; the metrics server serves `/metrics` only). `ethereum.TbtcChain.GetLatestBlockTimestamp()` ADDED (commit `2a8c1085e`/`146e3206d`; the chain head time accessor every reservation deadline gate now reads). No other entry point was added or removed by the fixes or by dev.
+> Phase C delta vs the first run: `clientinfo.registerPprofHandlers()` REMOVED (commit `d8dacd993` deletes the pprof wiring and the `EnablePprof` setting; the metrics server serves `/metrics` only). `ethereum.TbtcChain.GetLatestBlockTimestamp()` ADDED (commit `d59e38fd4`/`41fb820a5`; the chain head time accessor every reservation deadline gate now reads). No other entry point was added or removed by the fixes or by dev.
 
-Line numbers are from the frozen worktree at `9f99f364a`.
+Line numbers are from the frozen worktree at the merged fix head.
 
 ---
 
@@ -108,7 +108,7 @@ Entry points callable by any party, triggered by permissionless on-chain events,
 | Caller | Ticker loop at the stale-depoll interval (1 min), spawned by `WireReservationWatchers` |
 | Parameters | `ctx context.Context` `(operator-config)` |
 | Call chain | `→ pollTick(now) → trackRevealedDeposits() → CheckStaleReservedDeposit() → spvChain.NotifyStaleReservedDeposit()` |
-| State modified | `pending[depositKey]`, `attempted[depositKey]`, `notifiedAt[depositKey]`, `lastSeenBlock`, `checkCursor` (bounded per-tick rotation, NEW in `146e3206d`) |
+| State modified | `pending[depositKey]`, `attempted[depositKey]`, `notifiedAt[depositKey]`, `lastSeenBlock`, `checkCursor` (bounded per-tick rotation, NEW in `41fb820a5`) |
 | Value flow | On-chain tx: `ReservationRouter.notifyStaleReservedDeposit` |
 | Concurrency guard | Dedicated single goroutine; panic recovery in wiring wrapper: Yes |
 | Phase C delta | The refund-deadline gate inside `CheckStaleReservedDeposit` now judges on chain head time (`reservation_stale_deposit_watch.go:272-281`); the node clock (`now`) is only the backoff token |
@@ -246,7 +246,7 @@ Entry points callable by any party, triggered by permissionless on-chain events,
 | State modified | `walletRegistrationBlockCache` (`sync.Map`) |
 | Value flow | None |
 | Concurrency guard | `sync.Map` cache: Yes |
-| Phase C delta | Failed registration lookups now fail the query instead of falling back to a genesis scan; one unreadable reservation no longer aborts the rest (`4ca44edad`) |
+| Phase C delta | Failed registration lookups now fail the query instead of falling back to a genesis scan; one unreadable reservation no longer aborts the rest (`a29a69690`) |
 
 ### `ethereum.TbtcChain.WalletTerminationCause()`
 
@@ -331,7 +331,7 @@ Entry points callable by any party, triggered by permissionless on-chain events,
 | State modified | None (reads atomic gauges and counters) |
 | Value flow | None |
 | Concurrency guard | `sync.RWMutex` protected metric maps: Yes |
-| Phase C delta | pprof REMOVED: the `EnablePprof` setting and `registerPprofHandlers()` no longer exist (`38f8673e4`); the metrics server serves `/metrics` only, and a regression test pins that `/debug/pprof` is not served |
+| Phase C delta | pprof REMOVED: the `EnablePprof` setting and `registerPprofHandlers()` no longer exist (`d8dacd993`); the metrics server serves `/metrics` only, and a regression test pins that `/debug/pprof` is not served |
 
 ### `crypto.UnmarshalPublicKey()`
 
@@ -340,7 +340,7 @@ Entry points callable by any party, triggered by permissionless on-chain events,
 | Visibility / Invocation | `pkg/crypto/ephemeral/private_key.go`-area, exported key point parser |
 | Caller | `tecdsa.generateSymmetricKeys` (`pkg/tecdsa/dkg/protocol.go`, `pkg/tecdsa/signing/protocol.go`) and the ephemeral key map unmarshalers |
 | Parameters | `data []byte` `(peer-provided)` |
-| Call chain | `→ btcec.ParsePubKey()` - the DKG/signing unmarshalers now validate every ephemeral key map entry as a 33-byte compressed secp256k1 point on the ECDH curve; one malformed entry fails the whole message (`eb8c3d39f`) |
+| Call chain | `→ btcec.ParsePubKey()` - the DKG/signing unmarshalers now validate every ephemeral key map entry as a 33-byte compressed secp256k1 point on the ECDH curve; one malformed entry fails the whole message (`c5688f92c`) |
 | State modified | None |
 | Value flow | None |
 | Concurrency guard | Stateless; invalid point errors wrap to `ErrInvalidPublicKey` (member marked inactive): Yes |
@@ -392,7 +392,7 @@ Entry points restricted by smart contract roles (`onlySpvMaintainer`), wallet th
 | `tbtc.ValidateDepositSweepProposal` | `pkg/tbtc/deposit_sweep.go:382` | `depositSweepAction.execute` | `(peer-provided)` | `→ ReservationParameters() → IsReservedDeposit() → chain.ValidateDepositSweepProposal() → rejectIfProposedWalletTxFeeBelowProtocolMin() (705)` | None | None |
 | `ethereum.TbtcChain.ValidateReservationAnchorProposal` | `pkg/chain/ethereum/tbtc.go:491` | anchor execute, acceptance generator | `(group-derived)`, `(peer-provided)` | `→ tc.walletProposalValidator.ValidateReservationAnchorProposal()` | None | On-chain view |
 | `ethereum.TbtcChain.ValidateReservationReanchorProposal` | `pkg/chain/ethereum/tbtc.go:582` | reanchor execute, reanchor generator | `(group-derived)`, `(peer-provided)` | `→ tc.walletProposalValidator.ValidateReservationReanchorProposal()` | None | On-chain view |
-| `tecdsa.dkg.generateSymmetricKeys` | `pkg/tecdsa/dkg/protocol.go:61` | tECDSA DKG round | `(peer-provided)` | `→ ephemeral key map unmarshaler (out-of-range point rejection, eb8c3d39f) → ecdh()` | `symmetricKeys` | None |
+| `tecdsa.dkg.generateSymmetricKeys` | `pkg/tecdsa/dkg/protocol.go:61` | tECDSA DKG round | `(peer-provided)` | `→ ephemeral key map unmarshaler (out-of-range point rejection, c5688f92c) → ecdh()` | `symmetricKeys` | None |
 | `tecdsa.signing.generateSymmetricKeys` | `pkg/tecdsa/signing/protocol.go:61` | tECDSA signing round | `(peer-provided)` | same pattern | `symmetricKeys` | None |
 
 ### Bitcoin Difficulty Maintainer (Authorized Submitter)
@@ -435,8 +435,8 @@ Entry points restricted to the node operator CLI, process configuration, and loc
 |---|---|---|---|
 | `--tbtc.walletTxSatPerVByteFloor` | `5 sat/vByte` | Integer >= 0; a non-zero floor below `ProtocolMinWalletTxSatPerVByteFee` (5) hard-fails startup (`pkg/tbtc/tbtc.go:211`) | Minimum fee rate for wallet Bitcoin txs; sets the leader floor and the follower warn threshold |
 | `--tbtc.walletTxFeeBufferPercent` | `25%` | Integer >= 0 | Percentage buffer over the raw estimate |
-| `--tbtc.reservationsEnabled` / `--maintainer.spv.reservationProofsEnabled` | `false` / `false` | Both must be set; mispairing warns in-process and now fails the out-of-band deploy check `scripts/check-reservation-flags.sh` (`7c8269d6a`) | The dual opt-in gate for the whole reservation feature |
+| `--tbtc.reservationsEnabled` / `--maintainer.spv.reservationProofsEnabled` | `false` / `false` | Both must be set; mispairing warns in-process and now fails the out-of-band deploy check `scripts/check-reservation-flags.sh` (`bc9bb78fe`) | The dual opt-in gate for the whole reservation feature |
 | `--tbtc.transactionMonitor.*` | as in first run | unchanged | Stuck-tx monitoring (node-clock based alerts) |
 | `--spv.maxProofHeaders` | `144` | Integer > 0 (0 normalizes to 144) | Bounds consecutive DIFF1 header absorption in SPV proofs |
 | `--spv.historyDepth`, `--spv.transactionLimit`, `--spv.restartBackoffTime`, `--spv.idleBackoffTime` | unchanged | > 0 (validated at startup, `pkg/maintainer/spv/config.go:124-152`) | Maintainer loop tuning |
-| `clientinfo.EnablePprof` | REMOVED | The setting and `/debug/pprof/*` endpoints were deleted (`38f8673e4`); `docs/profiling.md` deleted with them | No more runtime profiling surface on the metrics port |
+| `clientinfo.EnablePprof` | REMOVED | The setting and `/debug/pprof/*` endpoints were deleted (`d8dacd993`); `docs/profiling.md` deleted with them | No more runtime profiling surface on the metrics port |

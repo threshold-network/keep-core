@@ -44,13 +44,13 @@ Mainnet fork at the pinned block, with `liveWalletsCount` read from the fork. Se
 
 ## Order
 
-1. tbtc-v2 contracts, tests, scripts (surfaces 1-9), branch a handoff-capacity branch from the integrated reservation branch. keep-core logic (surface 10), branch a handoff-capacity branch from the reservation review branch. These two run in parallel.
+1. tbtc-v2 contracts, tests, scripts (surfaces 1-9), cut a handoff-capacity branch from the integrated reservation branch. keep-core logic (surface 10), cut a handoff-capacity branch from the reservation review branch. These two run in parallel.
 2. keep-core ABI and harness sync (11). Fork rehearsal (14). Merge into the Sepolia rehearsal branch and re-run the Sepolia rehearsal.
 3. Spec and docs (12, 13).
 
 ## Integration constraints
 
-- Preserve the completed release-to-pool and SDK features in the integrated reservation branch at `df481bfde`.
+- Preserve the completed release-to-pool and SDK features of the integrated reservation line (both are in the published reservation upgrade line).
 - The orchestrator re-ran regressions against immutable baseline `9d2086965`: 9 behavioral failures and 3 unchanged controls. The patched run passed all 12.
 - The two gate tests now target a wallet with available per-wallet capacity. Their baseline failure is an accepted transaction, not an unrelated cap revert.
 - The client fallback red check already ran against the actual pre-fix Go production file and passed after the fix.

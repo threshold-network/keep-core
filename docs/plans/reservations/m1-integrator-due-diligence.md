@@ -2,7 +2,7 @@
 
 Written 2026-10-12 for a third party with no prior knowledge of tBTC who wants to integrate reservations.
 - Contracts read: tbtc-v2 the integrated reservation branch @ `9d208696`.
-- Client read: keep-core the drill-fix branch @ `c102f4b85`.
+- Client read: keep-core `f99ef96e3` (the drill build).
 - Companion: `m1-guide.md` explains how M1 works.
 
 `[INFERENCE]` marks claims that are reasoned, not read in code.

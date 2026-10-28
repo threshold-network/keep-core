@@ -7,7 +7,7 @@ Actor legend: `governance` = Bridge owner (BridgeGovernance, a contract on Sepol
 `keeper` = the independent unstaked maintainer running keep-core plus the monitoring receiver,
 `thirdParty` = an outside EOA that is not owner, maintainer or member, `anyone` = permissionless.
 
-Sepolia sizing used throughout (tbtc-v2 `6237b2741`, `scripts/reservations-sepolia-rehearsal.ts`):
+Sepolia sizing used throughout (tbtc-v2 at the reconciled contracts, `scripts/reservations-sepolia-rehearsal.ts`):
 `maxActiveReservations` 2, `maxReservationsPerWallet` 1, `maxReservationsAmountPerWallet`
 2,000,000 sat, `reservationMaxSingleAmount` 2,000,000 sat, `reservationMaxTotalAmount`
 4,000,000 sat, `maxThirdPartyReanchorHoldsPerWallet` 1, `handoffReserveWallets` 2,
