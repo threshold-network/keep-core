@@ -21,9 +21,9 @@
 #                  re-checks re-anchor target caps).
 #                  Built with `yarn install && yarn build` in tbtc-v2's
 #                  solidity/ directory and checked locally with verify.sh.
-#                  TBTC_V2_REF in .github/workflows/client.yml still names
-#                  the earlier commit eec999aa, so that job fails on this
-#                  file until the pin is moved to the same commit.
+#                  The compiled validator is unchanged at tbtc-v2
+#                  947bf51fd520c34f6661d9c6b7ceb5d8a3212f75, the commit
+#                  TBTC_V2_REF in .github/workflows/client.yml names.
 #   Re-run this script against a newer tbtc-v2 build whenever the
 #   validator changes, bump TBTC_V2_REF to the same commit, and update
 #   this note.
