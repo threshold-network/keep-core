@@ -15,15 +15,15 @@
 #
 # Provenance of the currently vendored WalletProposalValidator.json:
 #   commit:        09a6651b66a1a90e482b7ba2c54f163d20c96327
-#                  (tlabs-xyz/tbtc-v2-security, reservations-handoff-capacity:
-#                  release to pool plus the hand-off capacity change; the
-#                  validator no longer re-checks re-anchor target caps).
+#                  (threshold-network/tbtc-v2, reached from the
+#                  reservations-upgrade branch: release to pool plus the
+#                  hand-off capacity change; the validator no longer
+#                  re-checks re-anchor target caps).
 #                  Built with `yarn install && yarn build` in tbtc-v2's
 #                  solidity/ directory and checked locally with verify.sh.
 #                  TBTC_V2_REF in .github/workflows/client.yml still names
-#                  the public commit eec999aa: that job cannot fetch this
-#                  private commit, so it fails on this file until the source
-#                  is public and the pin is moved to the same commit.
+#                  the earlier commit eec999aa, so that job fails on this
+#                  file until the pin is moved to the same commit.
 #   Re-run this script against a newer tbtc-v2 build whenever the
 #   validator changes, bump TBTC_V2_REF to the same commit, and update
 #   this note.
