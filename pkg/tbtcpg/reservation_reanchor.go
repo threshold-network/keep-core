@@ -794,6 +794,17 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 	// the fee, so it must apply the floor to them too. Without it the
 	// proposal path burns a round and gas on a request the contract
 	// rejects.
+	// The anchor value is read as int64 by the chain adapter and can only
+	// be a Bitcoin amount, so it is nonnegative. The check above already
+	// rejects the zero value; reject a negative one too, so the int64 to
+	// uint64 conversion below cannot wrap a negative amount into a huge
+	// positive one that would pass the floor.
+	if reservation.AnchorUtxo.Value < 0 {
+		return nil, fmt.Errorf(
+			"reservation [0x%x] has a negative anchor value",
+			reservationKey,
+		)
+	}
 	anchorValue := uint64(reservation.AnchorUtxo.Value)
 	if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
 		return nil, fmt.Errorf(
