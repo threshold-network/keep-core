@@ -195,3 +195,36 @@ func TestA6_LiveWalletDoesNotStrandReservationBeforeDissolutionEligible(t *testi
 		t.Fatalf("expected no notifications, got %d", len(calls))
 	}
 }
+
+// TestA6_MovingFundsWalletIsNotChecked pins that a wallet in a state the
+// Bridge does not accept is left alone: MovingFunds is not one of the four
+// admissible states in notifyReservationStranded, so the client must not
+// even read its reservations.
+//
+// It fails without the fix if the dispatcher starts checking a state the
+// Bridge would reject.
+func TestA6_MovingFundsWalletIsNotChecked(t *testing.T) {
+	lc := newLocalChain()
+	wallet := walletPKHAt(0x08)
+	key := reservationKey(0xA608)
+
+	a6InstallWallet(lc, wallet, tbtc.StateMovingFunds, time.Unix(0, 0))
+	a6InstallReservation(lc, wallet, key, 0)
+
+	watcher := newReservationStrandingWatcher(lc)
+	checked, _, err := watcher.checkStrandingForWalletState(
+		wallet,
+		tbtc.StateMovingFunds,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if checked {
+		t.Error("expected the MovingFunds state to not be checked")
+	}
+
+	calls := lc.getSubmittedReservationStrandedKeys()
+	if len(calls) != 0 {
+		t.Fatalf("expected no notifications, got %d", len(calls))
+	}
+}
