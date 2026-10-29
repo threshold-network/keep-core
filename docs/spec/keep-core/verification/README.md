@@ -71,9 +71,10 @@ step "Keep-core registry check (KC- set)").
 
 - Update the owning entry when a guard, a checker or a contract function
   named in it changes. Line numbers in a `Checkers` field are the numbers in
-  this repository at `f03cc61dc` (the keep-core pin the reservations set cites
-  as the published code); re-check them with `git grep -n` before citing a
-  different revision.
+  this repository at `4ced1c839` (the keep-core pin the reservations set cites
+  as the freeze code); no file this set names changed between `f03cc61dc` and
+  `4ced1c839`, so no line moved in that range. Re-check them with
+  `git grep -n` before citing a different revision.
 - Before each commit, run the check above from the repository root, and
   `python3 -m unittest test_smoke test_traceability` from
   `docs/spec/reservations/verification/tools` with `markdown-it-py` installed
