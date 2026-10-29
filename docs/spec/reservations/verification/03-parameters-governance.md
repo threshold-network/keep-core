@@ -401,9 +401,14 @@ formula, not a recorded run).
 
 ### Mainnet fork dry-run
 Source: `tbtc-v2@52f4f3005:solidity/docs/RESERVATION_SEPOLIA_DEPLOYMENT.md`
-pre-flight step 1 (the the local mainnet-fork run values). These are
-mainnet's live values: mainnet's 150-day reveal-ahead period forces a 150-day
-term.
+pre-flight step 1 (the local mainnet-fork run values). They are dry-run inputs,
+not live values: no reservation parameter is set on mainnet yet, since the
+feature's mainnet ceremony has not run. The one live mainnet number they are
+fitted to is the deposit reveal-ahead period, 150 days
+(`tbtc-v2@52f4f3005:solidity/deploy/14_set_deposit_parameters.ts:13-14`),
+which puts a floor on any feasible term (PAR-X3). The recorded launch decision
+is a 365-day term and a 365-day dissolution delay (`roadmap.md:408-409`;
+`requirements.md` §9), so this table is not a record of the launch values.
 
 | Parameter | Mainnet fork dry-run value |
 |---|---|
@@ -420,12 +425,12 @@ term.
 | `reservationActionTimeout` | 86,400 |
 | `reservationRenewalWindowSeconds` | 86,400 |
 
-Rule checks (against mainnet live dust and 150d reveal-ahead):
+Rule checks (against the live dust threshold and the 150-day reveal-ahead period):
 
 | Rule | Eval | Pass |
 |---|---|---|
 | PAR-X2 `total <= maxActive * single` | 10,000,000 <= 5 * 2,000,000 = 10,000,000 | yes (exactly equal) |
-| PAR-X3 revealAhead (150d = 12,960,000) <= term + 24h | 12,960,000 <= 12,960,000 + 86,400 = 13,046,400 | yes (hence the 150-day term is forced) |
+| PAR-X3 revealAhead (150d = 12,960,000) <= term + 24h | 12,960,000 <= 12,960,000 + 86,400 = 13,046,400 | yes (a 150-day term satisfies the bound; the launch decision is 365 days) |
 | PAR-X3 dust | single/perWallet 2,000,000 and total 10,000,000 all >= dust | yes |
 | PAR-X4 nominal headroom `5 < liveWalletsCount * 1` | Requires at least six Live wallets for this nominal inequality | Read the actual fork/live count; no exercised headroom assertion is claimed here |
 | PAR-X4 reserve gate at `806b1106f`, any R >= 1 | `(L - R) * 1 >= 5` needs `L >= R + 5` | R is an input to the calldata script (`tbtc-v2@806b1106f:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:506-508`); no mainnet R is recorded here. Check against the live count at ceremony time |
