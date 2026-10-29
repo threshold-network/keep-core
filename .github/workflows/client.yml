@@ -635,11 +635,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: go-build-env-image
-          path: /tmp
+          path: ${{ runner.temp }}
 
       - name: Load Docker Build Image
         run: |
-          docker load --input /tmp/go-build-env-image.tar
+          docker load --input ${{ runner.temp }}/go-build-env-image.tar
 
       # `-count=1` defeats the test cache: the race detector's result
       # must come from a run at this commit, not from a cached one.
