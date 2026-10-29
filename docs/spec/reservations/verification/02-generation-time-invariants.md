@@ -102,11 +102,11 @@ taken on 2026-10-29 and the code does not change.
     `block.timestamp >= dissolutionEligibleAt`; `Closing` once **both**
     `block.timestamp >= dissolutionEligibleAt` **and**
     `block.timestamp >= closingStartedAt + walletClosingPeriod`
-    (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1311-1322`).
+    (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1323-1334`).
     The closing-period half is an exclusive re-anchor window, not an extra
     delay on dissolution.
   - Late acceptance settlement is allowed iff
-    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
+    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
     equality allowed, `"Late acceptance settlement window expired"` at
     :210). Late re-anchor settlement carries no such bound.
   - Reveal caps the refund deadline: `refundDeadline <= now + term +
@@ -123,7 +123,7 @@ taken on 2026-10-29 and the code does not change.
   a `Closing` wallet additionally has to be past
   `closingStartedAt + walletClosingPeriod` (`:379-392`), so the client no longer
   sends the notification the contract would revert
-  (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1310-1322`).
+  (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1322-1334`).
   A wallet that fails either gate sets the `recheck` flag and is retried on a
   later pass. Before keep-core #4365 the `Closing` check read the
   dissolution-eligible time alone and logged the revert without setting the
@@ -133,16 +133,16 @@ taken on 2026-10-29 and the code does not change.
   refundDeadline (close bound exact)" (:405) and "should revert when
   timeoutAt + 24h == refundDeadline + 1s" (:433);
   `Bridge.ReservationStrandingLibrary.test.ts` "succeeds when reservation is
-  dissolution-eligible" (:1366); at `tbtc-v2@4c98e6b82`:
-  `tbtc-v2@4c98e6b82:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
+  dissolution-eligible" (:1366); at `tbtc-v2@d1bf5bc281`:
+  `tbtc-v2@d1bf5bc281:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
   (Closing rejected past dissolution eligibility while the closing period runs),
   `:263` and `:313` (stranding once both conditions hold, inclusive at the end
   of the closing period), `:386` and `:397` (a `Live` wallet before and after
   dissolution eligibility), and
-  `tbtc-v2@4c98e6b82:solidity/test/bridge/ReservationProofs.test.ts:446`
+  `tbtc-v2@d1bf5bc281:solidity/test/bridge/ReservationProofs.test.ts:446`
   (late acceptance one second past the window reverts), `:456`
   (`"Late acceptance settlement window expired"`).
-- **Status.** holds at `tbtc-v2@4c98e6b82` for the corrected windows. The
+- **Status.** holds at `tbtc-v2@d1bf5bc281` for the corrected windows. The
   `Closing` clause recorded before VF-10 named dissolution eligibility only and
   did not match the published code (VF-10).
 

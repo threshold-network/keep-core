@@ -813,7 +813,7 @@ sign-off; mechanics are fixed, numbers are not.
 | `reservationDissolutionDelay` | Post-expiry delay before dissolvable | 365 days (decided 2026-10-29) | Snapshotted per granted term |
 | `reservationMaxTotalAmount` | Global reserved-anchor cap | 100 BTC (10,000,000,000 sat) | Deliberately conservative; below the 10% fraction target at plausible launch backing |
 | `maxReservationsPerWallet` | Per-wallet reservation count cap | 10 | Binds fully only if the amount cap is disabled — with `reservationMinAmount`=10 BTC and `maxReservationsAmountPerWallet`=50 BTC the amount cap already limits a wallet to 5 positions (*pending #1093 verification of the amount cap*); still bounds re-anchor ceremonies per rotation window |
-| `reservationActionTimeout` | Timeout for acceptance/re-anchor/dissolution | 48 hours | Must be **> `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`** (2h + 2h + 1 s); the on-chain require is at `tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1625-1629` (see note below) |
+| `reservationActionTimeout` | Timeout for acceptance/re-anchor/dissolution | 48 hours | Must be **> `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`** (2h + 2h + 1 s); the on-chain require is at `tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1645-1649` (see note below) |
 | `reservationRenewalWindowSeconds` | Renewal window before expiry | 30 days | `0 < window < term`, enforced atomically |
 
 Acceptance timing note: the proposal validator requires the deposit be

@@ -206,7 +206,7 @@ Write-time guards:
 term within [90d, 730d]
 (`tbtc-v2:solidity/contracts/bridge/Reservation.sol:1383`),
 timeout above `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`
-(smallest accepted value 14,402 s; `tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1625-1629`), the
+(smallest accepted value 14,402 s; `tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1645-1649`), the
 feasibility guard on both setters and `updateDepositParameters` while
 a vault is set (`tbtc-v2:solidity/contracts/bridge/BridgeState.sol:681`),
 and the slot-capacity invariant

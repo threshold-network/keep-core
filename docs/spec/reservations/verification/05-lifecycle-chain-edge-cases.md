@@ -13,32 +13,32 @@ leaves a newly settled anchor unmanaged.
 
 Actual: after every acceptance or re-anchor settlement, the code strands
 the position when the custodying or target wallet is Closed or Terminated
-(`tbtc-v2@4c98e6b82:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
+(`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
 called at `:608` and `:772`); an on-time proof races a wallet leaving Live
 and strands the same way. A Closing target is deliberately **not** stranded:
 the wallet still has its signers, the owner keeps the re-anchor right that
 `requestReservationReanchor` grants from a Closing source, and stranding at
 settlement would have removed that right roughly a reservation term before
 `notifyReservationStranded` allows it
-(`tbtc-v2@4c98e6b82:solidity/contracts/bridge/ReservationProofs.sol:214-233`).
+(`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:214-233`).
 Permissionless stranding covers the remaining states: Terminated and Closed
 always, a Live wallet past `dissolutionEligibleAt`, and a Closing wallet past
 both `dissolutionEligibleAt` and the closing period
-(`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1311-1322`).
+(`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1323-1334`).
 Moving funds into a wallet still custodying a proven anchor routes it to
 MovingFunds instead of Closing
-(`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Wallets.sol:629-631`), and the
+(`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Wallets.sol:629-631`), and the
 wallet cannot finalize closing while its reserved reservation count is
-non-zero (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Wallets.sol:392-395`).
+non-zero (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Wallets.sol:392-395`).
 
-Test: `tbtc-v2@4c98e6b82:solidity/test/bridge/ReservationProofs.test.ts:1308`
+Test: `tbtc-v2@d1bf5bc281:solidity/test/bridge/ReservationProofs.test.ts:1308`
 (a Closed wallet strands on an on-time proof) and
-`tbtc-v2@4c98e6b82:solidity/test/bridge/ReservationProofs.test.ts:1434`
+`tbtc-v2@d1bf5bc281:solidity/test/bridge/ReservationProofs.test.ts:1434`
 ("should not strand on late settlement if wallet is Closing (3)");
-`tbtc-v2@4c98e6b82:solidity/test/bridge/Reservation.test.ts:2007` (a proven
+`tbtc-v2@d1bf5bc281:solidity/test/bridge/Reservation.test.ts:2105` (a proven
 anchor keeps the Live wallet in MovingFunds).
 
-Status: `holds` at `tbtc-v2@4c98e6b82` for the corrected rule; the Closing
+Status: `holds` at `tbtc-v2@d1bf5bc281` for the corrected rule; the Closing
 target and the Live/pending-only routing recorded before VF-10 and VF-11 do
 not match the published code.
 
@@ -282,7 +282,7 @@ deposits exist
 The fee-bearing settlement makes an uncaught
 `IReservationFeeFinancer(self.deposits[reservationKey].vault).financeInKindFee`
 call on the deposit's stored vault
-(`tbtc-v2@4c98e6b82:solidity/contracts/bridge/ReservationProofs.sol:785-787`),
+(`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:785-787`),
 so a non-conforming deposit vault makes settlement revert. This is scoped to
 governance miswiring: it arises only if governance wires a vault that does not
 implement `financeInKindFee`.
@@ -350,22 +350,22 @@ Approved hardening: the M1 release decision walk (item #2, 2026-10-12) approved
 validating the prepare JSON and binding it to the provider chain and Bridge.
 The guard is merged at the published pin `tbtc-v2@4c98e6b82`.
 `chainPreflight` refuses every transaction unless the provider chain matches the
-execution mode (`tbtc-v2@4c98e6b82:solidity/scripts/prepare-artifact-guard.ts:397-446`);
+execution mode (`tbtc-v2@d1bf5bc281:solidity/scripts/prepare-artifact-guard.ts:397-446`);
 the rehearsal script calls it before any signer is used
-(`tbtc-v2@4c98e6b82:solidity/scripts/reservations-sepolia-rehearsal.ts:1290`).
+(`tbtc-v2@d1bf5bc281:solidity/scripts/reservations-sepolia-rehearsal.ts:1290`).
 `selectPrepareArtifact` rejects a malformed artifact instead of skipping it
-(`tbtc-v2@4c98e6b82:solidity/scripts/prepare-artifact-guard.ts:310-317`, returning
+(`tbtc-v2@d1bf5bc281:solidity/scripts/prepare-artifact-guard.ts:310-317`, returning
 `kind: "rejected"`), and a live artifact must record a chain ID and Bridge that
-match the run (`bindingMismatch`, `tbtc-v2@4c98e6b82:solidity/scripts/prepare-artifact-guard.ts:353-378`).
+match the run (`bindingMismatch`, `tbtc-v2@d1bf5bc281:solidity/scripts/prepare-artifact-guard.ts:353-378`).
 History: the earlier pin `52f4f3005` had no guard, and `34160a556` carried the
 first version on a branch that then had no pin in this set.
 
-Test: `tbtc-v2@4c98e6b82:solidity/test/prepare-artifact-guard.test.ts` covers the
+Test: `tbtc-v2@d1bf5bc281:solidity/test/prepare-artifact-guard.test.ts` covers the
 malformed-artifact rejection, the chain preflight and the binding check; this
 documentation task did not run it. No real-key wrong-chain run was performed, and
 no test pins a tampered on-chain deployment reference.
 
-Status: `holds` at `tbtc-v2@4c98e6b82` for the inspected guard behaviour (the
+Status: `holds` at `tbtc-v2@d1bf5bc281` for the inspected guard behaviour (the
 malformed-progress-JSON rejection, the provider-chain preflight and the
 chain-ID/Bridge binding check). The earlier revision of this entry recorded no
 verdict, because the guard had not merged at the pins this chapter otherwise

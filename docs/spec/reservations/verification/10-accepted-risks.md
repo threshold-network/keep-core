@@ -121,7 +121,7 @@ taken on 2026-10-29 and the code does not change.
   `Live` wallet eligible for explicit stranding, and on a `Closing` wallet it
   is one of two conditions: stranding also waits for
   `closingStartedAt + walletClosingPeriod`
-  (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1311-1322`).
+  (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1323-1334`).
   A `MovingFunds` source does not become strandable solely because time
   passed; a `Terminated` or `Closed` wallet needs no deadline at all.
   The earlier wording denied the Live path, and that denial does not match the published target (VF-10).
@@ -131,14 +131,14 @@ taken on 2026-10-29 and the code does not change.
   A reservation may lose its in-kind status when eligible stranding is actually submitted.
 - Monitoring: compare dates with wallet state and pending actions, not the M2 release date alone.
 - Revisit trigger: before mainnet, confirm the promised custody semantics and the M2 migration terms.
-- Status: `holds` at `tbtc-v2@4c98e6b82` for the explicit guards
-  (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1294-1326`).
+- Status: `holds` at `tbtc-v2@d1bf5bc281` for the explicit guards
+  (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1306-1338`).
   The client side is uneven: since keep-core #4365 the watcher notifies for all
   four admissible states (`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),
   but the `Live` branch runs only on the startup catch-up scan and on the
   action-timeout recheck queue, so a Live-wallet strand that neither path reaches
   still needs another caller.
-  Range tests: `tbtc-v2@4c98e6b82:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:263`
+  Range tests: `tbtc-v2@d1bf5bc281:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:263`
   (Closing past both), `:386` (Live before eligibility), `:397` (Live past it).
 
 ## AR-12 Fee debt can grow while the reserve target is zero
