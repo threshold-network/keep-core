@@ -261,6 +261,42 @@ func TestFindReservationAcceptanceTransaction(t *testing.T) {
 		}
 	})
 
+	t.Run("skips a transaction with a zero fee", func(t *testing.T) {
+		zeroFeeTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           150000,
+				PublicKeyScript: walletScript,
+			}},
+		}
+		if isMatchingReservationAcceptanceTransaction(spvChain, event, zeroFeeTx) {
+			t.Error("expected a transaction paying the full deposit amount to be skipped")
+		}
+	})
+
+	t.Run("accepts a fee exactly at TxMaxFee", func(t *testing.T) {
+		maxFeeTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           150000 - 60000,
+				PublicKeyScript: walletScript,
+			}},
+		}
+		if !isMatchingReservationAcceptanceTransaction(spvChain, event, maxFeeTx) {
+			t.Error("expected a fee equal to TxMaxFee to match")
+		}
+	})
+
 	t.Run("skips transaction with excess fee", func(t *testing.T) {
 		found := findMatchingTx([]*bitcoin.Transaction{excessFeeTx})
 		if found != nil {

@@ -1,0 +1,25 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/30 completed
+fuzz: elapsed: 1s, gathering baseline coverage: 30/30 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 1746 (582/sec), new interesting: 0 (total: 30)
+fuzz: elapsed: 6s, execs: 2133 (129/sec), new interesting: 0 (total: 30)
+fuzz: elapsed: 9s, execs: 7457 (1766/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 12s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 15s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 18s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 21s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 24s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 27s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 30s, execs: 7457 (0/sec), new interesting: 1 (total: 31)
+fuzz: elapsed: 33s, execs: 52326 (14966/sec), new interesting: 2 (total: 32)
+fuzz: elapsed: 36s, execs: 56917 (1522/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 39s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 42s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 45s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 48s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 51s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 54s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 57s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 1m0s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+fuzz: elapsed: 1m1s, execs: 56917 (0/sec), new interesting: 3 (total: 33)
+PASS
+ok  	github.com/keep-network/keep-core/pkg/maintainer/spv	61.943s
