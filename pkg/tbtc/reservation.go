@@ -531,6 +531,8 @@ type reservationAnchorAction struct {
 	proposal            *ReservationAnchorProposal
 	startBlock          uint64
 	expiryBlock         uint64
+	broadcastTimeout    time.Duration
+	broadcastCheckDelay time.Duration
 }
 
 func newReservationAnchorAction(
@@ -561,6 +563,8 @@ func newReservationAnchorAction(
 		proposal:            proposal,
 		startBlock:          startBlock,
 		expiryBlock:         expiryBlock,
+		broadcastTimeout:    reservationActionBroadcastTimeout,
+		broadcastCheckDelay: reservationActionBroadcastCheckDelay,
 	}
 }
 
@@ -774,8 +778,8 @@ func (raa *reservationAnchorAction) execute() error {
 	err = raa.transactionExecutor.broadcastTransaction(
 		raa.logger,
 		signedTx,
-		reservationActionBroadcastTimeout,
-		reservationActionBroadcastCheckDelay,
+		raa.broadcastTimeout,
+		raa.broadcastCheckDelay,
 	)
 	if err != nil {
 		return fmt.Errorf("cannot broadcast reservation anchor transaction: [%v]", err)
@@ -803,6 +807,8 @@ type reservationReanchorAction struct {
 	proposal            *ReservationReanchorProposal
 	startBlock          uint64
 	expiryBlock         uint64
+	broadcastTimeout    time.Duration
+	broadcastCheckDelay time.Duration
 }
 
 func newReservationReanchorAction(
@@ -833,6 +839,8 @@ func newReservationReanchorAction(
 		proposal:            proposal,
 		startBlock:          startBlock,
 		expiryBlock:         expiryBlock,
+		broadcastTimeout:    reservationActionBroadcastTimeout,
+		broadcastCheckDelay: reservationActionBroadcastCheckDelay,
 	}
 }
 
@@ -1011,8 +1019,8 @@ func (rra *reservationReanchorAction) execute() error {
 	err = rra.transactionExecutor.broadcastTransaction(
 		rra.logger,
 		signedTx,
-		reservationActionBroadcastTimeout,
-		reservationActionBroadcastCheckDelay,
+		rra.broadcastTimeout,
+		rra.broadcastCheckDelay,
 	)
 	if err != nil {
 		return fmt.Errorf("cannot broadcast reservation reanchor transaction: [%v]", err)
