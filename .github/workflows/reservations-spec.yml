@@ -1,0 +1,60 @@
+name: Reservations spec checks
+
+on:
+  pull_request:
+    paths:
+      - docs/spec/reservations/verification/**
+      - docs/spec/keep-core/verification/**
+      - .github/workflows/reservations-spec.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reservations-spec-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spec-checks:
+    name: Verification set checks (both repositories)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so pinned keep-core commits resolve.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout tbtc-v2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The contract citations are pinned to commits in this repository, so
+          # the full check reads it from a second checkout. It is a public
+          # repository and needs no secret.
+          repository: threshold-network/tbtc-v2
+          path: tbtc-v2
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install markdown-it-py
+        run: |
+          python3 -m venv "$RUNNER_TEMP/spec-venv"
+          "$RUNNER_TEMP/spec-venv/bin/pip" install --disable-pip-version-check markdown-it-py==4.0.0
+
+      - name: Check the traceability matrix is derived from the chapters
+        working-directory: docs/spec/reservations/verification
+        run: python3 tools/traceability.py . --check
+
+      - name: Check the keep-core registry (KC- set)
+        run: python3 docs/spec/reservations/verification/tools/traceability.py docs/spec/keep-core/verification --check
+
+      - name: Smoke checks, both repositories
+        working-directory: docs/spec/reservations/verification
+        run: '"$RUNNER_TEMP/spec-venv/bin/python" tools/smoke.py . "$GITHUB_WORKSPACE/tbtc-v2" "$GITHUB_WORKSPACE"'
+
+      - name: Smoke tool tests
+        working-directory: docs/spec/reservations/verification/tools
+        run: '"$RUNNER_TEMP/spec-venv/bin/python" -m unittest test_smoke test_traceability'
