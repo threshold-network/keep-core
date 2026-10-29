@@ -1347,18 +1347,34 @@ func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
 }
 
 // TestStartupStrandingScanChecksDissolutionEligibleClosingWallet pins
-// that the startup stranding scan's retry pass forwards Closing, Closed
-// and Terminated wallets: a Closing wallet whose reservation term had
-// passed its DissolutionEligibleAt is checked. Eligibility is judged
-// against the chain head time, not the wall clock.
+// that the startup stranding scan's retry pass forwards Closing, Closed,
+// Terminated and Live wallets: a wallet whose reservation term had passed
+// its DissolutionEligibleAt is checked. Eligibility is judged against the
+// chain head time, not the wall clock.
+//
+// The Closing cases also carry the wallet's closing-period term, which the
+// Bridge requires on top of the dissolution-eligible time: a Closing
+// wallet whose closing period has not elapsed must not be notified. The
+// Live cases carry the same dissolution-eligible term the Bridge applies
+// to a Live wallet.
 func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 	t *testing.T,
 ) {
 	headTime := time.Unix(2_000_000, 0)
 
+	// The wallet's closing period. A Closing wallet that started closing
+	// at closingStartedAt may only be notified once closingStartedAt plus
+	// this period has passed.
+	const closingPeriod uint32 = 3600
+	// closingStartedAt is far enough in the past that the closing period
+	// has elapsed by the head time, so the Closing cases below are gated
+	// on the dissolution-eligible time alone.
+	closingStartedAt := time.Unix(int64(headTime.Unix())-int64(closingPeriod)-1, 0)
+
 	tests := map[string]struct {
 		walletState           tbtc.WalletState
 		dissolutionEligibleAt uint32
+		closingStartedAt      time.Time
 		expectNotified        bool
 	}{
 		"Closed wallet": {
@@ -1372,23 +1388,40 @@ func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 		"Closing wallet past the reservation's dissolution-eligible time": {
 			walletState:           tbtc.StateClosing,
 			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			closingStartedAt:      closingStartedAt,
 			expectNotified:        true,
 		},
 		"Closing wallet exactly at the dissolution-eligible time": {
 			walletState:           tbtc.StateClosing,
 			dissolutionEligibleAt: uint32(headTime.Unix()),
+			closingStartedAt:      closingStartedAt,
 			expectNotified:        true,
 		},
 		"Closing wallet before the dissolution-eligible time": {
 			walletState:           tbtc.StateClosing,
 			dissolutionEligibleAt: uint32(headTime.Unix()) + 1,
+			closingStartedAt:      closingStartedAt,
 		},
 		"Closing wallet with an unset dissolution-eligible time": {
-			walletState: tbtc.StateClosing,
+			walletState:      tbtc.StateClosing,
+			closingStartedAt: closingStartedAt,
 		},
-		"Live wallet": {
+		"Live wallet past the reservation's dissolution-eligible time": {
 			walletState:           tbtc.StateLive,
 			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			expectNotified:        true,
+		},
+		"Live wallet exactly at the dissolution-eligible time": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()),
+			expectNotified:        true,
+		},
+		"Live wallet before the dissolution-eligible time": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()) + 1,
+		},
+		"Live wallet with an unset dissolution-eligible time": {
+			walletState: tbtc.StateLive,
 		},
 	}
 
@@ -1398,12 +1431,18 @@ func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 			// The wall clock is far past the head time: a check against it
 			// would treat every Closing wallet as eligible.
 			spvChain.setLatestBlockTimestamp(headTime)
+			spvChain.setWalletParameters(tbtc.WalletParameters{
+				ClosingPeriod: closingPeriod,
+			})
 			strandingWatcher := newReservationStrandingWatcher(spvChain)
 
 			wallet := walletPKHAt(0x4C)
 			key := reservationKey(0x4C00)
 
-			spvChain.setWallet(wallet, &tbtc.WalletChainData{State: test.walletState})
+			spvChain.setWallet(wallet, &tbtc.WalletChainData{
+				State:            test.walletState,
+				ClosingStartedAt: test.closingStartedAt,
+			})
 			spvChain.setWalletReservations(wallet, []*big.Int{key})
 			spvChain.setReservation(key, &tbtc.Reservation{
 				State:                 tbtc.ReservationStateActive,
