@@ -3,9 +3,10 @@
 These observations came from the section drafts, not a new code-fix task.
 A separate read-only skeptic attempted to refute each claim.
 Integration then inspected the immutable source blobs for the historical ABI claim.
-VF-10 to VF-13 record the delta review against the published M1 code
-(`tbtc-v2@4c98e6b82`, `keep-core@f03cc61dc`); the items they correct keep their
-earlier text as labelled history.
+VF-10 to VF-13 record the delta review against the M1 code as then published
+(`tbtc-v2@4c98e6b82`, keep-core `f03cc61dc`); the items they correct keep their
+earlier text as labelled history. A later keep-core head, `4ced1c839`, adds the
+client-side repair that VF-10 records, and it is the head the freeze cites.
 No code fix, test run or CI result is implied by this ledger.
 
 ## Verdicts
@@ -181,11 +182,16 @@ Both properties are pinned by tests rather than inferred:
 
 Items rewritten: SM-R6, SM-R7, SM-R8, SM-W5, EC-11, DR-02, AR-11, INV-103,
 INV-104, INV-112, INV-603, TM-07, US-14; US-101 was added for the Live branch.
-The client side is recorded, not repaired: the shipped watcher dispatches
-`Closed`/`Terminated`/`Closing` and never `Live`, and its Closing check reads
-dissolution eligibility only
+The client side was recorded, not repaired, at the head then published: that
+watcher dispatched `Closed`/`Terminated`/`Closing` and never `Live`, and its
+Closing check read dissolution eligibility only
 (`keep-core@f03cc61dc:pkg/maintainer/spv/reservation_stranding_watch.go:148-162`,
-`:282-291`), so an early notification reverts and waits for a later pass.
+`:282-291`), so an early notification reverted and waited for a later pass.
+keep-core #4365, in `4ced1c839`, repairs both halves: the watcher dispatches all
+four admissible states
+(`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`)
+and holds a `Closing` wallet until `closingStartedAt + walletClosingPeriod`
+(`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:379-392`).
 
 ### VF-11: the proven-anchor ledger
 
@@ -221,7 +227,7 @@ The SDK assembles the proof at `txProofDifficultyFactor()`
 test `typescript/test/services/reservations.test.ts:1017`).
 The generated keep-core binding carries the same four arguments and the
 selector `0x19821f16`
-(`keep-core@f03cc61dc:pkg/chain/ethereum/tbtc/gen/abi/ReservationRouter.go:895-911`);
+(`keep-core@4ced1c839:pkg/chain/ethereum/tbtc/gen/abi/ReservationRouter.go:895-911`);
 no production keep-core caller sends it, and the depositor is the only
 authorized caller (`msg.sender == deposit.depositor`).
 The proof is required at acceptance, not at reveal, so it does not by itself
