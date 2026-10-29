@@ -66,9 +66,9 @@ Decisions named here come from the audit records (`gap-inventory.md`, `testnet-r
 
 - Description: `closeReservation` exists but has no caller in M1; it is written only for the two M2 settlement call sites (reserved redemption, dissolution). No M1 path marks a position `Closed`.
 - Why accepted: closing a position soundly requires moving and proving Bitcoin, which M1 (variant B) does not do; `Closed` is reserved for M2. Log: the function's own doc comment ("Intended for milestone 2 settlement call sites (both currently unreachable in m1)").
-- Bound on impact: none by itself; it is dead code until M2. It confirms there is no owner-initiated close (AR-02).
+- Bound on impact: none by itself; it is dead code until M2. It confirms there is no owner-initiated close (AR-02). Its guard accepts a position in `ActionPending` as well as `Active` (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1251-1255`) and releases through the same three calls a strand uses (`:1256-1275`), so a caller wired in M2 would be able to close a position whose acceptance or re-anchor generation can still settle and release its wallet and global capacity early.
 - Monitoring: none.
-- Revisit trigger: M2 (wire the two call sites).
+- Revisit trigger: M2 (wire the two call sites, and narrow the guard to `Active` or record why a position with a live generation may be closed).
 - Status: `holds` (no caller in either repo; the doc and the enum value `Closed` are present, `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1137`, `:100`).
 
 ## AR-08 Permissionless third-party re-anchor griefing (beyond D19's slot reuse)
@@ -185,6 +185,24 @@ taken on 2026-10-29 and the code does not change.
 - Monitoring: the deployment log must show script 97 wiring the vault before it trusts it; a direct `setVaultStatus` that precedes the wiring is the failure signature. Before the trust call, the drill runbook reads `reservationParameters()` through the Bridge and confirms that its first value is the deployed vault (`tbtc-v2:solidity/contracts/bridge/ReservationRouter.sol:585-589`). There is no on-chain monitor because the gap is the absence of a check.
 - Revisit trigger: before mainnet, select and land the on-chain guard in the PR (D32). A governance plan to trust a second reservation vault, or to make a past release destination the reservation vault (VF-09), needs a new review first.
 - Status: `holds-untested` (the unconditional credit path is in code, `tbtc-v2:solidity/contracts/vault/ReservationVault.sol:147-195`; no test drives ordinary credit through a trusted vault that is not wired; accepted for Sepolia only, D32).
+
+## AR-17 An anchor output above the action amount reverts with an arithmetic panic
+
+- Description: the proof-time fee check is written as `action.amount - anchorAmount <= action.txMaxFee` (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:462-465`). An anchor output that pays the wallet more than the snapshotted `action.amount` underflows that subtraction, so the call reverts with the arithmetic panic `0x11` instead of the `Transaction fee is too high` message the same check returns in every other case.
+- Why accepted: it needs a proof of a Bitcoin transaction that pays the wallet more than the depositor reserved, which the wallet does not sign, and no test in the suite drives the branch. The fix is a contracts edit (bound `anchorAmount` before subtracting, or compare in the other direction) and this review set carries no code changes.
+- Bound on impact: a rejected proof with a misleading reason. The anchor cannot move and no state changes, so no value is at risk.
+- Monitoring: none. The condition would show only as a failed acceptance proof.
+- Revisit trigger: with the next validated change to the proof validators, where the bound and its test land together.
+- Status: `holds` (the require and its message are at the cited lines at the final head; the branch above `action.amount` is not exercised).
+
+## AR-18 `feeReserveTarget` is a sweep threshold, not a floor
+
+- Description: `financeInKindFee` finances the miner fee of a settled re-anchor out of the vault's whole TBTC balance, and `_burnFromReserve` scales the burn down only to that balance, not to the target (`tbtc-v2@d1bf5bc281:solidity/contracts/vault/ReservationVault.sol:357-360`). `feeReserveTarget` is read by `sweepFees` alone, as the amount left behind when the excess is swept (`:310-316`). A settlement can therefore spend fee revenue that governance meant to keep, and the balance can end below the target.
+- Why accepted: deliberate and stated in the contract's own doc comment, "by feeReserveTarget, which only gates what sweepFees can remove" (`tbtc-v2@d1bf5bc281:solidity/contracts/vault/ReservationVault.sol:198`): a confirmed Bitcoin spend must settle rather than fail on the reserve level, and the shortfall it creates is recorded as debt (AR-12). Making the target a floor is a contracts edit inside a reviewed PR.
+- Bound on impact: revenue earmarked for sweeping is spent on in-kind miner fees; the balance cannot go below zero and the uncovered part becomes `inKindFeeDebtSat` (AR-12). Any external accounting or dashboard that reads the target as a floor will disagree with the contract.
+- Monitoring: `feeReserveTarget()` against the vault's TBTC balance, and `inKindFeeDebtSat` after a settlement that outran the reserve.
+- Revisit trigger: before mainnet, with the reserve sizing decision (AR-12). Either state in the deployment documentation that the target is a sweep threshold, or make it a floor.
+- Status: `holds` (both readers are at the cited lines at the final head; the contract's doc comment states the target does not bound this path).
 
 ---
 

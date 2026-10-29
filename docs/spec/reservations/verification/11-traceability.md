@@ -21,8 +21,8 @@ No status in this matrix asserts that the named tests ran during this documentat
 | Disaster recovery | 12 | 4 | 5 | 2 | 1 | 0 | 0 | 0 |
 | Threat model | 20 | 8 | 9 | 1 | 2 | 0 | 0 | 0 |
 | Cross-repo contract | 63 | 35 | 26 | 0 | 0 | 1 | 0 | 1 |
-| Accepted risks | 16 | 10 | 4 | 2 | 0 | 0 | 0 | 0 |
-| **Total** | 360 | 246 | 83 | 10 | 3 | 1 | 15 | 2 |
+| Accepted risks | 18 | 12 | 4 | 2 | 0 | 0 | 0 | 0 |
+| **Total** | 362 | 248 | 83 | 10 | 3 | 1 | 15 | 2 |
 
 ## Review queue rule
 
@@ -442,6 +442,8 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [AR-14](10-accepted-risks.md) | A re-anchor timeout starts a cooldown that blocks everyone but governance | holds | none recorded |
 | [AR-15](10-accepted-risks.md) | `activeReservationsCount` under-reports per-wallet slot pressure during pending re-anchors | holds-untested | none recorded |
 | [AR-16](10-accepted-risks.md) | The `receiveBalanceIncrease` ordering gap is enforced by the deploy script, not on-chain | holds-untested | none recorded |
+| [AR-17](10-accepted-risks.md) | An anchor output above the action amount reverts with an arithmetic panic | holds | none recorded |
+| [AR-18](10-accepted-risks.md) | `feeReserveTarget` is a sweep threshold, not a floor | holds | none recorded |
 
 ## Maintenance
 

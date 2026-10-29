@@ -135,7 +135,7 @@ at `requirements.md:80-142` and the capability column at `requirements.md:148-16
 
 ### Accepted risks
 
-The register is `verification/10-accepted-risks.md`, scoped to M1 by its header (`:3`). Fourteen
+The register is `verification/10-accepted-risks.md`, scoped to M1 by its header (`:3`). Sixteen
 rows describe behaviour M1 ships; AR-04 and AR-05 are `design-only` and carry M2 or process
 obligations rather than M1 behaviour.
 
@@ -157,6 +157,8 @@ obligations rather than M1 behaviour.
 | AR-14 | A re-anchor timeout starts a cooldown that blocks everyone but governance | holds | `verification/10-accepted-risks.md:161` |
 | AR-15 | `activeReservationsCount` under-reports slot pressure during pending re-anchors | holds-untested | `verification/10-accepted-risks.md:170` |
 | AR-16 | The `receiveBalanceIncrease` ordering gap is enforced by the deploy script | holds-untested | `verification/10-accepted-risks.md:179` |
+| AR-17 | An anchor output above the action amount reverts with an arithmetic panic | holds | `verification/10-accepted-risks.md:189` |
+| AR-18 | `feeReserveTarget` is a sweep threshold, not a floor | holds | `verification/10-accepted-risks.md:198` |
 
 ### Release gates
 
@@ -282,7 +284,7 @@ M2 has to amend, are both listed here; nothing in this section is an M2 acceptan
   `verification/04-deposit-stories.md:161`).
 - **Accepted risks that are M2 obligations.** AR-02 (`verification/10-accepted-risks.md:20`), AR-03
   (`:29`), AR-04 (`:38`), AR-05 (`:47`). They are M1-scope register rows marked `design-only` where
-  they describe M2 work; no M2-only row exists, so AR-17 and above are free.
+  they describe M2 work; no M2-only row exists, so AR-19 and above are free.
 - **Design descriptions that an M2 requirement would be written from.** `feature-spec.md`, which
   the index calls the M2 target (`README.md:50`), plus the entries it covers: redemption
   (`feature-spec.md:510-545`), re-anchor (`feature-spec.md:546-565`), dissolution
