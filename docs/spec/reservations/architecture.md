@@ -733,9 +733,10 @@ the contract's design and an actual client duty.
 reservationDissolutionDelay` and, per its own doc comment, never moved retroactively by a later
 governance change to the delay. The re-anchor eligibility gate the reference design keyed off it
 has been removed in milestone 1 (re-anchor is unbounded in time), but `dissolutionEligibleAt` is
-not unread: `notifyReservationStranded`'s `Closing`-wallet branch requires
-`block.timestamp >= reservation.dissolutionEligibleAt` (`Reservation.sol:1090-1115`), making that
-branch the single milestone-1 on-chain reader. It is still a commitment recorded in storage for
+not unread: `notifyReservationStranded` requires
+`block.timestamp >= reservation.dissolutionEligibleAt` for a `Live` or `Closing` custodying
+wallet (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1322-1335`), so those
+two branches are the milestone-1 on-chain readers. It is still a commitment recorded in storage for
 milestone 2 to honour more broadly, not dead code to drop. `cumulativeReanchorFee` and
 `reanchorCooldownUntil` are appended at
 the end of the struct (safe without gap-scarcity, since a struct stored in a mapping needs no

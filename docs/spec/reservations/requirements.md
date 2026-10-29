@@ -69,9 +69,10 @@ M1 action uses (`architecture.md` §5).
   (`expiresAt`, `dissolutionEligibleAt`, the `ActionType`/`ActionState`
   enum values) must already be written by M1, even where M1 reads it
   back only partially (FR-11, `roadmap.md` §2.1, §0.7 item 3).
-  `dissolutionEligibleAt` has exactly one M1 reader, the `Closing`-wallet
-  stranding precondition (FR-9); `expiresAt` and the M2-only `ActionType`/
-  `ActionState` values are write-only in M1.
+  `dissolutionEligibleAt` has two M1 readers, both in the FR-9 stranding
+  precondition (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1322-1335`):
+  the `Closing`-wallet and the `Live`-wallet branch; `expiresAt` and the
+  M2-only `ActionType`/`ActionState` values are write-only in M1.
 - **G-7.** Ship the reservation surface without pushing `Bridge` over the
   EIP-170 deployed-bytecode limit, using a mechanism (delegatecall router)
   that costs the ceremony M2 needs anyway rather than adding a new one
