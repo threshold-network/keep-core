@@ -32,6 +32,16 @@ Deployment readiness remains subject to the release runbook and its operator/key
 
 `m1-variant-comparison.md` preserves the A+/B reasoning. It is not the current implementation specification.
 
+## Revision history
+
+The table is the changelog of the set: it records what each revision added, changed or removed.
+A change that alters a claim appends a row and names the text a reader of an earlier revision must re-read.
+Entries carry the date the revision entered this repository.
+
+| Date | Change |
+|---|---|
+| 2026-10-29 | Added the UTXO reservations design and verification specification, with pinned citations and a derived traceability matrix |
+
 ---
 
 ## File index (by role)
