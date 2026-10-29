@@ -306,6 +306,42 @@ func reservationEventKey(reservationKey *big.Int, requestNonce uint64) string {
 	return fmt.Sprintf("%s:%d", reservationKey.String(), requestNonce)
 }
 
+// recordReservationProofRetry counts one reservation proof round that
+// failed for an item and was left for a later round, so the same
+// generation is tried again. A steadily increasing value means the loop is
+// running but cannot prove the generations it tracks.
+//
+// A nil recorder means metrics are off.
+func recordReservationProofRetry(recorder MetricsRecorder) {
+	if recorder == nil {
+		return
+	}
+	if pm, ok := recorder.(*clientinfo.PerformanceMetrics); ok && pm == nil {
+		return
+	}
+	recorder.IncrementCounter(clientinfo.MetricSpvReservationProofsRetriedTotal, 1)
+}
+
+// recordReservationProofSuccess publishes the liveness signal for the
+// reservation proof loop: the unix time of the last round that completed
+// without an error that aborted it. A value that stops advancing while
+// reservations are live means the loop is stalled and the on-chain actions
+// it proves are not being settled.
+//
+// A nil recorder means metrics are off.
+func recordReservationProofSuccess(recorder MetricsRecorder) {
+	if recorder == nil {
+		return
+	}
+	if pm, ok := recorder.(*clientinfo.PerformanceMetrics); ok && pm == nil {
+		return
+	}
+	recorder.SetGauge(
+		clientinfo.MetricSpvReservationProofLastSuccessTimestamp,
+		float64(time.Now().Unix()),
+	)
+}
+
 // maintainReservationProofs runs the SPV proof submission loop for
 // reservation acceptance and re-anchor action generations. It is a
 // dedicated loop, separate from spvMaintainer's generic proofTypes-driven
@@ -441,6 +477,7 @@ func runReservationProofLoop(
 						"[%v]; resuming after the idle backoff",
 					acceptanceErr,
 				)
+				recordReservationProofRetry(metricsRecorder)
 			} else {
 				return fmt.Errorf(
 					"error while proving reservation acceptance actions: [%w]",
@@ -455,6 +492,7 @@ func runReservationProofLoop(
 						"[%v]; resuming after the idle backoff",
 					reanchorErr,
 				)
+				recordReservationProofRetry(metricsRecorder)
 			} else {
 				return fmt.Errorf(
 					"error while proving reservation re-anchor actions: [%w]",
@@ -462,6 +500,12 @@ func runReservationProofLoop(
 				)
 			}
 		}
+
+		// The round completed without an error that aborted it: this is
+		// the liveness signal for the reservation proof loop. A stalled
+		// value while reservations are live means the loop is not
+		// proving the on-chain actions that settle them.
+		recordReservationProofSuccess(metricsRecorder)
 
 		select {
 		case <-time.After(config.IdleBackoffTime):

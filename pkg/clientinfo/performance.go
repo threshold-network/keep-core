@@ -154,6 +154,12 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricSpvReservationWatcherDeathsTotal,
 		MetricSpvReservationActionOverdueTotal,
 
+		// ----- SPV reservation proof counters -----
+		MetricSpvReservationProofsSubmittedTotal,
+		MetricSpvReservationProofsSucceededTotal,
+		MetricSpvReservationProofsFailedTotal,
+		MetricSpvReservationProofsRetriedTotal,
+
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
@@ -403,6 +409,7 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 			MetricReservationReanchorNoEligibleTargetCount,
 			MetricReservationUnrequestedDepositDeadlineAtRiskCount,
 			MetricReservationKeeperObservationTimestamp,
+			MetricSpvReservationProofLastSuccessTimestamp,
 		)
 	}
 
@@ -680,6 +687,35 @@ const (
 	// with no proof submitted. A steadily increasing value means actions
 	// are not being proved or timed out in time.
 	MetricSpvReservationActionOverdueTotal = "spv_reservation_action_overdue_total"
+
+	// SPV reservation proof counters. They describe the reservation proof
+	// round (the dedicated acceptance/re-anchor proof loop in
+	// pkg/maintainer/spv), not the individual proof submissions the round
+	// performs:
+	//
+	//   - MetricSpvReservationProofsSubmittedTotal counts the proof
+	//     submissions the round attempted, across both acceptance and
+	//     re-anchor actions.
+	//   - MetricSpvReservationProofsSucceededTotal counts the submissions
+	//     the Bridge accepted.
+	//   - MetricSpvReservationProofsFailedTotal counts the submissions the
+	//     Bridge rejected or that failed to assemble.
+	//   - MetricSpvReservationProofsRetriedTotal counts the proof rounds
+	//     that failed for an item and were left for a later round, so the
+	//     same generation is tried again.
+	MetricSpvReservationProofsSubmittedTotal  = "spv_reservation_proofs_submitted_total"
+	MetricSpvReservationProofsSucceededTotal = "spv_reservation_proofs_succeeded_total"
+	MetricSpvReservationProofsFailedTotal    = "spv_reservation_proofs_failed_total"
+	MetricSpvReservationProofsRetriedTotal   = "spv_reservation_proofs_retried_total"
+
+	// MetricSpvReservationProofLastSuccessTimestamp is the unix time of
+	// the last reservation proof round that completed without an error. It
+	// is the liveness signal for the reservation proof loop: a value that
+	// stops advancing while reservations are live means the loop is
+	// stalled and the on-chain actions it proves are not being settled.
+	// It is 0 until the first successful round.
+	MetricSpvReservationProofLastSuccessTimestamp = "spv_reservation_proof_last_success_timestamp_seconds"
+
 
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"
