@@ -164,7 +164,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [PAR-20](03-parameters-governance.md) | `walletClosingPeriod` / `movingFundsTimeout` (uint32) | holds | `Bridge.ReservationStranding.test.ts` "real moving-funds-timeout call chain" |
 | [PAR-21](03-parameters-governance.md) | `liveWalletsCount` (uint32, derived) | holds | `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:346` (bound tightens when a Live wallet leaves Live) |
 | [PAR-3](03-parameters-governance.md) | `reservationTermSeconds` (uint32) | holds-untested | none for the exact bounds-revert string; `Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 |
-| [PAR-4](03-parameters-governance.md) | `reservationDissolutionDelay` (uint32) | holds | `Bridge.ReservationStranding.test.ts` "notifyReservationStranded"; `Bridge.ReservationStrandingLibrary.test.ts:1060` |
+| [PAR-4](03-parameters-governance.md) | `reservationDissolutionDelay` (uint32) | holds | `tbtc-v2@b30e74823:solidity/test/bridge/Bridge.ReservationDissolutionDelay.test.ts:132` ("accepts exactly 730 days") ... |
 | [PAR-5](03-parameters-governance.md) | `reservationMaxTotalAmount` (uint64) | holds | `Bridge.ReservationCaps.test.ts` "reverts when the total amount cap exceeds slot capacity" |
 | [PAR-6](03-parameters-governance.md) | `maxReservationsPerWallet` (uint32) | holds | `Reservation.test.ts` "should revert when wallet reservations count exceeds maxReservationsPerWallet" |
 | [PAR-7](03-parameters-governance.md) | `reservationActionTimeout` (uint32) | holds | `Bridge.ReservationCaps.test.ts` "action timeout floor" group `tbtc-v2@4c98e6b82:solidity/test/bridge/Bridge.ReservationCaps.test.ts:98-130`: `:122` ... |
