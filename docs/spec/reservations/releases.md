@@ -355,9 +355,12 @@ requirements, and none of them is settled here.
    charged once or twice across two vaults; whether migration restarts the term; whether it is
    one-way.
 2. **The promise clock.** Two candidate clocks in the documents, `dissolutionEligibleAt`
-   (`roadmap.md:635-639`) and `expiresAt` (`feature-spec.md:543-545`), and M1 reads neither on a
-   release path. Open: which field is the promise the product sells, what the dissolution delay is,
-   and what happens to a position whose clock passes before M2 ships.
+   (`roadmap.md:635-639`) and `expiresAt` (`feature-spec.md:543-545`). M1 does read
+   `dissolutionEligibleAt` on a release path: it is the date the stranding gate compares
+   against for a `Live` and for a `Closing` wallet (FR-9), so a position whose clock has
+   passed can be stranded; `expiresAt` is write-only in M1. Open: which field is the promise
+   the product sells, what the dissolution delay is, and what happens to a position whose
+   clock passes before M2 ships.
 3. **M2 size and dates.** The 1.13:1 milestone ratio predates Option B and has not been re-derived
    (`roadmap.md:590-600`), and the code-mass table claims M2's Solidity is already written
    (`roadmap.md:895-905`) while the Option B column in the same section says a new vault is needed.
