@@ -891,10 +891,20 @@ func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
 
 		// A timed-out re-anchor can be noticed while the wallet is still
 		// Closing: it is checked through the dissolution-gated form and
-		// requeued until its reservations become eligible. A
-		// wallet in a state that cannot strand a reservation (Live and the
+		// requeued until its reservations become eligible. A Live wallet
+		// is checked through the dissolution-gated form too, and requeued
+		// until its reservations become dissolution-eligible. A wallet in a
+		// state that cannot strand a reservation (MovingFunds and the
 		// like) is dropped: its later closure fires the OnWalletClosed
 		// subscription, so requeueing it would only poll it forever.
+		//
+		// A nil strandingWatcher means this watcher was constructed
+		// without one, which the production wiring never does. The drain
+		// drops the wallet in that case rather than panicking: there is no
+		// watcher to check it with, so there is nothing to requeue.
+		if ratw.strandingWatcher == nil {
+			continue
+		}
 		_, recheck, err := ratw.strandingWatcher.checkStrandingForWalletState(
 			walletPublicKeyHash,
 			wallet.State,

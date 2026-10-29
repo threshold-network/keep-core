@@ -19,6 +19,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/beacon"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
+	ethereumutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/generator"
@@ -266,6 +267,18 @@ func start(cmd *cobra.Command) error {
 					err,
 				)
 			}
+
+			// The C-4 activation ordering gate compares the client's
+			// compiled activation block for the running network with the
+			// contract's reported reservation state. A mismatch means the
+			// on-chain activation and the client release are out of order,
+			// which is not something the node can fix: report it loudly
+			// instead of running silently in the wrong state.
+			warnOnReservationsActivationMismatch(
+				blockCounter,
+				tbtcChain,
+				clientConfig.Ethereum.Network,
+			)
 		}
 	}
 
@@ -285,6 +298,56 @@ func isBootstrap() bool {
 		logger.Warnf("--network.bootstrap is deprecated and will be removed in a future release")
 	}
 	return clientConfig.LibP2P.Bootstrap
+}
+
+// warnOnReservationsActivationMismatch logs the reservations activation
+// startup warning when the client's compiled activation block for the
+// running network and the contract's reported reservation state disagree.
+//
+// The check is a warning, not a fatal error: the node's other duties (DKG,
+// heartbeats, redemptions) do not depend on the reservations feature, so
+// refusing to start would turn a reservations misconfiguration into a total
+// outage. A C-4 violation is logged at error severity and a pending on-chain
+// activation at warning severity.
+//
+// A failure to read the chain head or the contract state is itself reported
+// as a warning: the check could not establish that the two agree, and
+// silently skipping it would hide exactly the situation it exists to catch.
+func warnOnReservationsActivationMismatch(
+	blockCounter chain.BlockCounter,
+	vaultReader tbtc.ReservationsActivationVaultReader,
+	network ethereumutil.Network,
+) {
+	status, err := tbtc.CollectReservationsActivationStatus(
+		network,
+		blockCounter,
+		vaultReader,
+	)
+	if err != nil {
+		logger.Errorf(
+			"cannot verify the reservations activation state for network "+
+				"[%s]: [%v]; the reservations activation ordering gate "+
+				"(C-4) could not be checked",
+			network,
+			err,
+		)
+		return
+	}
+
+	message, severity := tbtc.EvaluateReservationsActivation(status)
+	if message == "" {
+		return
+	}
+
+	switch severity {
+	case tbtc.ReservationsActivationError:
+		logger.Errorf(
+			"reservations activation ordering violation (C-4): %s",
+			message,
+		)
+	default:
+		logger.Warnf("reservations activation warning: %s", message)
+	}
 }
 
 // admissionApplications lists the chain handles that can authorize a peer.

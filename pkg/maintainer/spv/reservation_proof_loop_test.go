@@ -574,6 +574,65 @@ func TestFindReservationReanchorTransaction(t *testing.T) {
 			t.Error("expected a P2PKH output paying a different wallet to be skipped")
 		}
 	})
+
+	t.Run("skips a transaction below the settlement dust floor", func(t *testing.T) {
+		// The contract's settlement dust floor: the re-anchored amount
+		// must stay strictly above the snapshotted per-transaction fee
+		// bound (ReservationProofs.sol, "Re-anchor amount below the
+		// dust floor").
+		//
+		// The floor only bites when the snapshotted txMaxFee is a large
+		// fraction of the anchor value, which is the case the contract
+		// allows: the request-time floor requires the anchor to stay
+		// above minAmount + txMaxFee, so txMaxFee can approach the
+		// anchor value when the minimum amount is small.
+		dustFloorEvent := &tbtc.ReservationReanchorRequestedEvent{
+			TargetWalletPublicKeyHash: targetWalletPKH,
+			TxMaxFee:                  590000,
+		}
+
+		// The output is exactly at the fee bound: the contract's strict
+		// inequality rejects it.
+		dustFloorTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           590000,
+				PublicKeyScript: targetWalletScript,
+			}},
+		}
+
+		if isMatchingReservationReanchorTransaction(dustFloorEvent, anchorUtxo, dustFloorTx) {
+			t.Error(
+				"expected a transaction at the dust floor to be skipped",
+			)
+		}
+
+		// One satoshi above the floor must still match, so the check is
+		// the contract's strict inequality and not an off-by-one.
+		aboveFloorTx := &bitcoin.Transaction{
+			Inputs: []*bitcoin.TransactionInput{{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: anchorTxHash,
+					OutputIndex:     1,
+				},
+			}},
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           590001,
+				PublicKeyScript: targetWalletScript,
+			}},
+		}
+
+		if !isMatchingReservationReanchorTransaction(dustFloorEvent, anchorUtxo, aboveFloorTx) {
+			t.Error(
+				"expected a transaction just above the dust floor to match",
+			)
+		}
+	})
 }
 
 // alwaysMatchReservationTransaction is an isMatch predicate that accepts

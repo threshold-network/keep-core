@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -202,23 +203,43 @@ func submitReservationActionProof(
 ) error {
 	if metricsRecorder != nil {
 		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_total", 1)
+		// The clientinfo-level reservation proof counters describe the
+		// reservation proof round as a whole, across acceptance and
+		// re-anchor actions alike: see
+		// clientinfo.MetricSpvReservationProofsSubmittedTotal.
+		metricsRecorder.IncrementCounter(
+			clientinfo.MetricSpvReservationProofsSubmittedTotal,
+			1,
+		)
 	}
 
 	if requiredConfirmations == 0 {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("provided required confirmations count must be greater than 0")
 	}
 	if reservationKey == nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("reservation key is required")
 	}
 	if requestNonce == 0 {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("request nonce must be > 0")
 	}
@@ -231,6 +252,10 @@ func submitReservationActionProof(
 	if err != nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("failed to assemble transaction spv proof: [%v]", err)
 	}
@@ -239,6 +264,10 @@ func submitReservationActionProof(
 	if err != nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("error while parsing reservation transaction inputs: [%v]", err)
 	}
@@ -247,6 +276,10 @@ func submitReservationActionProof(
 	if err != nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("cannot fetch reservation action generation: [%v]", err)
 	}
@@ -255,6 +288,10 @@ func submitReservationActionProof(
 	if pkh != action.TargetWalletPublicKeyHash {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("target wallet public key hash mismatch")
 	}
@@ -262,6 +299,10 @@ func submitReservationActionProof(
 	if action.ActionType != expectedActionType {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("reservation action generation is not expected type")
 	}
@@ -274,6 +315,10 @@ func submitReservationActionProof(
 	default:
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("reservation action generation is not settleable")
 	}
@@ -289,12 +334,20 @@ func submitReservationActionProof(
 	); err != nil {
 		if metricsRecorder != nil {
 			metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(
+				clientinfo.MetricSpvReservationProofsFailedTotal,
+				1,
+			)
 		}
 		return fmt.Errorf("failed to submit reservation proof: [%v]", err)
 	}
 
 	if metricsRecorder != nil {
 		metricsRecorder.IncrementCounter(metricsPrefix+"_submissions_succeeded_total", 1)
+		metricsRecorder.IncrementCounter(
+			clientinfo.MetricSpvReservationProofsSucceededTotal,
+			1,
+		)
 	}
 
 	return nil
