@@ -1406,6 +1406,13 @@ func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 			walletState:      tbtc.StateClosing,
 			closingStartedAt: closingStartedAt,
 		},
+		"Closing wallet inside its closing period": {
+			// The reservation's term has passed, but the wallet's closing
+			// period has not: the Bridge would revert the notification.
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			closingStartedAt:      headTime,
+		},
 		"Live wallet past the reservation's dissolution-eligible time": {
 			walletState:           tbtc.StateLive,
 			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,

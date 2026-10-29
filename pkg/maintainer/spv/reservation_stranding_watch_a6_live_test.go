@@ -49,8 +49,8 @@ func a6InstallReservation(
 ) {
 	lc.setWalletReservations(wallet, []*big.Int{key})
 	lc.setReservation(key, &tbtc.Reservation{
-		WalletPublicKeyHash:  wallet,
-		State:                tbtc.ReservationStateActive,
+		WalletPublicKeyHash:   wallet,
+		State:                 tbtc.ReservationStateActive,
 		DissolutionEligibleAt: dissolutionEligibleAt,
 	})
 }
@@ -195,4 +195,3 @@ func TestA6_LiveWalletDoesNotStrandReservationBeforeDissolutionEligible(t *testi
 		t.Fatalf("expected no notifications, got %d", len(calls))
 	}
 }
-

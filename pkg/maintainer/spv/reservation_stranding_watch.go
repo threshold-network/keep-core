@@ -150,7 +150,8 @@ func (rsw *reservationStrandingWatcher) checkReservationStrandingForLiveWallet(
 //
 // The four states the Bridge accepts in notifyReservationStranded are
 // covered: Closed and Terminated strand outright, Live and Closing strand
-// only once the reservation's term has passed its DissolutionEligibleAt.
+// only once the reservation's term has passed its DissolutionEligibleAt,
+// and Closing additionally waits out the wallet's closing period.
 func (rsw *reservationStrandingWatcher) checkStrandingForWalletState(
 	walletPublicKeyHash [20]byte,
 	state tbtc.WalletState,
@@ -181,7 +182,8 @@ func (rsw *reservationStrandingWatcher) checkStrandingForWalletState(
 //   - Live: the chain head time must have reached the reservation's
 //     DissolutionEligibleAt.
 //   - Closing: the chain head time must have reached the reservation's
-//     DissolutionEligibleAt.
+//     DissolutionEligibleAt AND the wallet's closing period must have
+//     elapsed since closingStartedAt.
 //
 // The gates mirror the Bridge's own require in notifyReservationStranded
 // (Reservation.sol). A reservation that fails its gate is left alone and
@@ -239,6 +241,38 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 			)
 		}
 		headNow = tbtc.UnixSecondsToUint32(headTime.Unix())
+	}
+
+	// closingPeriodEnd is the timestamp at which the wallet's closing
+	// period ends: closingStartedAt + the Bridge's wallet closing period.
+	// The Bridge's Closing branch requires the chain head time to have
+	// reached it, so the client must not notify before it either.
+	//
+	// The sum is computed in uint64 because the Bridge computes it in
+	// uint256: a uint32 sum would wrap and produce a closing-period end
+	// in the past, which would let the client notify early.
+	var closingPeriodEnd uint64
+	if walletState == tbtc.StateClosing {
+		wallet, walletErr := rsw.spvChain.GetWallet(walletPublicKeyHash)
+		if walletErr != nil {
+			return false, fmt.Errorf(
+				"failed to fetch wallet [0x%x] for its closing period: [%v]",
+				walletPublicKeyHash,
+				walletErr,
+			)
+		}
+		walletParameters, parametersErr := rsw.spvChain.GetWalletParameters()
+		if parametersErr != nil {
+			return false, fmt.Errorf(
+				"failed to fetch the wallet parameters for wallet [0x%x]'s "+
+					"closing period: [%v]",
+				walletPublicKeyHash,
+				parametersErr,
+			)
+		}
+		closingPeriodEnd = uint64(
+			tbtc.UnixSecondsToUint32(wallet.ClosingStartedAt.Unix()),
+		) + uint64(walletParameters.ClosingPeriod)
 	}
 
 	// Best-effort: the termination cause is operational context for the
@@ -328,6 +362,30 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 				key,
 				walletState,
 				walletPublicKeyHash,
+			)
+			recheck = true
+			continue
+		}
+
+		// The Bridge's Closing branch additionally requires the wallet's
+		// closing period to have elapsed since closingStartedAt. Without
+		// this term the client would notify a Closing wallet's
+		// dissolution-eligible reservation before the wallet's closing
+		// period ended, and the Bridge would revert the notification.
+		// The closing period is an exclusive re-anchor window: a wallet
+		// pushed Live -> MovingFunds -> Closing by permissionless calls
+		// must get one full closing period to move its position before
+		// anyone may strand it.
+		if walletState == tbtc.StateClosing &&
+			uint64(headNow) < closingPeriodEnd {
+			logger.Debugf(
+				"reservation [%v] on Closing wallet [0x%x] is not yet past "+
+					"the wallet's closing period (ends at %d, head time %d); "+
+					"flagging the wallet for a later pass",
+				key,
+				walletPublicKeyHash,
+				closingPeriodEnd,
+				headNow,
 			)
 			recheck = true
 			continue
