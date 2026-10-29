@@ -490,6 +490,56 @@ func (tc *TbtcChain) ReservationParameters() (
 	return convertReservationParametersFromAbiType(abiParameters), nil
 }
 
+// ReservationsVaultTrusted reports whether the Bridge currently trusts the
+// reservation vault configured in the reservation parameters, which is the
+// on-chain half of the reservations activation state: setVaultStatus(vault,
+// true) makes the vault trusted and therefore makes reservations live.
+//
+// The C-4 activation ordering gate requires the on-chain activation to run
+// at or after the client's activation block, so the client compares this
+// value with its own compiled activation block at startup (see
+// tbtc.EvaluateReservationsActivation).
+//
+// When no reservation vault is configured the vault is the zero address, the
+// Bridge cannot trust it and reservations are disabled on-chain, so this
+// method returns false with a nil error.
+func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
+	parameters, err := tc.ReservationParameters()
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot get reservation parameters: [%w]",
+			err,
+		)
+	}
+
+	if parameters.ReservationVault == "" {
+		// No vault configured: reservations are disabled on-chain.
+		return false, nil
+	}
+
+	vaultAddress, err := decodeReservationVaultAddress(parameters.ReservationVault)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot decode reservation vault address: [%w]",
+			err,
+		)
+	}
+	if vaultAddress == (common.Address{}) {
+		// No vault configured: reservations are disabled on-chain.
+		return false, nil
+	}
+
+	trusted, err := tc.bridge.IsVaultTrusted(vaultAddress)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot check whether the reservation vault is trusted: [%w]",
+			err,
+		)
+	}
+
+	return trusted, nil
+}
+
 // TODO(test-coverage): ValidateReservationAnchorProposal has no direct unit
 // test coverage. It requires go-ethereum simulated-backend infrastructure
 // that does not exist anywhere in pkg/chain/ethereum today. PR #4280
