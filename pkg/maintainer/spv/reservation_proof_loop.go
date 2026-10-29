@@ -1372,6 +1372,19 @@ func isMatchingReservationReanchorTransaction(
 		return false
 	}
 
+	// The contract's settlement dust floor: the re-anchored amount must
+	// stay strictly above the snapshotted per-transaction fee bound
+	// (see ReservationProofs.sol, "Re-anchor amount below the dust
+	// floor"). A transaction that does not clear it is rejected by the
+	// contract, so submitting its proof burns a round and the gas
+	// without settling anything.
+	if event.TxMaxFee > 0 {
+		newAnchorAmount := transaction.Outputs[0].Value
+		if newAnchorAmount < 0 || uint64(newAnchorAmount) <= event.TxMaxFee {
+			return false
+		}
+	}
+
 	return true
 }
 

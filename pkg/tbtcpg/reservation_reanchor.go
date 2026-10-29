@@ -786,6 +786,26 @@ func (rrt *ReservationReanchorTask) ProposeReservationReanchor(
 		)
 	}
 
+	// Mirror the run path's request-time floor: the anchor must stay
+	// above txMaxFee + minAmount, or the on-chain request reverts with
+	// "Reanchor would fall below the minimum reservation amount" (see
+	// Reservation.sol). The run path applies this floor to the pass
+	// snapshot of the parameters; this path reads the live parameters for
+	// the fee, so it must apply the floor to them too. Without it the
+	// proposal path burns a round and gas on a request the contract
+	// rejects.
+	anchorValue := uint64(reservation.AnchorUtxo.Value)
+	if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {
+		return nil, fmt.Errorf(
+			"reservation [0x%x] anchor [%d] is not above the re-anchor "+
+				"floor (tx max fee [%d] + min amount [%d])",
+			reservationKey,
+			anchorValue,
+			params.ReservationTxMaxFee,
+			params.ReservationMinAmount,
+		)
+	}
+
 	fee, err = rrt.prepareReservationReanchorTransaction(
 		taskLogger,
 		reservation.AnchorUtxo,
