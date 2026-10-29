@@ -216,7 +216,7 @@ Only the depositor may request acceptance. The signing window is bounded: the de
 
 ### 4. Custody
 
-The position is Active. The owner holds ordinary tBTC: the anchor amount minus the initiation fee. The anchor sits under the custodying wallet; the wallet's honest majority protects it, fraud challenges police it, and the Bridge keeps the tracked claim equal to the anchor at all times. Re-anchoring is available at any position age. The recorded term dates exist so v2 can honor the term; in M1 nothing expires, renews or closes on them, except that a position still sitting on a Closing wallet can be stranded once its dissolution date has passed.
+The position is Active. The owner holds ordinary tBTC: the anchor amount minus the initiation fee. The anchor sits under the custodying wallet; the wallet's honest majority protects it, fraud challenges police it, and the Bridge keeps the tracked claim equal to the anchor at all times. Re-anchoring is available at any position age. The recorded term dates exist so v2 can honor the term; in M1 nothing expires, renews or closes on them. Their only effect is the stranding gate: once a position's dissolution date has passed, anyone may strand it while its custodying wallet is Live, and while the wallet is Closing once its closing period has also ended. A Terminated or Closed wallet needs no date at all.
 
 ### 5. Re-anchor when a wallet retires
 
@@ -429,7 +429,7 @@ Launch posture: M1 launches with a small total cap, limited to a small set of in
 
 1. No in-kind redemption yet. In M1 the owner holds, transfers or uses tBTC, or redeems through standard (pooled) tBTC redemption, which pays from pooled wallet funds, not the anchor.
 2. No owner-initiated way to close a position in M1: no redemption, renewal or dissolution. It stays open until v2 or until its wallet dies (Stranded).
-3. The term is recorded, not enforced. Expiry and dissolution dates exist so v2 can honor the term; in M1 their only effect is the stranding gate on Closing wallets.
+3. The term is recorded, not enforced. Expiry and dissolution dates exist so v2 can honor the term; in M1 their only effect is the stranding gate, which opens for a Live wallet once the position's dissolution date has passed, and for a Closing wallet once its closing period has also ended. Terminated and Closed wallets strand with no date at all.
 4. Stranding: if the custodying wallet is terminated, the in-kind option is lost; the tBTC balance is unchanged; no compensation exists. If that wallet's bitcoin is really lost, the shortfall affects tBTC backing as a whole.
 5. Moving positions depends on the network: re-anchor needs a free slot on another Live wallet and working signer software; off a healthy Live wallet only governance can move a position.
 6. Re-anchor fees shrink the anchor, not the owner's tBTC; covered by the vault's fee reserve, with shortfalls becoming public repayable debt. No lifetime fee cap in M1; positions at or below minimum plus one max fee can never be re-anchored. Size deposits well above the minimum.
