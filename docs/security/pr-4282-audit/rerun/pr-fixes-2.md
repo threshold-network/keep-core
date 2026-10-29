@@ -1,0 +1,17 @@
+# PR #4282 rerun fixes, batch 2 (final, after orchestrator review)
+
+The fixes below are on the audit-fix line. Every "fixed" row below has a test that fails with the fix removed; the orchestrator checked this in scratch worktrees.
+
+| ID | outcome | evidence file:line | one-line reason |
+|---|---|---|---|
+| G1-R11 | fixed `106322562`; `TestRerun_G1R11_RPCCallsParkedAfterTimeoutAreBounded`, `TestRerun_G1R11_IndependentRPCCallsRunConcurrently` | `pkg/tbtc/reservation.go` `reservationRPCSlots`, `rpcCallWithTimeoutErr` | The worker's first fix (`d92646e8f`) keyed an in-flight registry by method label, so one wallet's read rejected the same read for every other wallet, and one hung call blocked that method for all wallets. It was replaced by a global 64-slot bound that is held until the backend answers. Both tests fail on `d92646e8f`; the bound test fails on the pre-fix code. |
+| G1-R29 | fixed `d92646e8f` (reveal-lookup part) + test `2a8134a8f`; `TestRerun_G1R29_RevealLookupCentersOnChainHeadTime` | `pkg/tbtc/reservation.go` reveal lookup now gets `GetLatestBlockTimestamp` | The test asserts that the first lookup window contains the reveal block. With the host clock it starts at [222000, 231999] and misses block 299990. |
+| gas-margin saturation | fixed `fc9cf18d5` + test `2a8134a8f`; `TestRerun_G5R58_GasEstimateWithMarginSaturates` | `pkg/chain/ethereum/ethereum.go` `gasEstimateWithMargin` | The worker's test used MaxUint64, which the old code returns by coincidence. The test now uses 1<<62, where the old code drops the margin. |
+| integer gas margin | fixed `f9235d320` (helper swap at 8 sites; covered by the saturation and existing `TestGasEstimateWithMargin` tests) | `pkg/chain/ethereum/tbtc.go` reservation methods | One integer margin convention instead of `float64(g) * 1.2`. |
+| G1-R19 | disputed; the worker change was reverted (`4a9ad6bfb`) | `pkg/tbtcpg/reservation_reanchor.go` resume path and `pick` (tolerance 0) | Decision D9: strict leader, follower with tolerance. A strict leader only proposes targets that a lenient follower accepts. Giving the leader the follower tolerance lets it propose targets a lagging follower rejects. |
+| G1-R22 | disputed; worker change reverted (`4a9ad6bfb`) | `pkg/tbtcpg/reservation_reanchor.go` floor check | The parameters are governance-set. On chain, the same sum in Solidity 0.8 checked arithmetic reverts at request time, so a re-anchor request with a wrapping sum cannot exist. The worker's test passed on the old code because the search had no Live target. |
+| G1-R23 | disputed; worker change reverted (`ab19c5070`) | `pkg/tbtcpg/fee.go` `estimateReservationFixedSizeTxFee` | The fee estimator rejects a non-positive rate before the product exists, so a negative total fee cannot reach the guard. The worker's test hit the estimator error, not the new guard. |
+| G1-R18 | disputed | `pkg/tbtc/marshaling.go:524,609` | The 8-byte wire fee cap keeps `Int64()` in range; the assembler guards catch programmatic values. |
+| G1-R21 | disputed | `pkg/tbtcpg/reservation_reanchor.go:512-519` | Trying the next candidate after a cap revert is intended and tested (`TestReservationReanchorTask_CapRevertLeadsToNextCandidate`). |
+| G1-R28 | disputed | `pkg/tbtc/coordination.go:84-89` | The empty activation map is the documented staged rollout. |
+| Reserved deposits in the moving-funds sweep | disputed | `pkg/tbtcpg/moving_funds.go:124-130` | Reserved deposits are deliberately not swept into the pool; the on-chain moving-funds validator has no unswept-deposit check. |

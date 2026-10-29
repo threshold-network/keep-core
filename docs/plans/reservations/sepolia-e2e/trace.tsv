@@ -1,0 +1,353 @@
+id	disposition	step	ref	reason
+SM-A1	sepolia	C-01	-	-
+SM-A2	sepolia	C-02	-	-
+SM-A3	sepolia	S-31	-	-
+SM-A4	sepolia	S-22	-	-
+SM-A5	sepolia	S-05	-	-
+SM-A6	sepolia	S-64	-	-
+SM-A7	sepolia	S-32	-	-
+SM-A8	sepolia	S-81	-	-
+SM-C1	n/a	-	-	-
+SM-C10	n/a	-	-	-
+SM-C11	sepolia	S-14	-	-
+SM-C12	sepolia	S-11	-	-
+SM-C13	sepolia	S-14	-	-
+SM-C14	sepolia	S-25	-	-
+SM-C15	sepolia	S-40	-	-
+SM-C16	sepolia	S-71	-	-
+SM-C2	n/a	-	-	-
+SM-C3	n/a	-	-	-
+SM-C4	n/a	-	-	-
+SM-C5	n/a	-	-	-
+SM-C6	n/a	-	-	-
+SM-C7	n/a	-	-	-
+SM-C8	n/a	-	-	-
+SM-C9	n/a	-	-	-
+SM-D1	sepolia-observe	C-03	-	-
+SM-D2	sepolia-observe	C-03	-	-
+SM-D3	sepolia-observe	S-16	-	-
+SM-D4	sepolia-observe	C-04	-	-
+SM-D5	sepolia-observe	S-53	-	-
+SM-R1	sepolia-observe	C-03	-	-
+SM-R10	sepolia-observe	C-06	-	state machine rows are asserted by reading state at each observed boundary; no transaction forces the design-only combination
+SM-R11	sepolia	S-24	-	-
+SM-R2	sepolia-observe	S-14	-	-
+SM-R3	sepolia-observe	S-22	-	-
+SM-R4	sepolia-observe	S-23	-	-
+SM-R5	sepolia-observe	C-09	-	-
+SM-R6	sepolia-observe	S-37	-	-
+SM-R7	sepolia-observe	S-22	-	-
+SM-R8	sepolia-observe	S-50	-	-
+SM-R9	sepolia-observe	S-39	-	-
+SM-S1	n/a	-	-	-
+SM-S2	n/a	-	-	-
+SM-S3	n/a	-	-	-
+SM-S4	n/a	-	-	-
+SM-S5	n/a	-	-	-
+SM-V1	sepolia	C-05	-	-
+SM-W1	sepolia	S-13	-	-
+SM-W2	sepolia	S-31	-	-
+SM-W3	sepolia	S-31	-	-
+SM-W4	sepolia	S-50	-	-
+SM-W5	sepolia	S-50	-	-
+SM-X1	sepolia-observe	C-09	-	-
+SM-X2	sepolia-observe	C-09	-	-
+SM-X3	sepolia-observe	C-09	-	-
+SM-X4	sepolia-observe	C-09	-	-
+SM-X5	sepolia	S-24	-	-
+SM-X6	sepolia	S-39	-	-
+SM-X7	not-testable			design-only: the Vetoed state is not in M1 code (matrix status design-only)
+INV-101	sepolia	S-17	-	-
+INV-102	sepolia	S-50	-	stranding on a Closed wallet that still custodies a live reservation is the reachable form of this statement
+INV-103	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Bridge.ReservationStranding.test.ts:564 'strands an Active reservation on a wallet driven to Terminated by a real moving-funds-timeout call chain, not direct state injection'	a real Terminated wallet only arises from a coordinated operator outage plus walletClosingPeriod plus movingFundsTimeout on testnet4, which cannot be forced on Sepolia
+INV-104	sepolia	S-55	-	-
+INV-105	sepolia	S-23	-	-
+INV-106	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	the Closed position state is unreachable on chain (closeReservation has no entry point); the guard is only observable in a local EVM
+INV-107	sepolia	S-38	-	-
+INV-108	sepolia	S-17	-	-
+INV-109	sepolia	S-10	-	-
+INV-110	sepolia	S-28	-	-
+INV-111	sepolia	S-16	-	-
+INV-112	sepolia	S-92	-	the full state-relation table is covered by the three guard sets S-91/S-92/S-93 plus the boundary reads in S-17
+INV-113	sepolia	S-40	-	-
+INV-114	sepolia	S-34	-	-
+INV-115	sepolia	S-76	-	-
+INV-201	sepolia-observe	C-06	-	-
+INV-202	sepolia-observe	C-06	-	-
+INV-203	sepolia	S-26	-	-
+INV-204	sepolia-observe	C-06	-	-
+INV-205	sepolia-observe	C-08	-	-
+INV-206	sepolia-observe	C-04	-	-
+INV-207	sepolia	S-62	-	-
+INV-208	sepolia-observe	C-08	-	-
+INV-209	sepolia-observe	C-07	-	-
+INV-210	not-testable	-	-	needs a uint32-seconds timestamp wrap, roughly year 2106; substitute: the Medusa caps and accounting properties plus the go-reservation-fuzz runs already bound every counter under arbitrary sequences
+INV-301	sepolia	S-29	-	-
+INV-302	sepolia	C-08	-	-
+INV-303	sepolia	S-27	-	-
+INV-304	sepolia	S-93	-	-
+INV-401	sepolia	C-10	-	-
+INV-402	sepolia	S-35	-	-
+INV-501	sepolia	C-09	-	-
+INV-502	sepolia	S-23	-	-
+INV-503	sepolia	S-29	-	-
+INV-601	sepolia	S-24	-	-
+INV-602	sepolia	S-38	-	-
+INV-603	sepolia	S-18	-	-
+INV-701	sepolia	C-07	-	-
+INV-702	sepolia	S-28	-	-
+INV-703	sepolia-observe	S-07	-	the activation-block coupling is read at the wiring check before setVaultStatus; the SanityCheck unit test keeps the never-case
+INV-704	sepolia	C-07	-	-
+INV-705	sepolia	C-06	-	counter conservation across the Bitcoin and token sides is asserted after every D-step by C-06 and C-07
+PAR-1	sepolia-observe	S-06	-	-
+PAR-10	sepolia	S-03	-	-
+PAR-11	sepolia	S-04	-	-
+PAR-12	sepolia	S-04	-	-
+PAR-13	sepolia	S-05	-	-
+PAR-14	sepolia	S-33	-	-
+PAR-15	sepolia	S-04	-	-
+PAR-16	sepolia	S-04	-	-
+PAR-17	sepolia	S-04	-	-
+PAR-18	sepolia	S-61	-	the treasury fee divisor is left at its Sepolia value and its absence from the reservation path is shown by the gross mint and the skipped rebate in C-07
+PAR-19	sepolia	S-36	-	-
+PAR-2	sepolia	S-06	-	-
+PAR-20	sepolia	S-02	-	-
+PAR-21	sepolia	S-40	-	-
+PAR-3	sepolia	S-06	-	-
+PAR-4	sepolia	S-55	-	-
+PAR-5	sepolia	S-05	-	-
+PAR-6	sepolia	S-26	-	-
+PAR-7	sepolia	S-06	-	-
+PAR-8	sepolia	S-06	-	the renewal window is staged and read back even though no behavior consumes it in M1
+PAR-9	sepolia	S-07	-	-
+PAR-F1	sepolia	S-05	-	-
+PAR-F2	sepolia	S-34	-	-
+PAR-K1	sepolia	S-72	-	-
+PAR-K2	sepolia	S-76	-	-
+PAR-X1	sepolia	S-92	-	-
+PAR-X2	sepolia	S-09	-	-
+PAR-X3	sepolia	S-04	-	-
+PAR-X4	sepolia	S-40	-	-
+PAR-X5	sepolia	S-09	-	-
+PAR-X6	sepolia	S-18	-	-
+PAR-X7	sepolia	S-64	-	-
+PAR-X8	sepolia	S-92	-	-
+PAR-X9	sepolia	S-16	-	-
+US-01	sepolia	S-13	-	-
+US-02	sepolia	S-18	-	-
+US-03	sepolia	S-15	-	-
+US-04	sepolia	S-17	-	-
+US-05	sepolia	S-17	-	-
+US-06	sepolia	S-24	-	-
+US-07	sepolia	S-22	-	-
+US-08	sepolia	S-23	-	-
+US-09	sepolia	S-23	-	-
+US-10	sepolia	S-53	-	-
+US-100	sepolia	S-71	-	-
+US-11	sepolia	S-61	-	-
+US-12	sepolia	S-19	-	-
+US-13	sepolia	S-50	-	-
+US-14	sepolia	S-55	-	-
+US-15	sepolia	S-96	-	-
+US-20	sepolia	S-21	-	-
+US-21	sepolia	S-21	-	-
+US-22	sepolia	S-21	-	the candidate inside the two-hour timeout safety margin is skipped rather than proposed; observed as a proposal that never appears
+US-23	sepolia	S-31	-	-
+US-24	sepolia	S-36	-	-
+US-25	sepolia	S-36	-	-
+US-26	sepolia	S-36	-	-
+US-27	sepolia	S-36	-	-
+US-28	sepolia	S-07	-	-
+US-29	sepolia	S-94	-	-
+US-30	sepolia	S-35	-	-
+US-31	sepolia	S-32	-	-
+US-32	sepolia	S-38	-	-
+US-33	sepolia	S-37	-	-
+US-34	sepolia	S-31	-	-
+US-40	sepolia	S-22	-	-
+US-41	sepolia	S-37	-	-
+US-42	sepolia	S-98	-	-
+US-43	sepolia	S-93	-	-
+US-44	sepolia	S-93	-	-
+US-45	sepolia	S-93	-	-
+US-46	sepolia	S-83	-	-
+US-47	sepolia	S-24	-	-
+US-48	sepolia	S-53	-	-
+US-49	sepolia	S-50	-	-
+US-50	sepolia	S-11	-	the keeper feasibility gauge is read next to the SDK and on-chain feasibility outcomes in S-04 and S-11
+US-51	sepolia	C-11	-	-
+US-60	sepolia	S-06	-	-
+US-61	sepolia	S-05	-	-
+US-62	sepolia	S-07	-	-
+US-63	sepolia	S-03	-	-
+US-64	sepolia	S-02	-	-
+US-65	sepolia	S-54	-	-
+US-66	sepolia	S-04	-	-
+US-67	sepolia	S-34	-	-
+US-68	sepolia	S-64	-	-
+US-69	sepolia	S-62	-	-
+US-70	sepolia	S-32	-	-
+US-71	sepolia	S-33	-	-
+US-72	sepolia	S-33	-	-
+US-73	sepolia	S-34	-	-
+US-74	sepolia	S-31	-	-
+US-75	sepolia	S-38	-	-
+US-76	n/a			pointer row; its behaviors are US-06, US-10, US-32, US-13
+US-80	sepolia	C-07	-	-
+US-81	sepolia	S-63	-	-
+US-82	sepolia	S-62	-	-
+US-83	sepolia	S-65	-	-
+US-90	sepolia	S-16	-	-
+US-92	sepolia	S-17	-	-
+US-93	sepolia	S-11	-	-
+US-94	sepolia	S-12	-	-
+US-95	sepolia	S-12	-	-
+US-96	sepolia	S-12	-	-
+US-97	sepolia	S-15	-	-
+US-98	sepolia	S-25	-	-
+US-99	sepolia	S-14	-	-
+EC-01	sepolia	S-24	-	-
+EC-02	sepolia	S-38	-	-
+EC-03	sepolia	S-18	-	-
+EC-04	sepolia	S-23	-	-
+EC-05	sepolia	S-04	-	-
+EC-06	sepolia	S-17	-	-
+EC-07	sepolia	S-27	-	-
+EC-08	sepolia	S-09	-	-
+EC-09	sepolia	S-33	-	-
+EC-10	sepolia	S-24	-	-
+EC-11	sepolia	S-50	-	-
+EC-12	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/maintainer/spv/reservation_event_scan_test.go:306 TestReservationScanRange	an Ethereum reorg cannot be produced on Sepolia; the bounded inclusive scan range is proven against a local chain with injected history
+EC-13	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/maintainer/spv/reservation_proof_loop_test.go:1272 TestProveReservationTransaction_SelectsConfirmedRBFCandidate	a Bitcoin reorg cannot be staged on testnet4; the confirmed-RBF selection is proven with injected candidate lists
+EC-14	sepolia	S-29	-	-
+EC-15	sepolia	S-29	-	-
+EC-16	sepolia	S-12	-	-
+EC-17	sepolia	S-07	-	the inclusive activation-block comparison is observable on chain: the client proposes nothing at B-1 and proposes at B
+EC-18	sepolia	S-40	-	-
+EC-19	sepolia	S-92	-	-
+EC-20	sepolia	S-28	-	-
+EC-21	not-testable	-	-	needs every Live wallet on Sepolia to close or terminate, which requires four consecutive walletCreationPeriod rotations and destroys the drill's own capacity; substitute: Bridge.MovingFunds.test.ts 'No target wallets available' and 'Live wallets count must be zero'
+EC-22	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/prepare-artifact-guard.test.ts:350 'rejects the wrong chain id', :356 'rejects a different Bridge proxy', :363 'rejects the rehearsal-node artifact on the Sepolia key network'	the guard reads local files; its happy and negative paths run before every rehearsal invocation and a tampered deployment reference cannot be installed on Sepolia
+EC-23	sepolia	S-07	-	the drill clients are released before B and their diagnostics are checked, so wallets registered earlier are discovered once the block passes
+EC-24	sepolia	S-76	-	-
+FM-01	sepolia	S-72	-	-
+FM-02	sepolia	S-22	-	-
+FM-03	sepolia	S-83	-	-
+FM-04	sepolia	S-81	-	-
+FM-05	sepolia	S-21	-	-
+FM-06	sepolia	S-24	-	-
+FM-07	sepolia	S-62	-	-
+FM-08	sepolia	S-34	-	-
+FM-09	sepolia	S-55	-	-
+FM-10	sepolia	S-09	-	-
+FM-11	sepolia	S-07	-	-
+FM-12	sepolia	S-82	-	-
+FM-13	sepolia	S-27	-	-
+FM-14	not-testable	-	-	needs a Sepolia base-fee spike large enough to change admission; reservation admission reads no gas price, so the outcome would be an ordinary out-of-gas retry; substitute: the snapshotted txMaxFee bound in EC-07 and S-27
+DR-01	sepolia	S-73	-	-
+DR-02	sepolia	S-50	-	-
+DR-03	sepolia	S-02	-	-
+DR-04	not-testable	-	-	needs a real vault compromise; substitute: the deactivation rehearsal in S-28 and ReservationProofs.test.ts 'should credit the deposit's immutable vault, not a reservationVault repointed mid-flight'
+DR-05	not-testable	-	-	the rehearsal prepare phase already set the router on Sepolia and it is write-once, so a wrong router cannot be installed and then repaired on a live chain; substitute: the set-once, non-zero and must-be-a-contract reverts at S-03 and Bridge.Parameters.test.ts setReservationRouter
+DR-06	sepolia-observe	S-01	-	the upgrade's before/after state snapshot is compared inside the rehearsal script; a wrong upgrade with broken storage parity cannot be produced and then diagnosed on a live chain
+DR-07	sepolia	S-07	-	a client whose activation block is in the future proposes nothing, which is the same observable as the wrong-block release
+DR-08	sepolia	S-24	-	both pending actions are allowed to time out in the same drill; max active 2 bounds the batch at two
+DR-09	sepolia	S-62	-	-
+DR-10	sepolia	S-23	-	-
+DR-11	not-testable	-	-	the Bridge owner key is the only governance key and its loss ends every ceremony; no recovery exists to rehearse; substitute: the write-once and delay-negative ceremony at S-02 and S-97
+DR-12	not-testable	-	-	the vault has no key rotation or recovery path in M1 (AR-03: the vault is not upgradeable); substitute: the owner-only writes in S-64 and the debt-repayment path in S-62, which any address can fund
+TM-01	sepolia	S-18	-	-
+TM-02	sepolia	S-33	-	-
+TM-03	sepolia	S-92	-	-
+TM-04	sepolia	S-29	-	-
+TM-05	sepolia	S-93	-	-
+TM-06	sepolia	S-92	-	-
+TM-07	sepolia	S-50	-	-
+TM-08	sepolia	S-33	-	-
+TM-09	sepolia	S-98	-	-
+TM-10	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Bridge.StorageLayout.test.ts:45 'upgrade-safe against the deployed TIP-109 Bridge layout'	storage-layout parity is a compile-time property of the layout diff; S-01 exercises the live upgrade but cannot produce a colliding layout
+TM-11	sepolia	S-65	-	-
+TM-12	sepolia	S-53	-	-
+TM-13	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/maintainer/spv/reservation_event_scan_test.go:146 TestFetchPastEventsInChunks_ChunkBoundaries	the bounded scan is proven against chunk boundaries locally; a hostile RPC provider cannot be staged on Sepolia
+TM-14	sepolia	S-09	-	-
+TM-15	sepolia	S-07	-	-
+TM-16	sepolia	S-24	-	-
+TM-17	not-testable	-	-	needs a poisoned client binary or a compromised release pipeline; substitute: the coordination and activation-derivation tests TestReservationsActivationBlock_SanityCheck and TestCoordinationExecutor_GetActionsChecklist_Reservations
+TM-18	not-testable	-	-	a compromised governance key is out of test scope and unrecoverable by construction; substitute: the capability matrix C-10 and the owner-only writes in S-05 and S-09
+TM-19	sepolia	S-64	-	-
+TM-20	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/maintainer/spv/reservation_proof_loop_test.go:1272 TestProveReservationTransaction_SelectsConfirmedRBFCandidate	the shared confirmation-depth behavior is proven locally; a Bitcoin fee manipulation cannot be staged on testnet4
+XR-E-1	sepolia	S-15	-	-
+XR-E-2	sepolia	S-31	-	-
+XR-E-3	offchain	-	keep-core@pr-4282-reservations-epic-3vasio:pkg/chain/ethereum/tbtc_test.go:739 TestResolveEarliestWalletRegistrationBlock	a new wallet registration needs a full walletCreationPeriod rotation that the drill must not trigger mid-scenario
+XR-E-4	sepolia	S-13	-	-
+XR-F-1	sepolia	S-92	-	-
+XR-F-10	sepolia	S-05	-	-
+XR-F-11	sepolia	S-22	-	-
+XR-F-12	sepolia	S-37	-	-
+XR-F-13	sepolia	S-24	-	-
+XR-F-14	sepolia	S-24	-	-
+XR-F-15	sepolia	S-53	-	-
+XR-F-16	sepolia	S-50	-	-
+XR-F-17	sepolia	S-15	-	-
+XR-F-18	sepolia	S-54	-	-
+XR-F-19	sepolia	S-93	-	-
+XR-F-2	sepolia	S-05	-	-
+XR-F-20	sepolia	S-35	-	-
+XR-F-21	sepolia	S-14	-	-
+XR-F-22	sepolia	S-16	-	-
+XR-F-23	sepolia	S-05	-	-
+XR-F-3	sepolia	S-32	-	-
+XR-F-4	sepolia	S-15	-	-
+XR-F-5	sepolia	S-26	-	-
+XR-F-6	sepolia	S-14	-	-
+XR-F-7	sepolia	S-14	-	-
+XR-F-8	sepolia	S-14	-	-
+XR-F-9	sepolia	S-06	-	-
+XR-G-1	not-testable	-	-	a CI job over a pinned tbtc-v2 ref; nothing to send to Sepolia; substitute: Bridge.ReservationAbiSnapshot.test.ts, which is the same diff the gate performs
+XR-G-2	not-testable	-	-	a keep-core workflow-file fact about TBTC_V2_REF; there is no chain surface to exercise; substitute: the same workflow's diff step, read at review time
+XR-G-3	sepolia	S-98	-	-
+XR-M-1	sepolia-observe	C-11	-	-
+XR-M-10	sepolia-observe	S-74	-	-
+XR-M-11	sepolia-observe	S-75	-	-
+XR-M-12	sepolia-observe	S-76	-	-
+XR-M-2	sepolia-observe	C-11	-	-
+XR-M-3	sepolia-observe	S-09	-	-
+XR-M-4	sepolia-observe	C-11	-	-
+XR-M-5	sepolia-observe	C-11	-	-
+XR-M-6	sepolia-observe	C-11	-	-
+XR-M-7	sepolia-observe	S-73	-	-
+XR-M-8	sepolia-observe	S-72	-	-
+XR-M-9	sepolia-observe	S-73	-	-
+XR-P-1	sepolia	S-27	-	-
+XR-P-2	sepolia	S-15	-	-
+XR-P-3	sepolia	S-21	-	-
+XR-P-4	sepolia	S-18	-	-
+XR-P-5	sepolia	S-36	-	-
+XR-P-6	sepolia	S-35	-	-
+XR-P-7	sepolia	S-94	-	-
+XR-R-1	sepolia	S-36	-	-
+XR-R-2	sepolia	S-38	-	-
+XR-S-1	sepolia	S-14	-	-
+XR-S-2	sepolia-observe	S-14	-	the Go ordinals are pinned by the state translation asserted at every status read in S-14
+XR-S-3	sepolia	S-37	-	-
+XR-T-1	sepolia-observe	S-21	-	-
+XR-T-2	sepolia	S-38	-	-
+XR-T-3	sepolia	S-36	-	-
+XR-T-4	sepolia-observe	S-21	-	-
+XR-T-5	sepolia	S-07	-	-
+AR-01	sepolia	S-33	-	-
+AR-02	sepolia	C-02	-	-
+AR-03	not-testable	-	-	The ReservationVault has no proxy and no upgrade entry point; nothing can be exercised about upgrading it. Substitute: S-64 and S-65, which cover every owner-writable function and its guards.
+AR-04	not-testable	-	-	The M2 migration ceremony has no code in the M1 contracts; design-only. Substitute: none; it becomes testable when the migration code lands.
+AR-05	not-testable	-	-	Compensation for a stranded position is an off-chain policy with no on-chain surface; design-only. Substitute: S-50, the stranding transition that creates the claim.
+AR-06	sepolia	S-92	-	-
+AR-07	offchain	-	tbtc-v2@reconciled-contracts:solidity/test/bridge/Reservation.test.ts:286 'should revert if reservation already exists (state == Closed)'	closeReservation has no entry point in M1, so the unreachable closed-position guard is only observable in a local EVM
+AR-08	sepolia	S-33	-	-
+AR-09	sepolia	S-31	-	-
+AR-10	sepolia	S-72	-	-
+AR-11	sepolia	S-16	-	-
+AR-12	sepolia	S-62	-	-
+AR-13	not-testable	-	-	needs a keeper started more than 30 days after the stranding event it would find. Substitute: keep-core pkg/maintainer/spv/reservation_wiring_test.go TestScanReservationStrandingStartupRegistrations and TestRetryReservationStrandingStartupScan.
+AR-14	sepolia	S-38	-	-
+AR-15	sepolia	S-40	-	-
+AR-16	sepolia	S-07	-	-
