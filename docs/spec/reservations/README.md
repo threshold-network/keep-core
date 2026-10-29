@@ -41,6 +41,7 @@ Entries carry the date the revision entered this repository.
 | Date | Change |
 |---|---|
 | 2026-10-29 | Added the UTXO reservations design and verification specification, with pinned citations and a derived traceability matrix |
+| 2026-10-29 | Bounded `reservationDissolutionDelay` at 730 days, so the tenth validation check in `updateReservationParameters`, the PAR-4 row and the traceability entry for it changed; a reader of the earlier revision must re-read the PAR-4 rows of `verification/03-parameters-governance.md` and `verification/11-traceability.md`, FR-12 in `requirements.md`, and the `reservationDissolutionDelay` row of its parameter table |
 
 ---
 
