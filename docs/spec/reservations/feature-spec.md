@@ -548,13 +548,22 @@ before expiry (`now < expiresAt`) — see §5.
 `requestReservationReanchor(reservationKey, targetWalletPubKeyHash)` —
 allowed only in a migration/approved-rotation context: source wallet in
 `MovingFunds`, or caller is governance (rotating a Live wallet, via
-`BridgeGovernance.requestReservationReanchor`, forwarded as
-`IReservationBridge.requestReservationReanchor`). Target must be Live,
+`BridgeGovernance.requestReservationReanchor(uint256,bytes20)`, `onlyOwner`
+on the governance contract and not staged behind a governance delay, which
+calls `IReservationBridge.requestReservationReanchor` at the Bridge address
+with empty `walletMembersIDs` and member index 0; the Bridge's fallback
+`delegatecall`s the router, so the router observes `msg.sender ==
+governance` and passes `privileged = true`). Target must be Live,
 different from source, with capacity (reserved at request). Proof requires
 the single output to pay the *recorded* target. Same-wallet re-anchors no
 longer exist (removes the earlier re-anchor/dissolution byte-ambiguity — a
 proof settles only against the single outstanding generation of its
 recorded action type). Anchor shrinks by the financed miner fee (§6).
+The governance-side entry point is not part of the frozen surface: at the M1
+pin `d1bf5bc281` `BridgeGovernance` has no such function, and the forwarder
+described here is the one tbtc-v2#1179 adds. The audit set cites that function
+at the final head of tbtc-v2#1179 (`3260e271`), open with a green check run and not yet merged, marks those citations pending merge, and the
+sentence becomes true only when the PR lands before the freeze.
 
 **Forward compatibility note**: the `targetWalletPubKeyHash` liveness check
 (`registeredWallets[...].state == Live`) is already scheme-agnostic — a future FROST/P2TR

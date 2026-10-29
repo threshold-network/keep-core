@@ -181,7 +181,7 @@ earlier plan to ship a full vault entry-point surface behind pause flags.
 | Vault owner (Threshold Council, via `BridgeGovernance`) | Owns the vault; sets `initiationFeeBps` (capped 5%) and `feeReserveTarget` instantly; sweeps fees | Same governance trust as the rest of the Bridge; instant (non-delayed) setters are a deliberate M1 choice pending a possible future delay |
 | SPV maintainer | Submits acceptance and re-anchor SPV proofs (`onlySpvMaintainer`) | Approved allow-list (`self.isSpvMaintainer`); cannot forge a proof or change what it settles — Bitcoin PoW/Merkle/coinbase checks are unconditional |
 | Permissionless callers / keepers | File every M1 housekeeping notification with no reward: action timeout, stale-deposit release, stranding, fee-debt repayment | Untrusted by design — every one of these calls is a bookkeeping transition the contract itself fully validates; no call can move funds beyond what the state machine already authorized |
-| Governance (`BridgeGovernance` on behalf of Bridge) | `updateReservationParameters`, `updateReservationCaps`, `setReservationRouter` (once), privileged re-anchor of a healthy (`Live`-wallet) position; `forceStaleReservedDeposit`, which is immediate and has no governance delay | The two setters and the router assignment use the staged begin/finalize governance-delay trust of the rest of the Bridge, and every setter validates its own relational invariants on-chain (FR-11, FR-12). `forceStaleReservedDeposit` is governance-only and is NOT staged: it runs as soon as the owner calls it, because it is the incident-response partner of the permissionless `notifyStaleReservedDeposit`. The natspec states "not have a governance delay, matching `notifyStaleReservedDeposit`'s" and continues with own no-delay, incident-response nature (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/BridgeGovernance.sol:1939-1940`) |
+| Governance (`BridgeGovernance` on behalf of Bridge) | `updateReservationParameters`, `updateReservationCaps` (the staged slot is readable through `pendingReservationCapsUpdate()`), `setReservationRouter` (once), privileged re-anchor of a healthy (`Live`-wallet) position through `BridgeGovernance.requestReservationReanchor(uint256 reservationKey, bytes20 targetWalletPubKeyHash)`, which is `onlyOwner`; `forceStaleReservedDeposit`, which is immediate and has no governance delay | The two setters and the router assignment use the staged begin/finalize governance-delay trust of the rest of the Bridge, and every setter validates its own relational invariants on-chain (FR-11, FR-12). `forceStaleReservedDeposit` is governance-only and is NOT staged: it runs as soon as the owner calls it, because it is the incident-response partner of the permissionless `notifyStaleReservedDeposit`. The natspec states "not have a governance delay, matching `notifyStaleReservedDeposit`'s" and continues with own no-delay, incident-response nature (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/BridgeGovernance.sol:1939-1940`). `requestReservationReanchor` is governance-only and is NOT staged for the same reason: it acts on one identified position and `Reservation.requestReservationReanchor` re-checks every condition at execution time (position `Active`, target `Live` and different from the source, target capacity, request-time amount floor), so a staged copy would only let those conditions drift between stage and finalize. It forwards to the reservation surface at the Bridge address with empty `walletMembersIDs` and member index 0; the Bridge fallback `delegatecall`s the router, which therefore observes `msg.sender == governance` and passes `privileged = true` (`tbtc-v2@3260e271b:solidity/contracts/bridge/BridgeGovernance.sol:1973-1983`). `pendingReservationCapsUpdate()` returns the five staged caps values in `beginReservationCapsUpdate`'s argument order followed by the initiation timestamp, zero when nothing is staged, so a signer can read what a `begin` is about to overwrite (`tbtc-v2@3260e271b:solidity/contracts/bridge/BridgeGovernance.sol:1999-2019`). **Both of those citations are pending merge before the freeze:** the forwarder and the getter are on tbtc-v2#1179, at its final head `3260e271` (the PR is open with a green check run and not yet merged), and are absent at the freeze pin `d1bf5bc281`, so the pin above is that PR's head and must be re-pointed at the merge head on freeze day |
 | Wallet registry / DAO (indirect) | Determines wallet lifecycle transitions (`Live`/`MovingFunds`/`Closing`/`Terminated`/`Closed`) that gate re-anchor eligibility and the stranding precondition | Out of this feature's direct control surface; reservations consume wallet state, they do not produce it |
 
 ## 6. User stories
@@ -271,11 +271,21 @@ that I can rebalance custody without waiting for the wallet to retire.
 - **Given** an `Active` reservation on a `Live` source wallet, a different
   `Live` target wallet with headroom, and no cooldown in effect,
 - **When** `BridgeGovernance` (i.e. `msg.sender == governance`) calls
-  `requestReservationReanchor`,
+  `requestReservationReanchor` through
+  `BridgeGovernance.requestReservationReanchor(uint256,bytes20)` —
+  `onlyOwner`, no governance delay, empty `walletMembersIDs` and member
+  index 0 (`tbtc-v2@3260e271b:solidity/contracts/bridge/BridgeGovernance.sol:1973-1983`).
 - **Then** the request succeeds **at any position age** — M1 code has no
   `dissolutionEligibleAt` gate on re-anchor at all
   (`Reservation.sol:722-858`, confirmed by full read: no reference to
   `dissolutionEligibleAt` in the function body).
+- **Pending merge:** that forwarder does not exist at the freeze pin
+  `d1bf5bc281`, where `BridgeGovernance` has no reservation re-anchor entry
+  point, so the router's governance branch is reachable only if the
+  `BridgeGovernance` address itself is the caller and nothing in the shipped
+  governance surface can be that caller. The citation above names the final head
+  of tbtc-v2#1179, which is open with a green check run and not yet merged, and it
+  must be re-pointed at the merge head on freeze day.
 - Maps to tbtc-v2#5. **Correction:** that readiness doc's "current status"
   records a confirmed deviation (a `dissolutionEligibleAt` gate still
   present and unconditional) against an earlier snapshot (`landed tip

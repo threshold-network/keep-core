@@ -56,6 +56,20 @@ and `beginReservationCapsUpdate` takes five arguments (selector `0x4c1cda81`;
 The fifth argument is `handoffReserveWallets` (PAR-F1). The setter and event
 shapes changed; the four rows below describe unchanged parameters.
 
+Read the staged slot before staging one: `pendingReservationCapsUpdate()`
+returns the five values in `beginReservationCapsUpdate`'s argument order
+followed by the initiation timestamp, zero when nothing is staged, because a
+second `begin` overwrites the single staged slot without a warning, so a
+capacity reduction and a cap raise can silently replace each other. The view
+is unrestricted, as the same values are already public through
+`ReservationCapsUpdateStarted`, and it is read-only: it shows what a `begin`
+is about to replace, it does not prevent the replacement
+(`tbtc-v2@3260e271b:solidity/contracts/bridge/BridgeGovernance.sol:1999-2019`).
+That getter is pending merge before the freeze and is absent at `d1bf5bc281`,
+so the citation names the final head of tbtc-v2#1179 (`3260e271`), which is open
+with a green check run and not yet merged, and must be re-pointed at the merge
+head on freeze day.
+
 | ID | Parameter (type) | Meaning | Validation rule (cite) | Who may set | Status | Test |
 |---|---|---|---|---|---|---|
 | PAR-11 | `maxReservationsAmountPerWallet` (uint64) | Per-wallet anchor-amount cap; 0 disables. | Feasibility dust rule (PAR-X3) | governance | `holds` | `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new per-wallet amount cap drops below the dust threshold" |
