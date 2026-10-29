@@ -703,7 +703,7 @@ const (
 	//   - MetricSpvReservationProofsRetriedTotal counts the proof rounds
 	//     that failed for an item and were left for a later round, so the
 	//     same generation is tried again.
-	MetricSpvReservationProofsSubmittedTotal  = "spv_reservation_proofs_submitted_total"
+	MetricSpvReservationProofsSubmittedTotal = "spv_reservation_proofs_submitted_total"
 	MetricSpvReservationProofsSucceededTotal = "spv_reservation_proofs_succeeded_total"
 	MetricSpvReservationProofsFailedTotal    = "spv_reservation_proofs_failed_total"
 	MetricSpvReservationProofsRetriedTotal   = "spv_reservation_proofs_retried_total"
@@ -715,7 +715,6 @@ const (
 	// stalled and the on-chain actions it proves are not being settled.
 	// It is 0 until the first successful round.
 	MetricSpvReservationProofLastSuccessTimestamp = "spv_reservation_proof_last_success_timestamp_seconds"
-
 
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"
