@@ -194,7 +194,7 @@ Residual: this is the accepted M1 loss story; no on-chain compensation exists. T
 Test: stranding transition and counter decrement are pinned (`tbtc-v2:solidity/test/bridge/Bridge.ReservationStranding.test.ts:525`, `tbtc-v2:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:110`). The cross-cutting chain (pressure -> slash -> strand) is not rehearsed end-to-end.
 
 Negative stories (04-user-stories.md, by topic): US-13 "Stranding on a Terminated wallet"; US-14 "Stranding on a Closing wallet after dissolution eligibility and the closing period"; US-101 "Stranding on a dissolution-eligible Live wallet"; US-49 "Stranding watcher (keep-core side)"
-Status: `holds-untested`. The entry conditions above replace the earlier "the wallet has left Live" framing; the client-side gap is that the shipped watcher never takes the Live branch (VF-10).
+Status: `holds-untested`. The entry conditions above replace the earlier "the wallet has left Live" framing. The client-side gap (VF-10) was the shipped watcher never taking the Live branch; keep-core #4365 added it, and the branch runs on the startup catch-up scan and the action-timeout recheck queue.
 
 ## TM-08 Slash honest operators via saturation
 

@@ -188,7 +188,7 @@ already covered elsewhere — kept below only as pointers to where. §3.3 is a g
 documentation fill: an assumption made here, not elsewhere. §3.4 and §3.5 are flagged, not
 silently decided.
 
-### 3.1 Monitoring watch-list — one gap remains
+### 3.1 Monitoring watch-list — the client gap is closed, reach remains
 
 `../feature-spec.md`'s executor-monitoring bullets (lines ~928-941) already assign the duty to
 watch `Terminated` wallets still custodying un-stranded reservations and call
@@ -198,16 +198,17 @@ wallet close/termination events, walks a wallet's custodied reservations
 (`checkReservationStrandingForWallet`) and forwards a stranding notification for every one still
 `Active`, retrying transient RPC failures up to three times.
 
-**The one remaining gap (`../m1-keep-core-readiness/01-gap-analysis.md`'s "Stranding coverage
-gap for `Closing`-past-`dissolutionEligibleAt` wallets" row):** the watcher acts only on wallets in
-`StateClosed` or `StateTerminated`. The contract also allows stranding a reservation on a
-`Closing` wallet once `now >= reservation.dissolutionEligibleAt` (`Reservation.sol`
-~1104–1107), but no client path triggers that condition. `ReservationReanchorTask`
-(`pkg/tbtcpg/reservation_reanchor.go ~:139`) drains MovingFunds sources but does not
-handle Closing wallets. The permissionless calls (`notifyReservationStranded`,
-`requestReservationReanchor`) are the backstop for this case; closing the gap in the
-automated watcher is a keep-core task item. This subsection is retained as a pointer to
-the implementation and the gap.
+**The gap this subsection used to name (`../m1-keep-core-readiness/01-gap-analysis.md`'s "Stranding coverage
+gap for `Closing`-past-`dissolutionEligibleAt` wallets" row) is closed in the client since keep-core
+#4365.** The watcher dispatches by wallet state: `Closed` and `Terminated` notify outright, a `Closing`
+wallet notifies once `now >= reservation.dissolutionEligibleAt` and the closing period has ended, and a
+`Live` wallet notifies once `now >= reservation.dissolutionEligibleAt`
+(`pkg/maintainer/spv/reservation_stranding_watch.go:155-176`, gates at `:356-366` and `:380-390`).
+What remains is reach rather than a missing branch: no chain event marks a term's expiry, so the `Live`
+form runs on the startup catch-up scan and on the action-timeout watcher's recheck queue, and the
+permissionless calls (`notifyReservationStranded`, `requestReservationReanchor`) stay the backstop for
+a `Live` wallet that neither client path reaches. This subsection is retained as a pointer to the
+implementation.
 
 ### 3.2 Re-anchor on wallet rotation — already covered, not a gap
 

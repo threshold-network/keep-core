@@ -133,10 +133,11 @@ taken on 2026-10-29 and the code does not change.
 - Revisit trigger: before mainnet, confirm the promised custody semantics and the M2 migration terms.
 - Status: `holds` at `tbtc-v2@4c98e6b82` for the explicit guards
   (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1294-1326`).
-  The client side is uneven: the keep-core watcher notifies for
-  `Closed`/`Terminated` and for a dissolution-eligible `Closing` wallet, but it
-  has no `Live` branch, so a Live-wallet strand needs another caller
-  (`keep-core@f03cc61dc:pkg/maintainer/spv/reservation_stranding_watch.go:148-162`).
+  The client side is uneven: since keep-core #4365 the watcher notifies for all
+  four admissible states (`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),
+  but the `Live` branch runs only on the startup catch-up scan and on the
+  action-timeout recheck queue, so a Live-wallet strand that neither path reaches
+  still needs another caller.
   Range tests: `tbtc-v2@4c98e6b82:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:263`
   (Closing past both), `:386` (Live before eligibility), `:397` (Live past it).
 

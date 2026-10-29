@@ -116,25 +116,19 @@ taken on 2026-10-29 and the code does not change.
 - **Why.** These equality/strict choices define the exact settlement windows;
   the stale `>` (strict) means the deadline instant itself is not yet stale.
 - **Client check on a Closing wallet.** The keep-core stranding watcher gates a
-  `Closing` wallet on `dissolutionEligibleAt` only: the dispatch at
-  `keep-core@f03cc61dc:pkg/maintainer/spv/reservation_stranding_watch.go:148-163`
-  sets `requireDissolutionEligible`, and the check at
-  `keep-core@f03cc61dc:pkg/maintainer/spv/reservation_stranding_watch.go:282-292`
-  compares the chain head with `DissolutionEligibleAt` alone. The contract's
-  `Closing` clause additionally needs
-  `block.timestamp >= closingStartedAt + walletClosingPeriod` (above), so a
-  notification sent between the two gates reverts with "Wallet is not
-  terminated, closed, or a dissolution-eligible closing wallet"
+  `Closing` wallet on both conditions. The dispatch sets the
+  dissolution-eligible requirement for `Live` and `Closing`
+  (`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:232-234`),
+  the loop compares the chain head with `DissolutionEligibleAt` (`:356-368`), and
+  a `Closing` wallet additionally has to be past
+  `closingStartedAt + walletClosingPeriod` (`:379-392`), so the client no longer
+  sends the notification the contract would revert
   (`tbtc-v2@4c98e6b82:solidity/contracts/bridge/Reservation.sol:1310-1322`).
-  The watcher logs that failure and continues with the remaining reservations
-  (`keep-core@f03cc61dc:pkg/maintainer/spv/reservation_stranding_watch.go:295-303`)
-  without setting the `recheck` flag the other deferral branches use. The check
-  runs on the wallet-close subscription
-  (`keep-core@f03cc61dc:pkg/maintainer/spv/reservation_wiring.go:903-912`) and on
-  one startup catch-up scan (`:882`), so such a reservation is notified only if
-  a later event or a restart re-runs the pass for that wallet. This is the
-  second client-side gap on this rule, recorded with the missing `Live` branch
-  under AR-11. It strands nothing early and moves no funds.
+  A wallet that fails either gate sets the `recheck` flag and is retried on a
+  later pass. Before keep-core #4365 the `Closing` check read the
+  dissolution-eligible time alone and logged the revert without setting the
+  flag; the `Live` branch did not exist. It strands nothing early and moves no
+  funds.
 - **Test.** `Reservation.test.ts` "should succeed when timeoutAt + 24h ==
   refundDeadline (close bound exact)" (:405) and "should revert when
   timeoutAt + 24h == refundDeadline + 1s" (:433);
