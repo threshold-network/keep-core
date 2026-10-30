@@ -74,7 +74,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [SM-R4](01-system-model.md) | Unknown | holds | `ReservationProofs.test.ts` "8. Late-settle and pending newer generation unwinding" |
 | [SM-R5](01-system-model.md) | Active | holds | `Bridge.ReservationSourceAnchorBinding.test.ts`; `Bridge.ReservationThirdPartyReanchorHolds.test.ts` (at `806b1106f`: ... |
 | [SM-R6](01-system-model.md) | Active | holds | `Bridge.ReservationStranding.test.ts` "notifyReservationStranded"; `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:186` (Closing ... |
-| [SM-R7](01-system-model.md) | ActionPending (on-time), Active or qualifying Stranded (late) | holds | `ReservationProofs.test.ts` end-to-end SPV cases |
+| [SM-R7](01-system-model.md) | ActionPending (on-time), Active or qualifying Stranded (late) | holds | `tbtc-v2@c8350d109:solidity/test/bridge/ReservationProofs.test.ts` end-to-end SPV cases |
 | [SM-R8](01-system-model.md) | Active / ActionPending / Stranded | holds | `ReservationProofs.test.ts` "9. Strand flow on late settlement"; `tbtc-v2@c8350d109:solidity/test/bridge/ReservationProofs.test.ts:1434` (Closing target stays ... |
 | [SM-R9](01-system-model.md) | Active or ActionPending | holds | `ReservationProofs.test.ts` "8. ... unwinding" |
 | [SM-S1](01-system-model.md) | Position record (`ReservationRequest`) | model | none recorded |
@@ -226,7 +226,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [US-42](04-wallet-spv-stories.md) | Proof submission gate (negative) | holds-untested | `none` (no test in `test/bridge/` asserts this exact revert string at the router entry ... |
 | [US-43](04-wallet-spv-stories.md) | Wrong proof type (negative) | holds | `test/bridge/ReservationProofs.test.ts:203` ("should revert if proof type is out of range"), `:229` ... |
 | [US-44](04-wallet-spv-stories.md) | Action not settleable (negative) | holds | `test/bridge/ReservationProofs.test.ts:296`, `:315`, `:334`, `:353`, `:372`; `test/bridge/Reservation.test.ts:1487`. Status `holds`. |
-| [US-45](04-wallet-spv-stories.md) | Anchor / input / output reverts in the proof (negative) | holds-untested | `test/bridge/ReservationProofs.test.ts:699`, `:707`, `:719`, `:734`, `:767`, `:779`, `:791`, `:805` ... |
+| [US-45](04-wallet-spv-stories.md) | Anchor / input / output reverts in the proof (negative) | holds-untested | `tbtc-v2@9d2086965:solidity/test/bridge/ReservationProofs.test.ts:699`, `:707`, `:719`, `:734`, `:767`, `:779`, `:791`, `:805` ... |
 | [US-46](04-wallet-spv-stories.md) | Per-item errors do not block sibling actions; restart resumes scan | holds | `keep-core:pkg/maintainer/spv/reservation_proof_loop_test.go:2421` ("TestRunReservationProofLoop_ResumesScanAfterRestart") ... |
 | [US-47](04-wallet-spv-stories.md) | Action timeout watcher notifies and alerts | holds | `keep-core:pkg/maintainer/spv/reservation_action_timeout_watch_test.go:43` ("NotifiesTimedOutPendingAction") ... |
 | [US-48](04-wallet-spv-stories.md) | Stale-deposit watcher (US-10 keep-core side) | holds | `keep-core:pkg/maintainer/spv/reservation_stale_deposit_watch_test.go:60-875` (full coverage). Status `holds`. |
