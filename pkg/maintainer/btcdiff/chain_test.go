@@ -2,6 +2,7 @@ package btcdiff
 
 import (
 	"math/big"
+	"sync"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -13,9 +14,10 @@ import (
 type RetargetEvent struct {
 	oldDifficulty, newDifficulty uint32
 }
-
 // localBitcoinChain represents a local Bitcoin difficulty chain.
 type localBitcoinDifficultyChain struct {
+	mutex sync.Mutex
+
 	operatorPrivateKey *operator.PrivateKey
 
 	currentEpoch uint64
@@ -31,15 +33,20 @@ type localBitcoinDifficultyChain struct {
 
 // Ready checks whether the relay is active (i.e. genesis has been performed).
 func (lbdc *localBitcoinDifficultyChain) Ready() (bool, error) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	return lbdc.ready, nil
 }
-
 // IsAuthorized checks whether the given address has been authorized to
 // submit a retarget directly to LightRelay. This function should be used
 // when retargetting via LightRelayMaintainerProxy is disabled.
 func (lbdc *localBitcoinDifficultyChain) IsAuthorized(
 	address chain.Address,
 ) (bool, error) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	return lbdc.authorizedOperators[address], nil
 }
 
@@ -50,6 +57,9 @@ func (lbdc *localBitcoinDifficultyChain) IsAuthorized(
 func (lbdc *localBitcoinDifficultyChain) IsAuthorizedForRefund(
 	address chain.Address,
 ) (bool, error) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	return lbdc.authorizedForRefundOperators[address], nil
 }
 
@@ -69,6 +79,9 @@ func (lbdc *localBitcoinDifficultyChain) Retarget(
 		oldDifficulty: headers[len(headers)/2-1].Bits,
 		newDifficulty: headers[len(headers)/2].Bits,
 	}
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.retargetEvents = append(lbdc.retargetEvents, retargetEvent)
 
 	lbdc.currentEpoch++
@@ -88,10 +101,10 @@ func (lbdc *localBitcoinDifficultyChain) RetargetWithRefund(
 		oldDifficulty: headers[len(headers)/2-1].Bits,
 		newDifficulty: headers[len(headers)/2].Bits,
 	}
-	lbdc.retargetWithRefundEvents = append(
-		lbdc.retargetWithRefundEvents,
-		retargetEvent,
-	)
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
+	lbdc.retargetWithRefundEvents = append(lbdc.retargetWithRefundEvents, retargetEvent)
 
 	lbdc.currentEpoch++
 
@@ -103,12 +116,18 @@ func (lbdc *localBitcoinDifficultyChain) RetargetWithRefund(
 // retargets along the way have been legitimate, this equals the height of
 // the block starting the most recent epoch, divided by 2016.
 func (lbdc *localBitcoinDifficultyChain) CurrentEpoch() (uint64, error) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	return lbdc.currentEpoch, nil
 }
 
 // ProofLength returns the number of blocks required for each side of a
 // retarget proof.
 func (lbdc *localBitcoinDifficultyChain) ProofLength() (uint64, error) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	return lbdc.proofLength, nil
 }
 
@@ -122,6 +141,9 @@ func (lbdc *localBitcoinDifficultyChain) GetCurrentAndPrevEpochDifficulty() (
 
 // SetReady sets chain's status as either ready or not.
 func (lbdc *localBitcoinDifficultyChain) SetReady(ready bool) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.ready = ready
 }
 
@@ -131,6 +153,9 @@ func (lbdc *localBitcoinDifficultyChain) SetAuthorizedOperator(
 	operatorAddress chain.Address,
 	authorized bool,
 ) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.authorizedOperators[operatorAddress] = authorized
 }
 
@@ -140,27 +165,42 @@ func (lbdc *localBitcoinDifficultyChain) SetAuthorizedForRefundOperator(
 	operatorAddress chain.Address,
 	authorized bool,
 ) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.authorizedForRefundOperators[operatorAddress] = authorized
 }
 
 // SetCurrentEpoch sets the current proven epoch in the chain.
 func (lbdc *localBitcoinDifficultyChain) SetCurrentEpoch(currentEpoch uint64) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.currentEpoch = currentEpoch
 }
 
 // SetProofLength sets the proof length needed for a retarget.
 func (lbdc *localBitcoinDifficultyChain) SetProofLength(proofLength uint64) {
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
 	lbdc.proofLength = proofLength
 }
 
 // RetargetEvents returns all invocations of the Retarget method.
 func (lbdc *localBitcoinDifficultyChain) RetargetEvents() []*RetargetEvent {
-	return lbdc.retargetEvents
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
+	return append([]*RetargetEvent(nil), lbdc.retargetEvents...)
 }
 
 // RetargetWithRefundEvents returns all invocations of the Retarget method.
 func (lbdc *localBitcoinDifficultyChain) RetargetWithRefundEvents() []*RetargetEvent {
-	return lbdc.retargetWithRefundEvents
+	lbdc.mutex.Lock()
+	defer lbdc.mutex.Unlock()
+
+	return append([]*RetargetEvent(nil), lbdc.retargetWithRefundEvents...)
 }
 
 // connectLocalBitcoinDifficultyChain connects to the local Bitcoin difficulty
