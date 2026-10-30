@@ -208,7 +208,7 @@ reconciled and where that decision lives.
    and the recovery path is to be kept. The sibling claim that `dissolutionEligibleAt` has one M1
    reader was stale for the same reason: FR-9 now names both readers.
 
-The client side was recorded, not repaired, at the head VF-10 reviewed (`keep-core@f03cc61dc`); keep-core #4365 (`4ced1c839`) added the `Live` dispatch, `reservation_stranding_watch.go:155-172`.
+The client side was recorded, not repaired, at the head VF-10 reviewed (`keep-core@f03cc61dc`); keep-core #4365 (`4ced1c839`) added the `Live` dispatch, `keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:155-172`.
 
 ### Decided product items
 

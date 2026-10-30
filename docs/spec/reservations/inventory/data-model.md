@@ -155,11 +155,11 @@ enclosing function:
 | `dissolutionEligibleAt` | `:786` | `requestReservationReanchor` | **gate deleted to make re-anchor unbounded** |
 | `dissolutionEligibleAt` | `:900` | `requestReservationDissolution` | deleted |
 | `dissolutionEligibleAt` | `:1196` | `extendReservation` | deleted |
-| `dissolutionEligibleAt` | `Reservation.sol:1331` | `notifyReservationStranded` | **shared `eligible` flag; reads for Live and Closing wallets** |
+| `dissolutionEligibleAt` | `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1325` | `notifyReservationStranded` | **shared `eligible` flag; reads for Live and Closing wallets** |
 
 Both fields are written by `settleAcceptance` (`ReservationProofs.sol:533`,
 `:537`). `expiresAt` has no m1 reader; `dissolutionEligibleAt` is read by the
-shared `eligible` flag in `notifyReservationStranded` (`Reservation.sol:1331`).
+shared `eligible` flag in `notifyReservationStranded` (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1331`).
 This confirms `m1-b-implementation.md` §4.4's claim: the term is a
 **commitment held in storage for m2 to honour**, enforced by nothing in m1
 for `expiresAt`, and by the stranding gate for `dissolutionEligibleAt`.
