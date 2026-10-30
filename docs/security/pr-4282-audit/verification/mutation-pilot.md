@@ -166,7 +166,7 @@ behavior: diagnostic-only and equivalent mutants can also survive.
 
 | location | mutation | why | kill test |
 |---|---|---|---|
-| 189:21 | `intervalSeconds == 0` poll-interval helper | zero-interval return not asserted | test a sub-second poll interval |
+| 190:9 | `sec <= 0` poll-interval guard | zero-interval return not asserted | test a sub-second poll interval |
 | 352:9 | startup-scan error NEG | registration-scan error not asserted | test a failed registration scan |
 | 378:17 | wallet-fetch retry error NEG | 3-attempt wallet fetch not asserted | test the wallet-fetch retry loop |
 | 383:12 | `attempt+1` log (ARITH) | diagnostic-only output change | no regression test recommended for log wording |
