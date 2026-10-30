@@ -187,7 +187,7 @@ All rows below are **settlement-path**. None may be pause-gated (rule 2).
 | **`anchorTxHash`** | `:534` | #1091 | storage-write | yes | no | |
 | **`anchorTxOutputIndex = 0`** | `:535` | #1091 | storage-write | yes | no | m2 partial writes `1` (partial `:845`). |
 | **`state = Active`** | `:536` | #1091 | storage-write | yes | no | |
-| **`dissolutionEligibleAt`** | `:537-539` | #1093 | storage-write | yes | no | **Rule 1: m1 must write it even though m1 deletes every reader (rule 4).** |
+| **`dissolutionEligibleAt`** | `:537-539` | #1093 | storage-write | yes | no | **Rule 1: m1 must write it; M1's only reader is the stranding flag (`Reservation.sol:1331`).** |
 | **`reservationsByAnchorUtxo[keccak(txHash,0)] = key`** | `:541-543` | #1091 | storage-write | yes | no | |
 | **`addWalletReservationKey`** | `:544-548`, body `Reservation.sol:1405-1414` | #1094 | storage-write | yes | no | Enumeration. |
 | `emit ReservationAccepted` | `:551-559` | #1091 | event | yes | no | |
@@ -540,7 +540,7 @@ per the storage comment listing it among the fields removed as unused/dead.
 Rule 1 does not reach per-wallet action locks.
 
 **DECISION NEEDED PD-6 — `expiresAt` and `dissolutionEligibleAt` are written but unread in m1.**
-Both are written at acceptance (`ReservationProofs.sol:533`, `:537-539`), which rule 1 requires. In m1 their only readers are deleted: `expiresAt` is read by the redemption expiry gate (`Reservation.sol:666-670`) and by renewal (`:1165`), both m2; `dissolutionEligibleAt` is read by the re-anchor gate (`:786`, deleted by rule 4) and the dissolution gate (`:900`, m2). This is the rule working as intended, but it means an m1 position advertises an expiry that nothing enforces. **Should m1 emit `ReservationAccepted.expiresAt` (`ReservationProofs.sol:558`) unchanged, knowing off-chain consumers will read it as an enforced deadline that m1 does not enforce?**
+Both are written at acceptance (`ReservationProofs.sol:533`, `:537-539`), which rule 1 requires. In m1 their only readers are deleted: `expiresAt` is read by the redemption expiry gate (`Reservation.sol:666-670`) and by renewal (`:1165`), both m2; `dissolutionEligibleAt` is read by the re-anchor gate (`:786`, deleted by rule 4) and the dissolution gate (`:900`, m2). At `e15a928237` the field is also read by `notifyReservationStranded` (`Reservation.sol:1331`), so it is not unread in M1; `expiresAt` is. This is the rule working as intended, but it means an m1 position advertises an expiry that nothing enforces. **Should m1 emit `ReservationAccepted.expiresAt` (`ReservationProofs.sol:558`) unchanged, knowing off-chain consumers will read it as an enforced deadline that m1 does not enforce?**
 
 **DECISION NEEDED PD-7 — `ProofType` enum stability across the milestone boundary.**
 `enum ProofType { Acceptance, Redemption, Reanchor, Dissolution }` (`:117-122`) is ABI-encoded as `uint8` by the router (`ReservationRouter.sol:323`). m1 has no Redemption or Dissolution handler. **Does m1 keep the four-member enum with two arms reverting on `ProofType(1)`/`ProofType(3)`, or shrink to `{Acceptance, Reanchor}` and renumber?** Renumbering silently changes the meaning of `proofType == 1` for any client built against m1, and the dispatcher's `else` fallthrough (`:169`) means an out-of-range value would be routed rather than rejected.

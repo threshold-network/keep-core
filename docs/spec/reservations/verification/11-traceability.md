@@ -14,15 +14,15 @@ No status in this matrix asserts that the named tests ran during this documentat
 |---|---|---|---|---|---|---|---|---|
 | System model | 58 | 36 | 5 | 2 | 0 | 0 | 15 | 0 |
 | Invariants | 44 | 32 | 11 | 1 | 0 | 0 | 0 | 0 |
-| Parameters and governance | 35 | 32 | 2 | 1 | 0 | 0 | 0 | 0 |
-| User stories | 74 | 59 | 14 | 0 | 0 | 0 | 0 | 1 |
+| Parameters and governance | 35 | 34 | 0 | 1 | 0 | 0 | 0 | 0 |
+| User stories | 74 | 61 | 12 | 0 | 0 | 0 | 0 | 1 |
 | Edge cases | 24 | 19 | 5 | 0 | 0 | 0 | 0 | 0 |
 | Failure modes | 14 | 11 | 2 | 1 | 0 | 0 | 0 | 0 |
 | Disaster recovery | 12 | 4 | 5 | 2 | 1 | 0 | 0 | 0 |
 | Threat model | 20 | 8 | 9 | 1 | 2 | 0 | 0 | 0 |
 | Cross-repo contract | 63 | 35 | 26 | 0 | 0 | 1 | 0 | 1 |
 | Accepted risks | 18 | 12 | 4 | 2 | 0 | 0 | 0 | 0 |
-| **Total** | 362 | 248 | 83 | 10 | 3 | 1 | 15 | 2 |
+| **Total** | 362 | 252 | 79 | 10 | 3 | 1 | 15 | 2 |
 
 ## Review queue rule
 
@@ -149,8 +149,8 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 
 | ID and owning file | Item | Status | Test / rehearsal reference |
 |---|---|---|---|
-| [PAR-1](03-parameters-governance.md) | `reservationMinAmount` (uint64) | holds | `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new total amount cap drops below the dust threshold" (indirect); `Reservation.test.ts` guard 11 |
-| [PAR-10](03-parameters-governance.md) | `reservationRouter` (address) | holds-untested | `none` |
+| [PAR-1](03-parameters-governance.md) | `reservationMinAmount` (uint64) | holds | Direct setter test: `Bridge.ReservationCaps.test.ts:175`; indirect: `Bridge.ReservationFeasibilityGuard.test.ts` ... |
+| [PAR-10](03-parameters-governance.md) | `reservationRouter` (address) | holds | `Bridge.Parameters.test.ts:2008-2096` |
 | [PAR-11](03-parameters-governance.md) | `maxReservationsAmountPerWallet` (uint64) | holds | `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new per-wallet amount cap drops below the dust threshold" |
 | [PAR-12](03-parameters-governance.md) | `reservationMaxSingleAmount` (uint64) | holds | `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new single-amount cap drops below the dust threshold" |
 | [PAR-13](03-parameters-governance.md) | `maxActiveReservations` (uint32) | holds | `Bridge.ReservationCaps.test.ts` "reverts when maxActiveReservations is set to zero" (`:153`) ... |
@@ -160,15 +160,15 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [PAR-17](03-parameters-governance.md) | `depositTxMaxFee` (uint64) | holds | `Bridge.ReservationFeasibilityGuard.test.ts` "accepts every feasible deposit parameter update" |
 | [PAR-18](03-parameters-governance.md) | `depositTreasuryFeeDivisor` (uint64) | holds | `none` (reservation path ignores it by design) |
 | [PAR-19](03-parameters-governance.md) | `walletCreationPeriod` (uint32) | holds | `keep-core:pkg/tbtcpg/reservation_reanchor_custody_test.go` "SkipsYoungResumeTarget" |
-| [PAR-2](03-parameters-governance.md) | `reservationTxMaxFee` (uint64) | holds | `Reservation.test.ts` guards 11-14 |
+| [PAR-2](03-parameters-governance.md) | `reservationTxMaxFee` (uint64) | holds | Direct setter test: `Bridge.ReservationCaps.test.ts:169` |
 | [PAR-20](03-parameters-governance.md) | `walletClosingPeriod` / `movingFundsTimeout` (uint32) | holds | `Bridge.ReservationStranding.test.ts` "real moving-funds-timeout call chain" |
 | [PAR-21](03-parameters-governance.md) | `liveWalletsCount` (uint32, derived) | holds | `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:346` (bound tightens when a Live wallet leaves Live) |
-| [PAR-3](03-parameters-governance.md) | `reservationTermSeconds` (uint32) | holds-untested | none for the exact bounds-revert string; `tbtc-v2@9d2086965:solidity/test/bridge/Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 |
+| [PAR-3](03-parameters-governance.md) | `reservationTermSeconds` (uint32) | holds | `Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 (floor); ceiling revert is untested |
 | [PAR-4](03-parameters-governance.md) | `reservationDissolutionDelay` (uint32) | holds | `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationDissolutionDelay.test.ts:133` ("accepts exactly 730 days") ... |
 | [PAR-5](03-parameters-governance.md) | `reservationMaxTotalAmount` (uint64) | holds | `Bridge.ReservationCaps.test.ts` "reverts when the total amount cap exceeds slot capacity" |
-| [PAR-6](03-parameters-governance.md) | `maxReservationsPerWallet` (uint32) | holds | `Reservation.test.ts` "should revert when wallet reservations count exceeds maxReservationsPerWallet" |
+| [PAR-6](03-parameters-governance.md) | `maxReservationsPerWallet` (uint32) | holds | Direct setter test: `Bridge.ReservationCaps.test.ts:197` |
 | [PAR-7](03-parameters-governance.md) | `reservationActionTimeout` (uint32) | holds | `Bridge.ReservationCaps.test.ts` "action timeout floor" group `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:98-130`: `:122` ... |
-| [PAR-8](03-parameters-governance.md) | `reservationRenewalWindowSeconds` (uint32) | design-only | `none` |
+| [PAR-8](03-parameters-governance.md) | `reservationRenewalWindowSeconds` (uint32) | design-only | Direct upper-bound test: `Bridge.ReservationCaps.test.ts:189`; `none` for the `> 0` side |
 | [PAR-9](03-parameters-governance.md) | `reservationVault` (address) | holds | `Bridge.ReservationCaps.test.ts` "bootstrap ordering" group |
 | [PAR-F1](03-parameters-governance.md) | `handoffReserveWallets` (uint32, >= 1): fifth caps-setter argument, new `reservationHandoffReserveWallets()` view, acceptance reserve gate | holds | Gate: `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:276` (describe "hand-off reserve gate at acceptance"), `:322`, `:346` ... |
 | [PAR-F2](03-parameters-governance.md) | Privileged hand-off cap bypass: a privileged re-anchor from a non-Live source skips the target's count and amount caps; the signing validator no longer re-checks them; third parties and Live-source governance rotation keep the caps | holds | Contracts: `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:359` (describe), `:427`, `:435`, `:443`, `:452`, `:466` ... |
@@ -233,12 +233,12 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [US-49](04-wallet-spv-stories.md) | Stranding watcher (US-13/14/15 keep-core side) | holds | `keep-core:pkg/maintainer/spv/reservation_stranding_watch_test.go:38-475` (full coverage) ... |
 | [US-50](04-wallet-spv-stories.md) | Feasibility gauge (D25) | holds | `keep-core:pkg/maintainer/spv/reservation_params_feasibility_test.go:165` ("InfeasibleRevealWindow"), `:306` ("CapBelowDust") ... |
 | [US-51](04-wallet-spv-stories.md) | Watcher restart and metrics | holds | As above. Status `holds`. |
-| [US-60](04-governance-vault-stories.md) | begin/finalize staging for parameters | holds-untested | `test/bridge/Bridge.Governance.test.ts:4428` (`beginReservationParametersUpdate`), `:4505`, `:4536`, `:4556` (`finalizeReservationParametersUpdate`), `:4660` ... |
+| [US-60](04-governance-vault-stories.md) | begin/finalize staging for parameters | holds | `test/bridge/Bridge.Governance.test.ts:4428` (`beginReservationParametersUpdate`), `:4505`, `:4536`, `:4556` (`finalizeReservationParametersUpdate`), `:4660` ... |
 | [US-61](04-governance-vault-stories.md) | begin/finalize staging for caps | holds | `test/bridge/Bridge.Governance.test.ts:4705`, `:4785`, `:4862`, `:4875`; `test/bridge/Bridge.ReservationCaps.test.ts:153`, `:121`, `:132`, `:224`, `:252` ... |
 | [US-62](04-governance-vault-stories.md) | setVaultStatus (vault activation / deactivation, C-4 gate) | holds-untested | `test/bridge/Bridge.Governance.test.ts:4889` ("setVaultStatus"); `test/bridge/ReservationProofs.test.ts:1757` ... |
 | [US-63](04-governance-vault-stories.md) | setReservationRouter (one-shot) | holds | `test/bridge/Bridge.Parameters.test.ts:2007` (`setReservationRouter` describe block), `:2052`, `:2073`, `:2095`, `:2108`. Status `holds`. |
 | [US-64](04-governance-vault-stories.md) | Revert when finalize runs before the delay elapses or the change is uninitialized | holds | `test/bridge/Bridge.Governance.test.ts` "context" blocks (e.g. `finalizeReservationCapsUpdate` "when the update process is not initialized" ... |
-| [US-65](04-governance-vault-stories.md) | forceStaleReservedDeposit (governance override) | holds-untested | no test pins the positive or the negative guards of the on-chain entry, and no test reads the counter or the event it writes. The entry is exercised as setup ... |
+| [US-65](04-governance-vault-stories.md) | forceStaleReservedDeposit (governance override) | holds | `Bridge.ReservationStrandingLibrary.test.ts:966-1015` (`describe("forceStaleReservedDeposit guards")`, "Acceptance authorization pending" at `:1014`) ... |
 | [US-66](04-governance-vault-stories.md) | updateDepositParameters feasibility guard (D25) | holds | `test/bridge/Bridge.ReservationFeasibilityGuard.test.ts:281` ("reverts when the new dust threshold exceeds the single-amount cap"), `:291`, `:304`, `:319` ... |
 | [US-67](04-governance-vault-stories.md) | Privileged re-anchor of a Live-wallet position by governance | holds | none recorded |
 | [US-68](04-governance-vault-stories.md) | Vault fee and reserve management | holds | `test/vault/ReservationVault.test.ts:796` (non-owner), `:802` (happy), `:812` (max), `:551` (non-owner for `updateFeeReserveTarget`), `:557`, `:566` ... |

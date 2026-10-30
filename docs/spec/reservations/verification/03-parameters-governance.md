@@ -8,7 +8,7 @@ release-to-pool row PAR-X9 and the D26 note use the later tbtc-v2 pin
 `9d2086965`.
 
 D31 (privileged hand-off plus acceptance reserve) is implemented at later
-later pins: contracts, deploy scripts and SDK at `tbtc-v2@806b1106f`, client
+pins: contracts, deploy scripts and SDK at `tbtc-v2@806b1106f`, client
 at `keep-core@d40f6aadc`. Every D31 citation below carries that explicit
 revision. Unqualified citations in this file keep resolving at the original
 pins (`9d2086965`, `f99ef96e3`) and describe the original-pin state. Nothing is
@@ -29,16 +29,16 @@ mainnet and `60` on Sepolia (`tbtc-v2:solidity/deploy/09_deploy_bridge_governanc
 
 | ID | Parameter (type, storage slot region) | Meaning | Validation rule (cite) | Who may set | Units | Retroactivity | Status | Test |
 |---|---|---|---|---|---|---|---|---|
-| PAR-1 | `reservationMinAmount` (uint64) | Min anchor a reservation must carry; also the re-anchor grind floor. | `reservationMinAmount > reservationTxMaxFee` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1379` | governance | sats | Snapshotted into action record `minAmount` at acceptance request; not retroactive | `holds` | `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new total amount cap drops below the dust threshold" (indirect); `Reservation.test.ts` guard 11 |
-| PAR-2 | `reservationTxMaxFee` (uint64) | Max BTC miner fee for a 1-in-1-out lifecycle tx. | `> 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1375` | governance | sats | Snapshotted per action (`txMaxFee`) | `holds` | `Reservation.test.ts` guards 11-14 |
-| PAR-3 | `reservationTermSeconds` (uint32) | Custody term length. | `[MIN_RESERVATION_TERM, MAX_RESERVATION_TERM]` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1383-1385`; also feeds the feasibility guard (PAR-X3). | governance | s | Future acceptances; existing `expiresAt` values remain snapshotted (`tbtc-v2@9d2086965:solidity/contracts/bridge/ReservationProofs.sol:557`, `:565`) | `holds-untested` for the exact bounds-revert string | none for the exact bounds-revert string; `tbtc-v2@9d2086965:solidity/test/bridge/Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 |
+| PAR-1 | `reservationMinAmount` (uint64) | Min anchor a reservation must carry; also the re-anchor grind floor. | `reservationMinAmount > reservationTxMaxFee` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1379` | governance | sats | Snapshotted into action record `minAmount` at acceptance request; not retroactive | `holds` | Direct setter test: `Bridge.ReservationCaps.test.ts:175`; indirect: `Bridge.ReservationFeasibilityGuard.test.ts` "reverts when the new total amount cap drops below the dust threshold" |
+| PAR-2 | `reservationTxMaxFee` (uint64) | Max BTC miner fee for a 1-in-1-out lifecycle tx. | `> 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1375` | governance | sats | Snapshotted per action (`txMaxFee`) | `holds` | Direct setter test: `Bridge.ReservationCaps.test.ts:169` |
+| PAR-3 | `reservationTermSeconds` (uint32) | Custody term length. | `[MIN_RESERVATION_TERM, MAX_RESERVATION_TERM]` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1383-1385`; also feeds the feasibility guard (PAR-X3). | governance | s | Future acceptances; existing `expiresAt` values remain snapshotted (`tbtc-v2@9d2086965:solidity/contracts/bridge/ReservationProofs.sol:557`, `:565`) | `holds` for the floor; only the 730-day ceiling revert is untested | `Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 (floor); ceiling revert is untested |
 | PAR-4 | `reservationDissolutionDelay` (uint32) | Delay after expiry before a Closing-wallet position becomes strand-eligible. | The setter rejects a delay above `MAX_RESERVATION_DISSOLUTION_DELAY` (730 days), the constant declared at `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:84`; the bound is a maximum only, with no minimum. The check sits in the Bridge-side setter `Reservation.updateReservationParameters` (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1635-1639`, revert "Reservation dissolution delay out of protocol bounds") and in the governance staging step `BridgeGovernanceParameters.beginReservationParametersUpdate` (`tbtc-v2@c8350d109:solidity/contracts/bridge/BridgeGovernanceParameters.sol:1667-1671`, same revert string). At the original pin the delay had no setter bound beyond uint32 and the checked addition computed eligibility (`tbtc-v2@9d2086965:solidity/contracts/bridge/ReservationProofs.sol:570`). | governance | s | Snapshotted into the action and used for `dissolutionEligibleAt`; read by stranding (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1325`, in `notifyReservationStranded`) | `holds` | `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationDissolutionDelay.test.ts:133` ("accepts exactly 730 days"), `:140` ("reverts at 730 days + 1 second"), `:275` ("should revert at the begin stage"), `:469` ("should revert at the finalize stage (forwarded to library setter)"); `Bridge.ReservationStranding.test.ts` "notifyReservationStranded"; `Bridge.ReservationStrandingLibrary.test.ts:1060` |
 | PAR-5 | `reservationMaxTotalAmount` (uint64) | Global cap on sats locked under active reservations; 0 disables. | Decision-1 invariant (PAR-X2); feasibility dust rule (PAR-X3) | governance | sats | Next request; not retroactive | `holds` | `Bridge.ReservationCaps.test.ts` "reverts when the total amount cap exceeds slot capacity" |
-| PAR-6 | `maxReservationsPerWallet` (uint32) | Per-wallet position-count cap; must be > 0 while reservations enabled. | `> 0` at `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1654` | governance | count | Prospective | `holds` | `Reservation.test.ts` "should revert when wallet reservations count exceeds maxReservationsPerWallet" |
+| PAR-6 | `maxReservationsPerWallet` (uint32) | Per-wallet position-count cap; must be > 0 while reservations enabled. | `> 0` at `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1654` | governance | count | Prospective | `holds` | Direct setter test: `Bridge.ReservationCaps.test.ts:197` |
 | PAR-7 | `reservationActionTimeout` (uint32) | How long before a requested action may be reported timed out. | `> REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1` (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1647-1651`), i.e. 2h + 2h + 1 s, so the smallest accepted value is 14,402 s. The original pin stated only `> REQUEST_TIMEOUT_SAFETY_MARGIN` (2h) at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1392-1396`, which a same-block reveal cannot sign inside | governance | s | Snapshotted per request | `holds` | `Bridge.ReservationCaps.test.ts` "action timeout floor" group `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:98-130`: `:122` ("reverts at safety margin + deposit min age + 1") and `:128` ("accepts safety margin + deposit min age + 2, leaving one signing second for a same-block reveal") |
-| PAR-8 | `reservationRenewalWindowSeconds` (uint32) | Renewal window; unread in M1. | `> 0` and `< reservationTermSeconds` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1388` | governance | s | design-only (m2) | `design-only` (storage completeness, no M1 reader) | `none` |
-| PAR-9 | `reservationVault` (address) | The reservation vault; deposits revealed to it are reservations. | Re-pointing a non-zero vault requires `maxActiveReservations > 0` and `reservationTotalAmount == 0 && pendingReservedDeposits == 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1404` | governance | address | Irreversible once any reservation is accepted (AR) | `holds` | `Bridge.ReservationCaps.test.ts` "bootstrap ordering" group |
-| PAR-10 | `reservationRouter` (address) | delegatecall target; settable exactly once. | `reservationRouter == 0` (must be unset) and `code.length > 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/BridgeState.sol:1170` | governance | address | One-time; changing later requires a Bridge upgrade | `holds-untested` | `none` |
+| PAR-8 | `reservationRenewalWindowSeconds` (uint32) | Renewal window; unread in M1. | `> 0` and `< reservationTermSeconds` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1388` | governance | s | design-only (m2) | `design-only` (storage completeness, no M1 reader) | Direct upper-bound test: `Bridge.ReservationCaps.test.ts:189`; `none` for the `> 0` side |
+| PAR-9 | `reservationVault` (address) | The reservation vault; deposits revealed to it are reservations. | Changing the vault requires `reservationTotalAmount == 0 && pendingReservedDeposits == 0`; changing it to a non-zero address also requires `maxActiveReservations > 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:1402-1426` | governance | address | Irreversible once any reservation is accepted (AR) | `holds` | `Bridge.ReservationCaps.test.ts` "bootstrap ordering" group |
+| PAR-10 | `reservationRouter` (address) | delegatecall target; settable exactly once. | `reservationRouter == 0` (must be unset) and `code.length > 0` at `tbtc-v2@9d2086965:solidity/contracts/bridge/BridgeState.sol:1170` | governance | address | One-time; changing later requires a Bridge upgrade | `holds` | `Bridge.Parameters.test.ts:2008-2096` |
 
 ## Reservation caps
 
@@ -81,7 +81,7 @@ row below existed: the caps setter had four arguments, there was no reserve
 view, and the re-anchor request and the signing validator enforced the target
 count and amount caps for every caller. Rows PAR-F1 and PAR-F2 keep their IDs;
 they were `design-only` there and are graded at `tbtc-v2@806b1106f` and
-`keep-core@d40f6aadc` now. Per-surface plans: ``handoff-capacity-plan.md``
+`keep-core@d40f6aadc` now. Per-surface plans: `../handoff-capacity.md`
 (D31). D28 is not part of this table (see the note after it).
 
 | ID | Parameter / behaviour | Rule at the D31 pins | Status | Test |
@@ -272,7 +272,7 @@ floor is `newAnchorAmount > txMaxFee` (`ReservationProofs.sol:695`). The two
 are distinct and the request-time floor is the binding one; a re-anchor may
 settle between `txMaxFee` and `minAmount + txMaxFee` if the fee is bounded
 (snapshotted), but the request-time check is what caps the grind.
-Status `holds`. Test: `Bridge.ReservationSettlement.test.ts` PAR-X1 group.
+Status `holds`. Test: `Bridge.ReservationSettlement.test.ts:711` ("bounds the grind at a request-time amount floor, not the settlement-time dust floor").
 
 ### PAR-X9 Release-to-pool refund-margin guard (decision D26, at `d20cf74ba`)
 `releaseReservedDepositToPool` re-routes a revealed, never-requested reserved
@@ -304,8 +304,8 @@ Step order:
    `beginReservationParametersUpdate` -> `finalizeReservationParametersUpdate`
    on bootstrap, so that when the parameters write runs its Decision-1 check
    the slot-capacity operands are real. Running parameters first is accepted
-   on bootstrap only because both caps are still 0 (the check short-circuits);
-   a later caps call then reverts if it cannot accommodate the committed total.
+   on bootstrap only with an unchanged zero vault (the check short-circuits);
+   wiring a non-zero vault first reverts "Max active reservations must be greater than zero".
    `BridgeGovernance.sol:1880` doc; `docs/RESERVATION_CAPS_DEPLOYMENT.md`.
    Status `holds`. Test: `Bridge.ReservationCaps.test.ts` "bootstrap ordering".
 
@@ -410,16 +410,6 @@ budget on-chain (`tbtc-v2@806b1106f:solidity/contracts/bridge/Reservation.sol:10
 L = 4 it is 2, equal to max active 2; at L = 3 it would be 1 (derived from the
 formula, not a recorded run).
 
-### Mainnet fork dry-run
-Source: `tbtc-v2@52f4f3005:solidity/docs/RESERVATION_SEPOLIA_DEPLOYMENT.md`
-pre-flight step 1 (the local mainnet-fork run values). They are dry-run inputs,
-not live values: no reservation parameter is set on mainnet yet, since the
-feature's mainnet ceremony has not run. The one live mainnet number they are
-fitted to is the deposit reveal-ahead period, 150 days
-(`tbtc-v2@52f4f3005:solidity/deploy/14_set_deposit_parameters.ts:13-14`),
-which puts a floor on any feasible term (PAR-X3). The recorded launch decision
-is a 365-day term and a 365-day dissolution delay (`roadmap.md:408-409`;
-`requirements.md` §9), so this table is not a record of the launch values.
 
 | Parameter | Mainnet fork dry-run value |
 |---|---|

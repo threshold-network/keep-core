@@ -108,9 +108,7 @@ D31 is integrated on the reservations branches. Nothing in this section means a 
 
 The keep-core review line (an earlier keep-core review line) has no member-proof re-anchor binding. On that line the fallback would send a third-party request, which keeps the caps. Its `reservations-upgrade` branch is superseded by `reservations-epic` and must not be merged.
 
-`client.yml` now pins `TBTC_V2_REF` to the head of the tbtc-v2 reservations branch, and the vendored
-fallbacks, the Go bindings and the harness validator were checked against the artifacts compiled at
-that commit. A later change to the branch requires the pin and the bindings to move together (XR-G-2).
+`client.yml` now pins `TBTC_V2_REF` to `4c98e6b82`, the head when keep-core #4365 landed; the freeze pin `c8350d109` is later (XR-G-2). Moves on freeze day.
 
 ## D28: existing maintainer role plus watchdog alerts
 

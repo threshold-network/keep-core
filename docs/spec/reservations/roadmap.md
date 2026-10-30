@@ -81,17 +81,7 @@ writes them. Two knock-on effects worth stating outright:
 - **§0.6's slashing vector does not exist in m1 B.** With no
   `requestReservationDissolution`, nothing can be opened against an honest
   wallet and left to time out. This was B's headline benefit and it holds.
-- **m1 B reads `dissolutionEligibleAt` in exactly one place: the
-  Closing-wallet branch of `notifyReservationStranded`.** A `Closing`
-  wallet's reservation can be stranded only once
-  `block.timestamp >= reservation.dissolutionEligibleAt` (`Reservation.sol:1090-1113`
-  in the M1 code). Every other would-be consumer is cut or deleted:
-  redemption's strict `< expiresAt`, renewal, dissolution's
-  `>= dissolutionEligibleAt`, and re-anchor's
-  `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the
-  custody term is **not enforced by any on-chain gate in m1** — it is a
-  commitment recorded in storage for m2 to honour, which is exactly why the
-  write must survive the rewrite (§0.7 item 3).
+- **m1 B reads `dissolutionEligibleAt` through a shared `eligible` flag in `notifyReservationStranded`.** A `Live` wallet's reservation strands once `block.timestamp >= dissolutionEligibleAt`; a `Closing` wallet's additionally waits out `closingStartedAt + walletClosingPeriod`; `Terminated` and `Closed` strand without it (`Reservation.sol:1331-1343` in the M1 code). Every other would-be consumer is cut or deleted: redemption's strict `< expiresAt`, renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the custody term is **not enforced by any on-chain gate in m1** — it is a commitment recorded in storage for m2 to honour, which is exactly why the write must survive the rewrite (§0.7 item 3).
 
 Because redemption and renewal are **vault-gated**, the m1 control surface is
 the vault rather than Bridge code. §0.7 lays out two ways to use that: an
@@ -242,11 +232,7 @@ Three consequences, and they point in opposite directions:
    *vault-side* change" is **false under B**.
 3. **Storage must still be written, not just declared.** Acceptance sets
   `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
-  (`ReservationProofs.sol:537-539`) and B deletes its only reader
-  (re-anchor's gate). (In M1, the Closing branch of `notifyReservationStranded`
-  is the one live reader; §0.2.) Drop the write as dead code and m2's dissolution
-  has no eligibility date for any m1-era position, with the non-retroactive
-  snapshot semantics (`:180-184`) unreconstructable.
+  (`ReservationProofs.sol:537-539`). M1's only reader is the shared `eligible` flag in `notifyReservationStranded` (`Reservation.sol:1331-1343`): `Live` and `Closing` wallets read it, `Terminated` and `Closed` do not. Drop the write as dead code and m2's dissolution has no eligibility date for any m1-era position, with the non-retroactive snapshot semantics (`:180-184`) unreconstructable.
 
 **Superseded 2026-09-24 by the Option B vault decision**
 (`m1-b-implementation.md` §4.2). This paragraph originally instructed

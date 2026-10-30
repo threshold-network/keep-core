@@ -37,10 +37,10 @@ wording lives there.
 | G-1 | A reserved deposit is segregated and individually traceable | `requirements.md:42` |
 | G-2 | Minted tBTC equals the anchor, one to one and minus the fee | `requirements.md:46` |
 | G-3 | A position survives routine wallet rotation | `requirements.md:51` |
-| G-4 | Caps and the hand-off reserve bound the blast radius of an unfinished feature | `requirements.md:58` |
+| G-4 | Caps bound the blast radius of an unfinished feature: saturation is a revert, checked at request time | `requirements.md:58` |
 | G-5 | Neither the reserved deposit nor its anchor is swept or silently spent | `requirements.md:64` |
 | G-6 | Storage stays layout-complete for the M2 field set | `requirements.md:67` |
-| G-7 | The surface ships without pushing `Bridge` over EIP-170 and without standalone authority | `requirements.md:75` |
+| G-7 | The surface ships without pushing `Bridge` over EIP-170 and without standalone authority | `requirements.md:76` |
 
 The per-actor trust model those goals imply is owned by `requirements.md:171-182` (actors) and
 `verification/01-system-model.md` (canonical system model). M1 adds no per-actor goal IDs.
@@ -168,7 +168,7 @@ and there is no release-policy file at this commit.
 1. **Build gates.** Four M1 gates, each marked Met or Not met: `m1-b-implementation.md:209-374`.
 2. **Spec acceptance criterion.** Every FR traces to enforcing code, with the residual test gaps
    named: `requirements.md:756-770`.
-3. **Audit program.** Pre-audit and during-audit tooling and external sign-off: `testing-plan.md`.
+3. **Audit program.** Pre-audit tooling: `testing-plan.md`; external sign-off: `requirements.md` section 11.
 4. **Testnet round.** The live-network phase: `timeline-estimate.md`.
 5. **Activation sign-off.** Deploy order, launch values, the client activation ordering gate and the
    irreversible vault activation warning: `README.md:25` and the deployment runbooks in tbtc-v2,
@@ -208,8 +208,7 @@ reconciled and where that decision lives.
    and the recovery path is to be kept. The sibling claim that `dissolutionEligibleAt` has one M1
    reader was stale for the same reason: FR-9 now names both readers.
 
-The client side is recorded, not repaired: the shipped stranding watcher dispatches `Closed`,
-`Terminated` and `Closing` states and never `Live`, as the VF-10 entry states.
+The client side was recorded, not repaired, at the head VF-10 reviewed (`keep-core@f03cc61dc`); keep-core #4365 (`4ced1c839`) added the `Live` dispatch, `reservation_stranding_watch.go:155-172`.
 
 ### Decided product items
 
@@ -424,8 +423,8 @@ requirements, and none of them is settled here.
 - **No new FR, NFR, US or AR IDs are allocated.** When an M2 requirement is written, the free
   ranges are FR-35 and above (M1 ends at FR-34, `requirements.md:556`), NFR-SEC-8, NFR-LIV-5,
   NFR-UPG-4, NFR-GAS-3, NFR-OBS-4 and NFR-OPS-6 and above, US-102 and above (the verification set
-  ends at US-101, `verification/04-deposit-stories.md:161`), and AR-17 and above
-  (`verification/10-accepted-risks.md:179`).
+  ends at US-101, `verification/04-deposit-stories.md:161`), and AR-19 and above
+  (`verification/10-accepted-risks.md:189`).
 - **The US-19 to US-101 band is not free in practice.** The verification set numbers stories with
   two or three digits, so a new unpadded `US-25` would be the same string as the existing
   zero-padded `US-25`.

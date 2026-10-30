@@ -137,13 +137,13 @@ existing docs do not name.
 | `state` | `:168` | #1088 | storage | write+read | yes | |
 | `requestNonce` | `:173` | #1091 | storage | write+read | yes | Two-phase anti-replay; 16 sites |
 | `retryCredit` | `:180` | #1091 | storage | write via timeout | yes | See §2 |
-| `dissolutionEligibleAt` | `:187` | #1092 | storage | **write, no m1 reader** | yes | The named trap; see §2 and §5 |
+| `dissolutionEligibleAt` | `:187` | #1092 | storage | **write, read by stranding flag** | yes | The named trap; see §2 and §5 |
 
 **Not exhaustive past this pin.** M1 code adds `cumulativeReanchorFee` and
 `reanchorCooldownUntil` to `ReservationRequest` (~`Reservation.sol:225-236`
 at M1 tip) — neither existed at the guards tip and neither is listed above.
 
-## 5. Confirmed: in m1 the custody term has no on-chain reader at all
+## 5. Confirmed: in m1 the custody term has one on-chain read — the shared flag in `notifyReservationStranded`
 
 Every reader of `expiresAt` and `dissolutionEligibleAt`, enumerated with its
 enclosing function:
@@ -155,12 +155,15 @@ enclosing function:
 | `dissolutionEligibleAt` | `:786` | `requestReservationReanchor` | **gate deleted to make re-anchor unbounded** |
 | `dissolutionEligibleAt` | `:900` | `requestReservationDissolution` | deleted |
 | `dissolutionEligibleAt` | `:1196` | `extendReservation` | deleted |
+| `dissolutionEligibleAt` | `Reservation.sol:1331` | `notifyReservationStranded` | **shared `eligible` flag; reads for Live and Closing wallets** |
 
 Both fields are written by `settleAcceptance` (`ReservationProofs.sol:533`,
-`:537`) and read by nothing m1 retains. This confirms
-`m1-b-implementation.md` §4.4's claim exactly, and it is the strongest single
-argument in the doc set: the term is a **commitment held in storage for m2 to
-honour**, enforced by nothing in m1.
+`:537`). `expiresAt` has no m1 reader; `dissolutionEligibleAt` is read by the
+shared `eligible` flag in `notifyReservationStranded` (`Reservation.sol:1331`).
+This confirms `m1-b-implementation.md` §4.4's claim: the term is a
+**commitment held in storage for m2 to honour**, enforced by nothing in m1
+for `expiresAt`, and by the stranding gate for `dissolutionEligibleAt`.
+
 
 ## 6. `ReservationAction` - one row per field
 

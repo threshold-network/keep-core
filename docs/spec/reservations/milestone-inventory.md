@@ -123,7 +123,7 @@ Column key: `yes` = present and active in m1; `flagged` = present but initiation
 | `state` | `:168` | #1088 | yes | yes | |
 | `requestNonce` | `:173` | #1091 | yes | yes | Two-phase anti-replay; 16 sites |
 | `retryCredit` | `:180` | #1091 | yes | yes | Written by timeout path (inert in m1); read by m2. See section 4 |
-| `dissolutionEligibleAt` | `:187` | #1092 | yes | yes | Written by acceptance; In M1, the only reader is the Closing branch of `notifyReservationStranded` (`Reservation.sol:1090-1113`); re-anchor no longer reads it. See section 5 |
+| `dissolutionEligibleAt` | `:187` | #1092 | yes | yes | Written by acceptance; In M1, `notifyReservationStranded` reads it through a shared `eligible` flag (`Reservation.sol:1331`): `Live` strands once `block.timestamp >= dissolutionEligibleAt`, `Closing` adds the wallet closing period; `Terminated` and `Closed` strand without it. Re-anchor does not read it. See section 5 |
 | `cumulativeReanchorFee` | partial `Reservation.sol:220-237` (final: `:237`) | #1096/M1 | yes | yes | **M1 code:** present, appended at the struct's end; written on every re-anchor settlement, unread in m1. See §1.3, §1.4 |
 | `reanchorCooldownUntil` | new, M1 code (`Reservation.sol:240`) | M1 | yes | yes | **M1 code:** not in any fragment or the `#1102` caveat. Set on a non-privileged re-anchor timeout (`:905-907`); read by the next non-privileged re-anchor request (`:736-740`). See §1.4 |
 
@@ -157,7 +157,7 @@ Column key: `yes` = present and active in m1; `flagged` = present but initiation
 | Item | Source | PR | m1 | m2 | Note |
 |---|---|---|---|---|---|
 | `reservationMinAmount` | `BridgeState.sol:354` | #1088 | yes | yes | param |
-| `reservationTermSeconds` | `:358` | #1088 | yes | yes | param; promise clock. Feeds the `dissolutionEligibleAt` write that M1's stranding Closing branch reads; M1 has no dissolution-timeout slashing path |
+| `reservationTermSeconds` | `:358` | #1088 | yes | yes | param; promise clock. Feeds the `dissolutionEligibleAt` write that M1's stranding `notifyReservationStranded` reads through the shared `eligible` flag (`Reservation.sol:1331`); M1 has no dissolution-timeout slashing path |
 | `reservationVault` | `:361` | #1088 | yes | yes | The re-point target |
 | `reservationTxMaxFee` | `:365` | #1088 | yes | yes | param; no proposed value yet |
 | `reservationDissolutionDelay` | `:372` | #1088 | yes | yes | param; feeds dissolutionEligibleAt write m1 must keep |
@@ -241,7 +241,7 @@ Adjacent pre-existing fields the feature depends on: `liveWalletsCount` (`Bridge
 | `anchorTxHash` | `:534` | #1091 | yes | no | |
 | `anchorTxOutputIndex = 0` | `:535` | #1091 | yes | no | m2 partial writes `1` |
 | `state = Active` | `:536` | #1091 | yes | no | |
-| `dissolutionEligibleAt` | `:537-539` | #1093 | yes | no | Must write even though m1 deletes every reader. See section 5 |
+| `dissolutionEligibleAt` | `:537-539` | #1093 | yes | no | Must write; M1's only reader is the stranding flag (`Reservation.sol:1331`). See section 5 |
 | `reservationsByAnchorUtxo[keccak(txHash,0)] = key` | `:541-543` | #1091 | yes | no | Write site 1 of 2. See section 6 |
 | `addWalletReservationKey` | `:544-548` | #1094 | yes | no | Enumeration. **M1 code:** this helper does not exist — replaced by `walletReservationInfo[wallet].count`/`.amount` increments (`Reservation.sol:940-957`, `reserveAcceptanceCapacity`). See §1.4 |
 | `emit ReservationAccepted` | `:551-559` | #1091 | yes | no | Carries `expiresAt`. See D-6 |
@@ -881,11 +881,11 @@ The opposite trap: where an essentials-only rewrite would drop a write as dead c
 | Field | Written at | Why it looks dead in m1 | Why dropping it is a silent repudiation |
 |---|---|---|---|
 | `expiresAt` | `ReservationProofs.sol:533` (acceptance) | Every m1 reader is deleted: redemption's strict `block.timestamp < expiresAt` (`Reservation.sol:666-669`, deleted), renewal's reads (`Reservation.sol:1165`, `:1195`, deleted). No on-chain consumer in m1 | m2's redemption gates on `block.timestamp < expiresAt` (`Reservation.sol:666-669`, strict, #1093). Without the m1 write, m2's redemption has no expiry date for any m1-era position. The term is a commitment held in storage for m2 to honour, enforced by nothing in m1 |
-| `dissolutionEligibleAt` | `ReservationProofs.sol:537-539` (acceptance) | Every m1 reader is deleted except the Closing branch of `notifyReservationStranded` (`Reservation.sol:1090-1113`), which strands a `Closing` wallet's reservation once `block.timestamp >= dissolutionEligibleAt`; re-anchor's `< dissolutionEligibleAt` gate (`Reservation.sol:786`, deleted by rule 4 to make re-anchor unbounded), dissolution's `>= dissolutionEligibleAt` (`:900`, m2), renewal (`:1196`, m2) | m2's dissolution needs it as the eligibility date. Computed as `expiresAt + reservationDissolutionDelay`, snapshotted once at acceptance and never recomputed. Without it, the snapshot semantics that keep governance changes non-retroactive (`:180-184`) cannot be reconstructed. Dropping the write means m2 has no eligibility date for any m1-era position |
+| `dissolutionEligibleAt` | `ReservationProofs.sol:537-539` (acceptance) | Every m1 reader is deleted except the shared `eligible` flag in `notifyReservationStranded` (`Reservation.sol:1331-1343`), which reads it for `Live` and `Closing` wallets; `Terminated` and `Closed` strand without it; re-anchor's `< dissolutionEligibleAt` gate (`Reservation.sol:786`, deleted by rule 4 to make re-anchor unbounded), dissolution's `>= dissolutionEligibleAt` (`:900`, m2), renewal (`:1196`, m2) | m2's dissolution needs it as the eligibility date. Computed as `expiresAt + reservationDissolutionDelay`, snapshotted once at acceptance and never recomputed. Without it, the snapshot semantics that keep governance changes non-retroactive (`:180-184`) cannot be reconstructed. Dropping the write is a silent repudiation. |
 
 ### 5.2 The deeper reason (m1-b-implementation.md section 4.4; roadmap.md section 0.2)
 
-In m1 variant B the custody term has exactly one on-chain consumer: the Closing-wallet branch of `notifyReservationStranded` (`Reservation.sol:1090-1113`). Every other reader of `expiresAt` and `dissolutionEligibleAt` is cut or deleted: redemption's strict `< expiresAt`, renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term is not enforced by any on-chain gate in m1; it is a commitment held in storage for m2 to honour. The storage IS the promise, which makes dropping the write a silent repudiation of it rather than a code-size optimisation.
+In m1 variant B the custody term has one on-chain read, shared by the Live and Closing branches of `notifyReservationStranded` (`Reservation.sol:1331-1343`): `Live` strands once `block.timestamp >= dissolutionEligibleAt`, `Closing` additionally waits out the wallet closing period; `Terminated` and `Closed` strand without it. Every other reader of `expiresAt` and `dissolutionEligibleAt` is cut or deleted: redemption's strict `< expiresAt`, renewal, dissolution's `>= dissolutionEligibleAt`, and re-anchor's `< dissolutionEligibleAt` (removed to make re-anchor unbounded). So the term is not enforced by any on-chain gate in m1; it is a commitment held in storage for m2 to honour. The storage IS the promise, which makes dropping the write a silent repudiation of it rather than a code-size optimisation.
 
 ### 5.3 Other m1-reachable writes m2 depends on (proofs.md; data-model.md)
 

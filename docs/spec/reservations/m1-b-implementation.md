@@ -215,7 +215,7 @@ live — §4.1, §4.3, §4.4, §4.5 — each marked Met or Not met below against
 M1 code. §4.2 documents the Option B decision itself; it is a historical
 record, not a fifth live gate.
 
-### 4.1 Admission reserve and privileged hand-off
+### 4.1 Admission reserve and privileged hand-off — Met
 
 The earlier design used ordinary count caps on every re-anchor.
 If every Live target was full, those caps could pin a retiring source.
@@ -275,7 +275,8 @@ introduced by `#1102` — in the M1 code that write is
 
 **Corrected again 2026-09-28, against the M1 code
 (`ReservationProofs.sol`/`Reservation.sol`, 9f8f5ef1).** The mapping has one
-write site, one rewrite site, and two delete sites — not "two write sites and
+write site, one rewrite site, and two delete sites — plus a third in
+`closeReservation`, unreachable in M1 — not "two write sites and
 no removal" as the previous correction concluded:
 
 - **Written** at acceptance settlement (`ReservationProofs.sol:572`).
@@ -296,32 +297,32 @@ mutually consistent — which they are. **Gate met.**
 
 Acceptance sets
 `dissolutionEligibleAt = expiresAt + reservationDissolutionDelay`
-(`ReservationProofs.sol:570`, inside `settleAcceptance`). B deletes its only
-reader — re-anchor's `< dissolutionEligibleAt` gate — so an essentials-only
-rewrite would naturally drop the write as dead code. **It was not dropped**:
-the field's own storage comment states the policy directly — "this field's
-only on-chain reader ... has been removed ... It must continue to be written
-anyway" (`Reservation.sol:198-213`). Without it, m2's dissolution would have
-no eligibility date for any m1-era position, and the snapshot semantics that
-keep governance changes non-retroactive ("later governance changes never
-move the eligibility time of a term already granted", `Reservation.sol:198-202`)
-could not be reconstructed.
+(`ReservationProofs.sol:570`, inside `settleAcceptance`). B deletes the re-anchor
+`< dissolutionEligibleAt` gate, so an essentials-only rewrite would naturally drop
+the write as dead code. **It was not dropped**: the field's own storage comment
+states the policy directly — "Two of the four wallet states `notifyReservationStranded`
+admits read this field, through the shared `eligible` flag" (`Reservation.sol:221-234`).
+Without it, m2's dissolution would have no eligibility date for any m1-era position,
+and the snapshot semantics that keep governance changes non-retroactive ("later
+governance changes never move the eligibility time of a term already granted",
+`Reservation.sol:198-202`) could not be reconstructed.
 
 The general rule: **storage-complete means written, not merely declared.**
 
-**The deeper reason this matters: in m1 B the custody term has exactly one
-on-chain consumer: the Closing-wallet branch of `notifyReservationStranded`.**
-A `Closing` wallet's reservation can be stranded only once
-`block.timestamp >= reservation.dissolutionEligibleAt`
-(`Reservation.sol:1090-1113` in the M1 code). Every other would-be reader
-belongs to functionality this milestone does not ship at all — redemption's
-`< expiresAt` check, renewal — or was deliberately deleted: dissolution's
-`>= dissolutionEligibleAt` check does not exist because dissolution itself is
-cut, and re-anchor's `< dissolutionEligibleAt` gate was removed to make
-re-anchor unbounded. So the term is not enforced by any on-chain gate in m1;
-it is a **commitment held in storage for m2 to honour**. The storage *is* the
-promise, which makes dropping the write a silent repudiation of it rather than
-a code-size optimisation.
+**The deeper reason this matters: in m1 B the custody term has one on-chain read,
+shared by the Live and Closing branches of `notifyReservationStranded`
+(`Reservation.sol:1331-1343`): `Live` strands once `block.timestamp >= dissolutionEligibleAt`,
+`Closing` additionally waits out the wallet closing period; `Terminated` and `Closed`
+strand without it. Every other reader of `expiresAt` and `dissolutionEligibleAt` is cut
+or deleted: redemption's strict `< expiresAt` check, renewal — or was deliberately
+deleted: dissolution's `>= dissolutionEligibleAt` check does not exist because
+dissolution itself is cut, and re-anchor's `< dissolutionEligibleAt` gate was
+removed to make re-anchor unbounded. So the term is not enforced by any on-chain
+gate in m1; it is a **commitment held in storage for m2 to honour**. The storage
+*is* the promise, which makes dropping the write a silent repudiation of it rather
+than a code-size optimisation.
+
+
 
 ### 4.5 Storage layout — Met for `dissolutionEligibleAt`; the dropped fields were never M1-reachable, and M2 can recover equivalents from `__gap`
 
