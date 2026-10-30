@@ -287,7 +287,7 @@ func (oko *ReservationKeeperObserver) countUnrequestedDepositsAtRisk(
 // walletCacheRefreshInterval. A failed read fails the pass, because a
 // wallet with unknown or outdated state can hide a retiring source.
 func (oko *ReservationKeeperObserver) refreshWalletStates() error {
-	now := time.Now()
+	now := oko.nowFn()
 	for pkh, state := range oko.cachedWallets {
 		if !state.fetchedAt.IsZero() &&
 			now.Sub(state.fetchedAt) < walletCacheRefreshInterval {
