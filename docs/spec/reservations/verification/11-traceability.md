@@ -163,7 +163,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [PAR-2](03-parameters-governance.md) | `reservationTxMaxFee` (uint64) | holds | Direct setter test: `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:169` |
 | [PAR-20](03-parameters-governance.md) | `walletClosingPeriod` / `movingFundsTimeout` (uint32) | holds | `Bridge.ReservationStranding.test.ts` "real moving-funds-timeout call chain" |
 | [PAR-21](03-parameters-governance.md) | `liveWalletsCount` (uint32, derived) | holds | `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:346` (bound tightens when a Live wallet leaves Live) |
-| [PAR-3](03-parameters-governance.md) | `reservationTermSeconds` (uint32) | holds | `Bridge.ReservationFeasibilityGuard.test.ts:170` covers PAR-X3 (floor); ceiling revert is untested |
+| [PAR-3](03-parameters-governance.md) | `reservationTermSeconds` (uint32) | holds | Direct setter test: `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:183` ("rejects a term below the protocol floor") ... |
 | [PAR-4](03-parameters-governance.md) | `reservationDissolutionDelay` (uint32) | holds | `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationDissolutionDelay.test.ts:133` ("accepts exactly 730 days") ... |
 | [PAR-5](03-parameters-governance.md) | `reservationMaxTotalAmount` (uint64) | holds | `Bridge.ReservationCaps.test.ts` "reverts when the total amount cap exceeds slot capacity" |
 | [PAR-6](03-parameters-governance.md) | `maxReservationsPerWallet` (uint32) | holds | Direct setter test: `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:197` |
