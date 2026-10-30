@@ -232,10 +232,10 @@ taken on 2026-10-29 and the code does not change.
   A later debt repayment burns supply without another Bitcoin miner fee.
   This does not assert that fee debt captures every possible pooled loss or uncredited spend.
 - **Enforcing code.** `financeInKindFee` records the shortfall
-  (`tbtc-v2:solidity/contracts/vault/ReservationVault.sol:215-233`).
-  Repayment and debt-first sweeping decrease it (:241-265, :302-323).
+  (`tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:211-229`).
+  Repayment and debt-first sweeping decrease it (:237-261, :297-318).
   `_burnFromReserve` floors fractional-satoshi token balance before coverage
-  (:359-375). A fractional satoshi does not cover a whole-satoshi fee.
+  (:354-371). A fractional satoshi does not cover a whole-satoshi fee.
 - **Test.** `ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207.
   `none` identified for the complete Bitcoin-plus-token conservation property.
 - **Status.** holds-untested for the complete monetary property.
