@@ -22,7 +22,7 @@
 #                  Built with `yarn install && yarn build` in tbtc-v2's
 #                  solidity/ directory and checked locally with verify.sh.
 #                  The compiled validator is unchanged at tbtc-v2
-#                  4c98e6b82d75a5fdbb3c3504979245defe300846, the commit
+#                  d1bf5bc281992885970f7c232cd9a66b7a6b5127, the commit
 #                  TBTC_V2_REF in .github/workflows/client.yml names.
 #   Re-run this script against a newer tbtc-v2 build whenever the
 #   validator changes, bump TBTC_V2_REF to the same commit, and update

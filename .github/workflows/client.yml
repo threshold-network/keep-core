@@ -191,7 +191,7 @@ jobs:
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to commit 4c98e6b82 on the `reservations-upgrade`
+    # tbtc-v2 ref: pinned to commit d1bf5bc281 on the `reservations-upgrade`
     # integration branch, where the reservation contracts live (they are
     # not on tbtc-v2's `main`). A full commit hash is pinned rather than
     # a branch name because a branch can move after this repo's bindings,
@@ -200,9 +200,20 @@ jobs:
     # harness validator is built from this same commit (see the
     # provenance note in testdata/walletproposalvalidator/regenerate.sh),
     # so bump both together.
+    #
+    # The delta from the previous pin (4c98e6b82) is one contract change:
+    # a hard upper bound on the reservation dissolution delay, enforced in
+    # `Reservation.updateReservationParameters`. That check lives in the
+    # `Reservation` library, which `Bridge`, `WalletProposalValidator` and
+    # `ReservationRouter` all import, so it does not change any of the
+    # four artifacts this job stages - their ABIs are byte-identical to
+    # the ones at 4c98e6b82. `BridgeGovernance` gains two functions at
+    # this commit, but it is not one of the artifacts this job stages and
+    # not one of the module's `required_contracts`, so the gate never
+    # reads it.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: 4c98e6b82d75a5fdbb3c3504979245defe300846
+      TBTC_V2_REF: d1bf5bc281992885970f7c232cd9a66b7a6b5127
     steps:
       - uses: actions/checkout@v4
 
