@@ -66,7 +66,7 @@ Decisions named here come from the audit records (`gap-inventory.md`, `testnet-r
 
 - Description: `closeReservation` exists but has no caller in M1; it is written only for the two M2 settlement call sites (reserved redemption, dissolution). No M1 path marks a position `Closed`.
 - Why accepted: closing a position soundly requires moving and proving Bitcoin, which M1 (variant B) does not do; `Closed` is reserved for M2. Log: the function's own doc comment ("Intended for milestone 2 settlement call sites (both currently unreachable in m1)").
-- Bound on impact: none by itself; it is dead code until M2. It confirms there is no owner-initiated close (AR-02). Its guard accepts a position in `ActionPending` as well as `Active` (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1251-1255`) and releases through the same three calls a strand uses (`:1256-1275`), so a caller wired in M2 would be able to close a position whose acceptance or re-anchor generation can still settle and release its wallet and global capacity early.
+- Bound on impact: none by itself; it is dead code until M2. It confirms there is no owner-initiated close (AR-02). Its guard accepts a position in `ActionPending` as well as `Active` (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1253-1257`) and releases through the same three calls a strand uses (`:1258-1277`), so a caller wired in M2 would be able to close a position whose acceptance or re-anchor generation can still settle and release its wallet and global capacity early.
 - Monitoring: none.
 - Revisit trigger: M2 (wire the two call sites, and narrow the guard to `Active` or record why a position with a live generation may be closed).
 - Status: `holds` (no caller in either repo; the doc and the enum value `Closed` are present, `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1137`, `:100`).
@@ -121,7 +121,7 @@ taken on 2026-10-29 and the code does not change.
   `Live` wallet eligible for explicit stranding, and on a `Closing` wallet it
   is one of two conditions: stranding also waits for
   `closingStartedAt + walletClosingPeriod`
-  (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1323-1334`).
+  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1325-1336`).
   A `MovingFunds` source does not become strandable solely because time
   passed; a `Terminated` or `Closed` wallet needs no deadline at all.
   The earlier wording denied the Live path, and that denial does not match the published target (VF-10).
@@ -131,14 +131,14 @@ taken on 2026-10-29 and the code does not change.
   A reservation may lose its in-kind status when eligible stranding is actually submitted.
 - Monitoring: compare dates with wallet state and pending actions, not the M2 release date alone.
 - Revisit trigger: before mainnet, confirm the promised custody semantics and the M2 migration terms.
-- Status: `holds` at `tbtc-v2@d1bf5bc281` for the explicit guards
-  (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1306-1338`).
+- Status: `holds` at `tbtc-v2@86ce2e79b` for the explicit guards
+  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1308-1340`).
   The client side is uneven: since keep-core #4365 the watcher notifies for all
   four admissible states (`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),
   but the `Live` branch runs only on the startup catch-up scan and on the
   action-timeout recheck queue, so a Live-wallet strand that neither path reaches
   still needs another caller.
-  Range tests: `tbtc-v2@d1bf5bc281:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:263`
+  Range tests: `tbtc-v2@86ce2e79b:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:263`
   (Closing past both), `:386` (Live before eligibility), `:397` (Live past it).
 
 ## AR-12 Fee debt can grow while the reserve target is zero
@@ -188,7 +188,7 @@ taken on 2026-10-29 and the code does not change.
 
 ## AR-17 An anchor output above the action amount reverts with an arithmetic panic
 
-- Description: the proof-time fee check is written as `action.amount - anchorAmount <= action.txMaxFee` (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:462-465`). An anchor output that pays the wallet more than the snapshotted `action.amount` underflows that subtraction, so the call reverts with the arithmetic panic `0x11` instead of the `Transaction fee is too high` message the same check returns in every other case.
+- Description: the proof-time fee check is written as `action.amount - anchorAmount <= action.txMaxFee` (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:462-465`). An anchor output that pays the wallet more than the snapshotted `action.amount` underflows that subtraction, so the call reverts with the arithmetic panic `0x11` instead of the `Transaction fee is too high` message the same check returns in every other case.
 - Why accepted: it needs a proof of a Bitcoin transaction that pays the wallet more than the depositor reserved, which the wallet does not sign, and no test in the suite drives the branch. The fix is a contracts edit (bound `anchorAmount` before subtracting, or compare in the other direction) and this review set carries no code changes.
 - Bound on impact: a rejected proof with a misleading reason. The anchor cannot move and no state changes, so no value is at risk.
 - Monitoring: none. The condition would show only as a failed acceptance proof.
@@ -197,8 +197,8 @@ taken on 2026-10-29 and the code does not change.
 
 ## AR-18 `feeReserveTarget` is a sweep threshold, not a floor
 
-- Description: `financeInKindFee` finances the miner fee of a settled re-anchor out of the vault's whole TBTC balance, and `_burnFromReserve` scales the burn down only to that balance, not to the target (`tbtc-v2@d1bf5bc281:solidity/contracts/vault/ReservationVault.sol:357-360`). `feeReserveTarget` is read by `sweepFees` alone, as the amount left behind when the excess is swept (`:310-316`). A settlement can therefore spend fee revenue that governance meant to keep, and the balance can end below the target.
-- Why accepted: deliberate and stated in the contract's own doc comment, "by feeReserveTarget, which only gates what sweepFees can remove" (`tbtc-v2@d1bf5bc281:solidity/contracts/vault/ReservationVault.sol:198`): a confirmed Bitcoin spend must settle rather than fail on the reserve level, and the shortfall it creates is recorded as debt (AR-12). Making the target a floor is a contracts edit inside a reviewed PR.
+- Description: `financeInKindFee` finances the miner fee of a settled re-anchor out of the vault's whole TBTC balance, and `_burnFromReserve` scales the burn down only to that balance, not to the target (`tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:357-360`). `feeReserveTarget` is read by `sweepFees` alone, as the amount left behind when the excess is swept (`:310-316`). A settlement can therefore spend fee revenue that governance meant to keep, and the balance can end below the target.
+- Why accepted: deliberate and stated in the contract's own doc comment, "by feeReserveTarget, which only gates what sweepFees can remove" (`tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:198`): a confirmed Bitcoin spend must settle rather than fail on the reserve level, and the shortfall it creates is recorded as debt (AR-12). Making the target a floor is a contracts edit inside a reviewed PR.
 - Bound on impact: revenue earmarked for sweeping is spent on in-kind miner fees; the balance cannot go below zero and the uncovered part becomes `inKindFeeDebtSat` (AR-12). Any external accounting or dashboard that reads the target as a floor will disagree with the contract.
 - Monitoring: `feeReserveTarget()` against the vault's TBTC balance, and `inKindFeeDebtSat` after a settlement that outran the reserve.
 - Revisit trigger: before mainnet, with the reserve sizing decision (AR-12). Either state in the deployment documentation that the target is a sweep threshold, or make it a floor.

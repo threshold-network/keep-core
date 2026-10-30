@@ -187,7 +187,7 @@ reconciled and where that decision lives.
 1. **FR-9's wallet states.** FR-9 (`requirements.md:530`) now records all four admissible states:
    `Terminated`, `Closed`, `Live` with `block.timestamp >= dissolutionEligibleAt`, and `Closing`
    past both `dissolutionEligibleAt` and the closing period
-   (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1313-1338`). The `Live` branch is
+   (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1315-1340`). The `Live` branch is
    labelled as the intended behaviour, in the same terms as VF-10
    (`verification/12-finding-adjudication.md:159`), because the published code and the intended
    policy agree that a position on a healthy wallet becomes strandable once the eligibility time
@@ -198,12 +198,12 @@ reconciled and where that decision lives.
    table (`requirements.md:158`) and the glossary (`requirements.md:898`) now say that the state
    is a fallback and that it is recoverable, not terminal. The late-recovery rule is the code's
    behaviour: a stranded reservation is admitted to settlement whenever its generation settles
-   late (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:267-280`, with the
+   late (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:267-280`, with the
    `(stranded && late)` precondition at
-   `tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:278`), and both settlement
+   `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:278`), and both settlement
    paths then write the position back to `Active`
-   (`tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:576` for acceptance,
-   `tbtc-v2@d1bf5bc281:solidity/contracts/bridge/ReservationProofs.sol:843` for re-anchor). A
+   (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:576` for acceptance,
+   `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:843` for re-anchor). A
    late-arriving anchor therefore restores a stranded position rather than leaving it written off,
    and the recovery path is to be kept. The sibling claim that `dissolutionEligibleAt` has one M1
    reader was stale for the same reason: FR-9 now names both readers.

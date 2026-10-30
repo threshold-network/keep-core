@@ -559,11 +559,9 @@ the single output to pay the *recorded* target. Same-wallet re-anchors no
 longer exist (removes the earlier re-anchor/dissolution byte-ambiguity — a
 proof settles only against the single outstanding generation of its
 recorded action type). Anchor shrinks by the financed miner fee (§6).
-The governance-side entry point is not part of the frozen surface: at the M1
-pin `d1bf5bc281` `BridgeGovernance` has no such function, and the forwarder
-described here is the one tbtc-v2#1179 adds. The audit set cites that function
-at the final head of tbtc-v2#1179 (`3260e271`), open with a green check run and not yet merged, marks those citations pending merge, and the
-sentence becomes true only when the PR lands before the freeze.
+The governance-side entry point is part of the frozen surface: tbtc-v2#1179
+adds it, together with `pendingReservationCapsUpdate()` for the staged caps
+slot, and every citation of both in this set names the merged revision.
 
 **Forward compatibility note**: the `targetWalletPubKeyHash` liveness check
 (`registeredWallets[...].state == Live`) is already scheme-agnostic — a future FROST/P2TR
@@ -822,7 +820,7 @@ sign-off; mechanics are fixed, numbers are not.
 | `reservationDissolutionDelay` | Post-expiry delay before dissolvable | 365 days (decided 2026-10-29) | Snapshotted per granted term |
 | `reservationMaxTotalAmount` | Global reserved-anchor cap | 100 BTC (10,000,000,000 sat) | Deliberately conservative; below the 10% fraction target at plausible launch backing |
 | `maxReservationsPerWallet` | Per-wallet reservation count cap | 10 | Binds fully only if the amount cap is disabled — with `reservationMinAmount`=10 BTC and `maxReservationsAmountPerWallet`=50 BTC the amount cap already limits a wallet to 5 positions (*pending #1093 verification of the amount cap*); still bounds re-anchor ceremonies per rotation window |
-| `reservationActionTimeout` | Timeout for acceptance/re-anchor/dissolution | 48 hours | Must be **> `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`** (2h + 2h + 1 s); the on-chain require is at `tbtc-v2@d1bf5bc281:solidity/contracts/bridge/Reservation.sol:1645-1649` (see note below) |
+| `reservationActionTimeout` | Timeout for acceptance/re-anchor/dissolution | 48 hours | Must be **> `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`** (2h + 2h + 1 s); the on-chain require is at `tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1647-1651` (see note below) |
 | `reservationRenewalWindowSeconds` | Renewal window before expiry | 30 days | `0 < window < term`, enforced atomically |
 
 Acceptance timing note: the proposal validator requires the deposit be
