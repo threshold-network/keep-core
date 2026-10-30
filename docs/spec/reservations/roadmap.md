@@ -1224,12 +1224,12 @@ and are recorded as resolved rather than deleted.
    (`requireEnvBigInt`/`requireEnvNumber`, which throw "Missing required env
    var ... - no default values are permitted for mainnet governance
    calldata",
-   `tbtc-v2@86ce2e79b:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:458-471`),
+   `tbtc-v2@c8350d109:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:458-471`),
    so a missing or malformed one hard-fails rather than silently generating
    example calldata. The live risk is therefore an operator supplying the
    wrong value, not a placeholder being copied; the per-wallet count is the
    one value hard-enforced by the script (`= 1`,
-   `tbtc-v2@86ce2e79b:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:630-635`),
+   `tbtc-v2@c8350d109:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:630-635`),
    and the total amount is not pinned by the script at all.
 3. Should reservation-eligible **wallets be allowlisted** at activation?
    Depositors pick the designated wallet at reveal, so any Live wallet can be

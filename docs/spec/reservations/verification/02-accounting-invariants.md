@@ -348,18 +348,18 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   empty wallet be pushed into the slash-prone moving-funds window, and would
   let a wallet holding a proven anchor close underneath it.
 - **Increment sites** (`Reservation.addAnchoredCustody`).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:577` (acceptance settlement, target wallet).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:308` (late acceptance re-take).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:828` (re-anchor settlement, target wallet).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:577` (acceptance settlement, target wallet).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:308` (late acceptance re-take).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:828` (re-anchor settlement, target wallet).
 - **Decrement sites** (`Reservation.removeAnchoredCustody`).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:823` (re-anchor settlement, source wallet).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1210` (`strandReservation`).
-  - `tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1263` (`closeReservation`, unreachable in M1).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:823` (re-anchor settlement, source wallet).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1210` (`strandReservation`).
+  - `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1263` (`closeReservation`, unreachable in M1).
 - **Consumers.**
-  `moveFunds` routes on it (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Wallets.sol:629-631`),
+  `moveFunds` routes on it (`tbtc-v2@c8350d109:solidity/contracts/bridge/Wallets.sol:629-631`),
   `notifyWalletCloseable` adds its amount to the closing threshold
   (`:350-356`), and the wallet-lifecycle invariants read it (INV-102, INV-104).
-- **Storage.** `tbtc-v2@86ce2e79b:solidity/contracts/bridge/BridgeState.sol:519-524`,
+- **Storage.** `tbtc-v2@c8350d109:solidity/contracts/bridge/BridgeState.sol:519-524`,
   a `WalletReservationInfo` mapping appended into the storage gap; `uint32`
   count and `uint64` amount, so INV-210's width argument applies.
 - **Transition check.** An ordinary re-anchor settlement decrements the source
@@ -367,9 +367,9 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   without a replacement; a late acceptance re-take re-adds the anchor its
   position still custodies. No M1 path decrements below zero because every
   decrement is paired with a custody that a prior increment created.
-- **Test.** `tbtc-v2@86ce2e79b:solidity/test/bridge/Reservation.test.ts:2105`
+- **Test.** `tbtc-v2@c8350d109:solidity/test/bridge/Reservation.test.ts:2105`
   (a proven anchor keeps the wallet in MovingFunds) and
-  `tbtc-v2@86ce2e79b:solidity/test/bridge/Reservation.test.ts:2155`
+  `tbtc-v2@c8350d109:solidity/test/bridge/Reservation.test.ts:2155`
   (pending-only capacity does not). `none` identified for a dedicated
   conservation test of the six mutation sites.
 - **Status.** holds by inspected mutation sites and routing tests;
@@ -384,7 +384,7 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   `feeDebt` is the vault's `inKindFeeDebtSat` (INV-207).
 - **Why the reservation subsystem satisfies it.** A credit mints TBTC gross
   against the same gross of new backing, so the two move together
-  (`tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:173-174`).
+  (`tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:173-174`).
   A financed miner fee lowers backing by the whole fee and supply by whatever
   the reserve could burn (`_burnFromReserve`, `:354-371`), so the uncovered part
   lands in the debt (`financeInKindFee`, `:211-231`); the function's doc block
@@ -404,13 +404,13 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   unmint and backing change is balanced: Bitcoin in flight for an ordinary
   redemption, an unminted deposit, and any loss outside the reservation path
   break it until they settle, which is the same limit INV-705 records.
-- **Enforcing code.** `tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:211-231`
+- **Enforcing code.** `tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:211-231`
   (burn what the reserve covers, record the shortfall as debt),
-  `tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:354-371`
+  `tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:354-371`
   (unmint TBTC and decrease the Bank balance in one call),
-  `tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:237-262`
+  `tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:237-262`
   (repay: pull, burn, decrement the debt),
-  `tbtc-v2@86ce2e79b:solidity/contracts/vault/ReservationVault.sol:297-319`
+  `tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:297-319`
   (sweep: repay the debt first, then move the excess).
 - **Test.** `ReservationVault.test.ts` shortfall, repayment and sweep cases
   cited in INV-207. `none` identified for an end-to-end check of the

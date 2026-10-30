@@ -99,20 +99,20 @@ pending-deposit state, and vault status are legal.
   would leave a pending authorization without a signer.
 - **Enforcing code.** Routing: `moveFunds` calls `beginWalletClosing` only when
   `mainUtxoHash == 0 && walletAnchoredInfo[w].count == 0`
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Wallets.sol:623-641`,
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Wallets.sol:623-641`,
   gate at :629-631); the closing threshold on `notifyWalletCloseable` adds the
   proven-anchor amount (`:350-356`). Finalization:
   `notifyWalletClosingPeriodElapsed` hard-requires
   `walletReservationInfo[w].count == 0` before `finalizeWalletClosing`
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Wallets.sol:392-395`).
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Wallets.sol:392-395`).
   `beginWalletClosing`/`finalizeWalletClosing` deliberately skip both checks
   (`Wallets.sol:649`, `:668`).
-- **Test.** Routing both ways: `tbtc-v2@86ce2e79b:solidity/test/bridge/Reservation.test.ts:2105`
+- **Test.** Routing both ways: `tbtc-v2@c8350d109:solidity/test/bridge/Reservation.test.ts:2105`
   (a proven anchor keeps the wallet in MovingFunds) and
-  `tbtc-v2@86ce2e79b:solidity/test/bridge/Reservation.test.ts:2155`
+  `tbtc-v2@c8350d109:solidity/test/bridge/Reservation.test.ts:2155`
   (pending-only capacity routes straight to Closing). The `Closing -> Closed`
   count gate has `none` dedicated.
-- **Status.** holds at `tbtc-v2@86ce2e79b` for the routed cases; `holds-untested`
+- **Status.** holds at `tbtc-v2@c8350d109` for the routed cases; `holds-untested`
   for the `Closing -> Closed` count gate. The version recorded before VF-11
   named `walletReservationInfo` for the routing clause and did not match the published code (VF-11).
 
@@ -132,7 +132,7 @@ taken on 2026-10-29 and the code does not change.
   Eventual cleanup requires a functioning caller; the EVM does not schedule it.
 - **Why.** Distinguishes available recovery from a guaranteed state transition.
 - **Enforcing code.** `terminateWallet` (`Wallets.sol:690-701`, no count
-  check); `notifyReservationStranded` (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1308-1340`,
+  check); `notifyReservationStranded` (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1308-1340`,
   wallet-state require at :1328-1340); client watcher dispatches
   `Closed`/`Terminated` to the stranding check, `Closing` to the
   dissolution-and-closing-period variant, and `Live` to the
@@ -163,22 +163,22 @@ taken on 2026-10-29 and the code does not change.
   right, which `requestReservationReanchor` still accepts from a Closing source.
 - **Why.** A safety gate on closing does not imply automatic cleanup after termination.
 - **Enforcing code.** Normal closing checks zero reserved count
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Wallets.sol:392-395`); the
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Wallets.sol:392-395`); the
   routing gate reads the proven-anchor ledger instead
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Wallets.sol:629-631`, INV-102).
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Wallets.sol:629-631`, INV-102).
   Termination has no such gate (`Wallets.sol:690`).
   Permissionless stranding requires an `Active` position
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/Reservation.sol:1315-1318`).
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1315-1318`).
   The settlement hook strands on `Closed` or `Terminated` only
-  (`tbtc-v2@86ce2e79b:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
   state check at :243-246; calls at :608 and :772).
 - **Test.** `Bridge.ReservationStrandingLibrary.test.ts` "strands an Active
   reservation on a Closed wallet" (:471) and "strands an Active reservation on
-  a Terminated wallet" (:357); `tbtc-v2@86ce2e79b:solidity/test/bridge/ReservationProofs.test.ts:1308`
+  a Terminated wallet" (:357); `tbtc-v2@c8350d109:solidity/test/bridge/ReservationProofs.test.ts:1308`
   (a Closed target strands on an on-time proof) and
-  `tbtc-v2@86ce2e79b:solidity/test/bridge/ReservationProofs.test.ts:1434`
+  `tbtc-v2@c8350d109:solidity/test/bridge/ReservationProofs.test.ts:1434`
   (a Closing target is not stranded, state stays Active, no capacity released).
-- **Status.** holds at `tbtc-v2@86ce2e79b` for the corrected statement. The
+- **Status.** holds at `tbtc-v2@c8350d109` for the corrected statement. The
   version recorded before VF-10 listed Closing among the settlement-strand
   targets and did not match the published code (VF-10).
 
