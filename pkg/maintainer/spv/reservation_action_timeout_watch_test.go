@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -856,12 +857,30 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 	}
 }
 
+// tickCountingChain counts the poll ticks a Run-driven action-timeout watcher
+// has completed. pollPendingActions reads the chain head time exactly once per
+// tick, before it decides anything (the reservationChainHeadTime call that
+// opens its timeout decision), so one counted read is one tick. Tests use it to
+// assert "no re-notification across several ticks" by waiting for ticks to have
+// happened instead of sleeping for a fixed multiple of the poll interval, which
+// under load can expire before the ticker has fired.
+type tickCountingChain struct {
+	*localChain
+	ticks atomic.Int64
+}
+
+func (c *tickCountingChain) GetLatestBlockTimestamp() (time.Time, error) {
+	c.ticks.Add(1)
+	return c.localChain.GetLatestBlockTimestamp()
+}
+
 // TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending
 // verifies that a successful notification remains tracked while the
 // action stays Pending and suppresses duplicate calls within the
 // re-notification interval.
 func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *testing.T) {
 	spvChain := newLocalChain()
+	tickChain := &tickCountingChain{localChain: spvChain}
 	blockCounter := newMockBlockCounter()
 	blockCounter.SetCurrentBlock(1000)
 	spvChain.setBlockCounter(blockCounter)
@@ -869,7 +888,7 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	wallet1 := walletPKH()
 
 	pollInterval := 10 * time.Millisecond
-	ratw := NewReservationActionTimeoutWatcher(spvChain, pollInterval, common.Address{}, nil, 0, nil)
+	ratw := NewReservationActionTimeoutWatcher(tickChain, pollInterval, common.Address{}, nil, 0, nil)
 	// now is comfortably beyond TimeoutAt (100) plus the maximum
 	// possible reservationOperatorStaggerOffset (see the identical
 	// comment in RunLoop_IncrementalTracking above).
@@ -909,9 +928,18 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 		errChan <- ratw.Run(ctx)
 	}()
 
-	// Tick window 1: several poll ticks fire while key1 is Pending and
-	// overdue.
-	time.Sleep(50 * time.Millisecond)
+	// Tick window 1: poll ticks fire while key1 is Pending and overdue. The
+	// wait polls the recorded notifications instead of sleeping for a fixed
+	// multiple of pollInterval: under load a sleep can expire before the
+	// first tick is even scheduled.
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) >= 1
+		},
+		"the first poll tick to submit key1's overdue action-timeout "+
+			"notification (tick interval "+pollInterval.String()+")",
+	)
 
 	calls := spvChain.getSubmittedReservationActionTimeouts()
 	if len(calls) != 1 {
@@ -922,17 +950,23 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 	}
 
 	key1EventKey := actionEventKey(key1, 1)
-	item, ok := ratw.pendingActions[key1EventKey]
-	if !ok {
-		t.Fatalf("key1 should remain tracked in pendingActions while still Pending")
-	}
-	if item.notifiedAt == 0 {
-		t.Errorf("expected key1's pendingActions entry to record a notifiedAt timestamp")
-	}
 
 	// Tick window 2: key1's action generation is left untouched - still
-	// Pending, still past TimeoutAt. Several more poll ticks fire.
-	time.Sleep(50 * time.Millisecond)
+	// Pending, still past TimeoutAt. Several more poll ticks fire; the wait
+	// counts completed ticks so a loaded machine cannot cut the window short
+	// without the test noticing. Like the wait above it reads only the
+	// recorded notifications and the tick counter: pendingActions belongs to
+	// the Run goroutine and is inspected once Run has returned, below.
+	ticksBefore := tickChain.ticks.Load()
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return tickChain.ticks.Load() >= ticksBefore+3
+		},
+		"three more poll ticks after key1's first notification, with key1 "+
+			"left Pending and overdue (tick interval "+
+			pollInterval.String()+")",
+	)
 
 	cancel()
 	if err := <-errChan; err != nil {
@@ -948,13 +982,21 @@ func TestReservationActionTimeoutWatcher_RunLoop_DoesNotRenotifyWhilePending(t *
 		)
 	}
 
-	if _, ok := ratw.pendingActions[key1EventKey]; !ok {
-		t.Errorf(
+	// Run has returned, so the tracked set is no longer being written and
+	// can be inspected: key1 never left Pending on-chain, so only
+	// state-driven eviction - not a delete-on-notify-success - may remove
+	// it, and the entry must record that one notification was attempted.
+	item, ok := ratw.pendingActions[key1EventKey]
+	if !ok {
+		t.Fatalf(
 			"key1 should still be tracked in pendingActions after tick " +
 				"window 2: it never left Pending on-chain, so only " +
 				"state-driven eviction - not a delete-on-notify-success - " +
 				"may remove it",
 		)
+	}
+	if item.notifiedAt == 0 {
+		t.Errorf("expected key1's pendingActions entry to record a notifiedAt timestamp")
 	}
 }
 
@@ -1025,8 +1067,19 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 		errChan <- ratw.Run(ctx)
 	}()
 
-	// First window: exactly one notification while notifiedAt is 0.
-	time.Sleep(50 * time.Millisecond)
+	// First window: exactly one notification while notifiedAt is 0. The
+	// wait polls the recorded notifications instead of sleeping for a fixed
+	// multiple of pollInterval: under load a sleep can expire before the
+	// first tick is even scheduled.
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) >= 1
+		},
+		"the first poll tick to submit key1's overdue action-timeout "+
+			"notification, before the backoff window (tick interval "+
+			pollInterval.String()+")",
+	)
 	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
 		t.Fatalf("expected 1 notification before the backoff window, got %d", len(calls))
 	}
@@ -1040,8 +1093,16 @@ func TestReservationActionTimeoutWatcher_RunLoop_RenotifiesAfterBackoffWindow(t 
 	nowMutex.Unlock()
 
 	// Second window: the backoff has elapsed, so a retry notification
-	// must be submitted.
-	time.Sleep(50 * time.Millisecond)
+	// must be submitted. Polling for it rather than sleeping for a fixed
+	// multiple of pollInterval keeps the window honest under load.
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) >= 2
+		},
+		"the retry notification after the backoff window elapsed "+
+			"(2 total calls, tick interval "+pollInterval.String()+")",
+	)
 
 	cancel()
 	if err := <-errChan; err != nil {
