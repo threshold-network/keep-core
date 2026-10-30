@@ -27,7 +27,16 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
 - **Statement.** An on-time proof requires the named `requestNonce` to equal
   the position's current `requestNonce`. A late proof may name an older
   timed-out generation. A generation newer than a pending one is unwound to
-  `Superseded`, not settled.
+  `Superseded`, not settled. When several generations of one position can be
+  settled by the same Bitcoin transaction, the generation the maintainer
+  proves is the newest `Pending` one, which the client sorts first, submits
+  alone for the key and claims on success
+  (`keep-core@4ced1c8398:pkg/maintainer/spv/reservation_proof_loop.go:862-875`,
+  `:1180-1182`, `:1248-1250`), and the older `TimedOut` generation that this
+  settlement leaves behind can then never settle, because the position's
+  anchor has moved away from the source anchor that generation recorded
+  (`tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
+  which INV-503 and EC-14 already accept.
 - **Enforcing code.** On-time current-generation check
   (`ReservationProofs.sol:482-487` acceptance, `:663-667` re-anchor);
   `late` is derived from `action.state == TimedOut` (`
