@@ -60,4 +60,4 @@ jobs:
 
       - name: Smoke tool tests
         working-directory: docs/spec/reservations/verification/tools
-        run: '"$RUNNER_TEMP/spec-venv/bin/python" -m unittest test_smoke test_traceability test_pin_rule'
+        run: '"$RUNNER_TEMP/spec-venv/bin/python" -m unittest test_smoke test_traceability test_pin_rule test_citation_drift'
