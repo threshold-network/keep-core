@@ -762,8 +762,19 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 		errChan <- ratw.Run(ctx)
 	}()
 
-	// Wait for tick 1 to process key1.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for tick 1 to process key1. The wait polls the recorded
+	// notifications rather than sleeping for a fixed multiple of
+	// pollInterval: under load (e.g. the package's tests running beside the
+	// heaviest suites in CI) a fixed sleep can expire before the first tick
+	// is even scheduled.
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) >= 1
+		},
+		"the first poll tick to submit key1's overdue action-timeout "+
+			"notification (tick interval "+pollInterval.String()+")",
+	)
 
 	// Verify key1 was notified.
 	calls := spvChain.getSubmittedReservationActionTimeouts()
@@ -810,8 +821,19 @@ func TestReservationActionTimeoutWatcher_RunLoop_IncrementalTracking(t *testing.
 		2,
 	)
 
-	// Wait for tick 2 to process key2 and evict key1.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for tick 2 to process key2 and evict key1. pollPendingActions
+	// checks the sorted pendingActions batch in order, and key1's event key
+	// sorts before key2's, so the tick that records key2's notification has
+	// already evicted the settled key1.
+	waitForProofLoopCondition(
+		t,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) >= 2
+		},
+		"the second poll tick to submit key2's overdue action-timeout "+
+			"notification (2 notifications total, tick interval "+
+			pollInterval.String()+")",
+	)
 
 	cancel()
 	if err := <-errChan; err != nil {
