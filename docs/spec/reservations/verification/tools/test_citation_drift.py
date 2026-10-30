@@ -232,6 +232,49 @@ class CitationDriftTest(unittest.TestCase):
         result = run(self.spec, self.repo, revision)
         self.assertIn("absent", result.stdout)
 
+    def test_a_baseline_that_matches_no_key_is_refused(self):
+        """A run with no overlapping key compared nothing, so it must not pass.
+
+        Pointing the tool at the wrong root, or comparing against the wrong
+        revision, makes every citation key differ. Every citation then looks new
+        and every baseline entry looks gone, so `drifted` is empty and a naive
+        verdict reads PASS while proving nothing. Main caught this class of
+        false green on the key itself; this is the same trap one level up.
+        """
+        before = make_repo(self.repo, {TEST_FILE: BEFORE}, "before")
+        make_spec(self.spec, f"tbtc-v2@{before}:{TEST_FILE}:5")
+        snapshot = self.snapshot(before)
+
+        # A different spec directory: same tree, but the citation sits on a
+        # different line of a different file, so no key can match.
+        other = self.root / "other-spec"
+        other.mkdir(parents=True, exist_ok=True)
+        (other / "elsewhere.md").write_text(
+            f'| PAR-9 | other | `holds` | `tbtc-v2@{before}:{TEST_FILE}:5` |\n',
+            encoding="utf-8",
+        )
+
+        result = run(other, self.repo, before, "--baseline", str(snapshot))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("baseline unusable", result.stdout)
+        self.assertIn("overlapping 0", result.stdout)
+        self.assertIn("RESULT: FAIL", result.stdout)
+
+    def test_an_empty_baseline_is_not_treated_as_unusable(self):
+        """Overlap of zero only condemns a run that had citations to compare.
+
+        Two empty runs genuinely agree, so the guard must not fire and turn a
+        trivial pass into a failure.
+        """
+        before = make_repo(self.repo, {TEST_FILE: BEFORE}, "before")
+        make_spec(self.spec, f"tbtc-v2:{TEST_FILE}:5")  # bare: not checked
+        snapshot = self.snapshot(before)
+
+        result = run(self.spec, self.repo, before, "--baseline", str(snapshot))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("baseline unusable", result.stdout)
+        self.assertIn("RESULT: PASS", result.stdout)
+
     def test_the_readme_describes_the_flow_the_tool_implements(self):
         """The README must name the snapshot and baseline steps, in that order."""
         text = README.read_text(encoding="utf-8")

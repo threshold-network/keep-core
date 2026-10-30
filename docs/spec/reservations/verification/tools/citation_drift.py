@@ -188,6 +188,13 @@ def main():
     for key, old, new in moved:
         print(f"  {key}: {old.get('path')} -> {new.get('path')}")
     print(f"new citations: {len(added)}  gone: {len(removed)}")
+    if before and entries and not (set(before) & set(entries)):
+        print("baseline unusable: no citation key in the baseline matches this run")
+        print(f"  checked {len(entries)}, baseline {len(before)}, overlapping 0")
+        print("  a wrong --root, or a comparison against the wrong revision, looks")
+        print("  exactly like this. Nothing was compared, so there is no verdict.")
+        print("RESULT: FAIL")
+        return 1
     for key in added:
         print(f"  new: {key}")
     for key in removed:
