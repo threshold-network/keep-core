@@ -186,19 +186,19 @@ func reservationOperatorStaggerOffset(
 	uniqueKey string,
 	interval time.Duration,
 ) uint32 {
-	intervalSeconds := interval / time.Second
-	if intervalSeconds <= 0 {
+	sec := interval / time.Second
+	if sec <= 0 {
 		return 0
 	}
-	if intervalSeconds > math.MaxUint32 {
-		// The offset below is taken modulo intervalSeconds, so it cannot
+	if sec > math.MaxUint32 {
+		// The offset below is taken modulo sec, so it cannot
 		// exceed a representable interval; an interval this large only
 		// means the caller configured years, where any offset fits.
-		intervalSeconds = math.MaxUint32
+		sec = math.MaxUint32
 	}
 
 	hash := crypto.Keccak256(append(operatorAddress.Bytes(), []byte(uniqueKey)...))
-	offset := binary.BigEndian.Uint64(hash[:8]) % uint64(intervalSeconds)
+	offset := binary.BigEndian.Uint64(hash[:8]) % uint64(sec)
 	if offset > math.MaxUint32 {
 		offset = math.MaxUint32
 	}

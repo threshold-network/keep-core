@@ -488,15 +488,6 @@ func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 	return secp256k1.Unmarshal(bytes)
 }
 
-func validateMemberIndex(protoIndex uint32) error {
-	// Protobuf does not have uint8 type, so we are using uint32. When
-	// unmarshalling message, we need to make sure we do not overflow.
-	if protoIndex > group.MaxMemberIndex {
-		return fmt.Errorf("invalid member index value: [%v]", protoIndex)
-	}
-	return nil
-}
-
 // Marshal converts the ReservationAnchorProposal to a byte array.
 func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
 	if rap.AnchorTxFee == nil {
