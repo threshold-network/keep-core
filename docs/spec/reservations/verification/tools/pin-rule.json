@@ -1,0 +1,18 @@
+{
+  "baseline": "7dd510d93",
+  "baseline_note": "The head after the 2026-10-30 re-pin, when the pin rule was adopted. Lines added or changed since this commit are checked; the citations already in the set are the reading backlog on the board row, not work for this check.",
+  "pins": {
+    "tbtc-v2": {
+      "previous": "44d9c9c6a",
+      "current": "c8350d109"
+    },
+    "keep-core": {
+      "previous": "f03cc61dc",
+      "current": "4ced1c839"
+    }
+  },
+  "paths": [
+    "docs/spec/reservations",
+    "docs/spec/keep-core"
+  ]
+}

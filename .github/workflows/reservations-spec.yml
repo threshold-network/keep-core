@@ -55,6 +55,9 @@ jobs:
         working-directory: docs/spec/reservations/verification
         run: '"$RUNNER_TEMP/spec-venv/bin/python" tools/smoke.py . "$GITHUB_WORKSPACE/tbtc-v2" "$GITHUB_WORKSPACE"'
 
+      - name: Pin rule for citations written in new or changed lines
+        run: python3 docs/spec/reservations/verification/tools/pin_rule.py "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tbtc-v2"
+
       - name: Smoke tool tests
         working-directory: docs/spec/reservations/verification/tools
-        run: '"$RUNNER_TEMP/spec-venv/bin/python" -m unittest test_smoke test_traceability'
+        run: '"$RUNNER_TEMP/spec-venv/bin/python" -m unittest test_smoke test_traceability test_pin_rule'
