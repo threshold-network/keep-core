@@ -203,8 +203,8 @@ accumulates** for that settlement. A confirmed Bitcoin anchor must settle
 even after the vault loses trust, so settlement is never forced back
 through the revoked vault (that would revert the already-confirmed spend).
 The branch and its fee consequence are recorded in tbtc-v2
-`solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Late-Settlement Fee
-Fallback When Vault Trust Is Revoked (E-2)").
+`solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Fee
+Fallback When Vault Trust Is Revoked").
 
 ## 4. Launch gates
 
@@ -394,7 +394,7 @@ independent operational needs with no single corresponding launch gate.
 | **Below-dust report after the last re-anchor** | `notifyMovingFundsBelowDust` (`MovingFunds.sol:603`) is the **only remaining** route to close a wallet that proved its funds moved while still holding anchors: the Bridge's own automatic closing attempt inside `notifyWalletFundsMoved` (`Wallets.sol:405-439`) runs once, while the reservation count is still non-zero, and cannot itself be retried | **Yes** — `pkg/tbtcpg/reservation_reanchor.go`'s `ReservationReanchorTask` calls `notifyMovingFundsBelowDustIfEligible` (`:664-730`) after re-anchoring a `MovingFunds` wallet's reservations to zero, invoking `NotifyMovingFundsBelowDust` (test: `TestReservationReanchorTask_Run_NotifiesMovingFundsBelowDust`). Still an operator duty if the reservation task is disabled via `tbtc.Config.ReservationsEnabled` |
 | Stale reserved-deposit cleanup | `notifyStaleReservedDeposit` | **Yes** — `pkg/maintainer/spv/reservation_stale_deposit_watch.go` |
 | In-kind fee reserve and `inKindFeeDebtSat` watch | Re-anchor charges an in-kind miner fee (§3), so the reserve depletes and can enter debt in m1. Non-zero debt means the system is over-supplied by exactly that amount, publicly visible and repayable by anyone. The 2026-09-28 D-3 decision keeps the no-floor behavior: `sweepFees` repays `inKindFeeDebtSat` from the vault's full balance before comparing against `feeReserveTarget`, so the target bounds only the sweep-out, not debt repayment | **Yes (NFR-OBS-3)** — implemented as the two fee-debt gauges `reservation_vault_fee_debt_sat` (the vault's `inKindFeeDebtSat`) and `reservation_vault_fee_reserve_tbtc` (the vault's TBTC fee-reserve balance), chain-read from the vault and published via the same `SetGauge` path; alert thresholds remain operator-side |
-| Cap-dial runbook, including client activation ordering | Trigger, executor and accepted blast radius agreed **before** launch. Activation ordering (C-4): release and deploy a keep-core build whose `reservationsActivationBlocks` contains the target network's entry **before** `setVaultStatus(vault, true)` executes; the on-chain activation transaction must be scheduled at or after that block, otherwise reserved reveals settle on-chain while no client ever schedules acceptance or re-anchor | Manual by nature — a runbook gate, not code. Recorded in tbtc-v2 `solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Client Activation Ordering Gate (C-4)") |
+| Cap-dial runbook, including client activation ordering | Trigger, executor and accepted blast radius agreed **before** launch. Activation ordering (C-4): release and deploy a keep-core build whose `reservationsActivationBlocks` contains the target network's entry **before** `setVaultStatus(vault, true)` executes; the on-chain activation transaction must be scheduled at or after that block, otherwise reserved reveals settle on-chain while no client ever schedules acceptance or re-anchor | Manual by nature — a runbook gate, not code. Recorded in tbtc-v2 `solidity/docs/RESERVATION_CAPS_DEPLOYMENT.md` ("Client Activation Ordering Gate") |
 | Position-age report | Nothing closes, so age is the only proxy for accumulating permanent liability | **No** — not found in keep-core |
 
 Note what B does **not** need: a dissolution executor. That saving is the
