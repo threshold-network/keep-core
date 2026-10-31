@@ -1,0 +1,242 @@
+# Equivalent mutants (verification standard MUT-1).
+#
+# A surviving mutant on a line that a PR changes fails the `mutation-gate`
+# check (.github/workflows/mutation-pr.yml) unless an entry below matches it.
+# An entry that is not on the merge base counts only when a code owner who is
+# not the PR author adds the label `equivalent-mutants-approved` after the
+# last push (approval-label rule, section 4.1). List a mutant here only when
+# no test can tell it apart from the original code; otherwise add the test.
+#
+# .github/scripts/mutation-gate.py reads this file. It accepts only this
+# shape (single-line scalars; quote a value that contains ": " or " #"):
+#
+# equivalent_mutants:
+#   - file: pkg/tbtc/wallet.go            # repository-relative path
+#     line: 'if len(signers) > 0 {'       # exact line text (leading and trailing
+#                                         # whitespace ignored), or instead:
+#     line_sha256: <sha256 hex of the line text without leading and trailing whitespace>
+#     mutator: CONDITIONALS_BOUNDARY      # gremlins type (e.g. CONDITIONALS_NEGATION)
+#                                         # or mewt slug (e.g. COS, CR, ER)
+#     reason: why no test can kill this mutant
+#
+# One entry covers every mutant of that mutator on that line. A changed line
+# text no longer matches, so the entry must be reviewed again.
+# Reservations M1 freeze decision, 2026-10-30. Option B: the 58 surviving
+# keep-core Go mutants that a test cannot or should not pin: the 26 that are
+# equivalent and the 32 whose only effect is log text, a pause between fixed
+# retry attempts, or a branch no caller can reach. Measured over the 13
+# reservation files of pkg/tbtcpg and pkg/maintainer/spv with gremlins v0.6.0
+# (--workers 4 --timeout-coefficient 10). The bar keep-core.go.mutation.survivors
+# reads 60 living mutants; the 58 listed below leave 2 against the ceiling of
+# 40, and those 2 are the real gaps this option does not excuse.
+equivalent_mutants:
+  # pkg/maintainer/spv
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if err := ratw.pollPendingActions(); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'The poll result is only logged here, never returned: a failing poll changes no state and no caller outcome.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: '(now < item.notifiedAt ||'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality both arms skip: the first is true, and the second computes 0 < interval, so the mutated <= leaves the same state as <.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'The notification has already been submitted; the mutant moves one log line and nothing else.'
+  - file: pkg/maintainer/spv/reservation_event_scan.go
+    line: 'if currentBlock > reservationEventScanConfirmationBlocks {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At currentBlock == 12 both forms leave endBlock at 0, because the guard assigns the value the variable already holds.'
+  - file: pkg/maintainer/spv/reservation_event_scan.go
+    line: 'if chunkEnd > endBlock || chunkEnd < chunkStart {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Covers both mutants on this line: at equality the first comparison writes endBlock a value it already holds, and the wrap leaves chunkEnd at chunkStart + 9999 mod 2^64, so the second equality is unreachable.'
+  - file: pkg/maintainer/spv/reservation_keeper_observer.go
+    line: 'if err := oko.ObservationPass(); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'ObservationPass errors are logged only, on the tick and in the loop alike; the loop behaviour is unchanged.'
+  - file: pkg/maintainer/spv/reservation_keeper_risk.go
+    line: 'if anchorFloorSats <= math.MaxInt64 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality the branch is skipped, but anchorFloor is already initialised to MaxInt64, so both forms leave the same value.'
+  - file: pkg/maintainer/spv/reservation_keeper_risk.go
+    line: 'if marginAndTimeout <= math.MaxUint32 &&'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality the second conjunct is false anyway: refundDeadline is uint32 and cannot exceed MaxUint32.'
+  - file: pkg/maintainer/spv/reservation_keeper_risk.go
+    line: 'deposit.refundDeadline > uint32(marginAndTimeout) {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality lastRequest stays 0, exactly as in the else arm.'
+  - file: pkg/maintainer/spv/reservation_params_feasibility.go
+    line: 'if revealAhead > 0 &&'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The >= 0 form is always true, and the next conjunct already implies revealAhead > 0.'
+  - file: pkg/maintainer/spv/reservation_params_feasibility.go
+    line: 'len(reasons) > 0,'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The derived key is only read inside the branch that already requires len(reasons) > 0.'
+  - file: pkg/maintainer/spv/reservation_proof_loop.go
+    line: 'if err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only: the loop restarts unconditionally after the backoff either way.'
+  - file: pkg/maintainer/spv/reservation_proof_loop.go
+    line: 'return c < 0'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The enclosing if removes c == 0, so the strict and non-strict forms agree on every value that reaches this return.'
+  - file: pkg/maintainer/spv/reservation_proof_loop.go
+    line: '); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only: the backed-off wallet refresh error is reported and the refresh is retried on the next pass in both forms.'
+  - file: pkg/maintainer/spv/reservation_proof_loop.go
+    line: 'if newAnchorAmount < 0 || uint64(newAnchorAmount) <= event.TxMaxFee {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At value 0 the dust floor in the same block rejects as well, because that block requires TxMaxFee > 0.'
+  - file: pkg/maintainer/spv/reservation_stale_deposit_watch.go
+    line: 'if now < notifiedAt || now-notifiedAt < uint32(actionTimeoutRenotifyInterval.Seconds()) {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality the first arm is false and the second computes 0 < interval, so the mutated <= skips the notification exactly as < does.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'attempt+1,'
+    mutator: ARITHMETIC_BASE
+    reason: 'The attempt index appears only in the warning text.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if attempt < reservationStrandingRetryAttempts-1 {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Removes the pauses between attempts; the loop count and the returned error are unchanged.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if attempt < reservationStrandingRetryAttempts-1 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The comparison only gates the pause between attempts; the loop count is fixed by the range and the returned error is unchanged.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if attempt < reservationStrandingRetryAttempts-1 {'
+    mutator: INVERT_NEGATIVES
+    reason: 'Same comparison as the entries above, same effect: it only gates the pause.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if attempt < reservationStrandingRetryAttempts-1 {'
+    mutator: ARITHMETIC_BASE
+    reason: 'Same comparison as the two entries above, same effect: it only gates the pause.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only; the termination cause is never a gate and defaults to Unknown.'
+  - file: pkg/maintainer/spv/reservation_stranding_watch.go
+    line: 'if err := rsw.spvChain.NotifyReservationStranded(key); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only; the notification was already submitted and the recheck flag is set elsewhere.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if sec > math.MaxUint32 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality both forms leave sec at MaxUint32, because the guard assigns that same value.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if offset > math.MaxUint32 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The offset is below sec, and sec is at most MaxUint32, so equality is unreachable.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only at both sites this text pins: the startup scan error still leaves the fetched slice handled identically, and the stranding check error is superseded by the requeue condition that reads the real error.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'attempt+1,'
+    mutator: ARITHMETIC_BASE
+    reason: 'The attempt index appears only in the warning text of the retry loops this text pins.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if checkErr != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only; the continue on success lands on the loop end.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if len(unresolvedWallets) > 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Spawns the second-chance goroutine with an empty list, which waits out the delay and returns without a chain read.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if initialErr != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only; the initial poll result is recorded by the caller, not by this branch.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if currentBlock > reservationDefaultLookBackBlocks {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality startBlock stays 0 either way.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: '); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Log only; the second-chance check error changes no branch.'
+  - file: pkg/maintainer/spv/reservation_wiring.go
+    line: 'if currentBlock > window {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality startBlock stays 0 either way.'
+  # pkg/tbtcpg
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if uint64(reservationParameters.ReservationActionTimeout) <= uint64(depositMinAgeSeconds) {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'The branch body is a single taskLogger.Errorf, so only the presence of the misconfiguration line changes; the negation of the same comparison is listed separately.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if uint64(reservationParameters.ReservationActionTimeout) <= uint64(depositMinAgeSeconds) {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'The branch body is a single taskLogger.Errorf, so only the presence of the misconfiguration line changes; the boundary form of the same comparison is listed separately.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if averageBlockTime <= 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Unreachable: the only caller defaults a non-positive block time before the call, so the branch exists for a future caller and no current input reaches it; the same text pins the second copy of the guard.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if lookBack < 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At zero the guarded body assigns zero to the variable that already holds zero, and a negative window is impossible with a non-negative term and a positive block time; the same text pins the second copy of the guard.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if currentBlock > lookBackBlocks {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality currentBlock - lookBackBlocks is 0, the initial value of startBlock.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'return result[i].TimeoutAt < result[j].TimeoutAt'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Only reached when the two timeouts differ, so the strict and non-strict forms agree there.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'return result[i].BlockNumber < result[j].BlockNumber'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Only reached when the two block numbers differ, so the strict and non-strict forms agree there.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'return result[i].ReservationKey.Cmp(result[j].ReservationKey) < 0'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Cmp is 0 only for equal keys, and the result set is keyed by reservation key, so two entries never share one.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if requestBlock > lookBackBlocks {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality requestBlock - lookBackBlocks is 0, the initial value of startBlock.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if anchorFee < 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Needs a zero fee estimate, which applyWalletTxFeeFloor cannot produce: the 5 sat/vByte floor over the 142-vByte acceptance anchor gives 994 sat in the fixtures and never 0.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if minPlusFee < action.MinAmount || depositRequest.Amount < minPlusFee {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Needs MinAmount + feeSats to wrap to exactly MinAmount, which requires a fee of 2^64 sat; the estimate is bounded far below that.'
+  - file: pkg/tbtcpg/reservation_acceptance.go
+    line: 'if workers > len(candidates) {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality workers already equals len(candidates), so the guarded assignment changes nothing.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if len(request.WalletOperators) > 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'With an empty operator list GetWalletMembersInfo iterates zero times and returns ErrNoExecutingOperator, which the call site already treats as a non-member and continues with an empty proof.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if reservation.AnchorUtxo.Value <= 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At value 0 both forms end in continue reservationLoop, because the floor check below rejects a zero anchor for any floor; only the log line differs.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Masked: the proposal path re-applies the same floor to live parameters and RequestReservationReanchor mirrors it, so a pass with stable parameters ends with no proposal either way.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if anchorValue <= params.ReservationTxMaxFee+params.ReservationMinAmount {'
+    mutator: ARITHMETIC_BASE
+    reason: 'Masked by the same two checks, so the pass loses one fee estimate and one log line and nothing else.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if reservation.AnchorUtxo.Value < 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At value 0 both forms return an error, because the following floor check rejects 0 for any uint64 floor and the caller rejects non-positive anchors before this function.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if currentBlock > ReservationReanchorLookBackBlocks {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At equality startBlock stays 0, its initial value.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: '); err != nil {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'The block is an error log plus a return, so the mutant moves logging between the error log and the closing info line.'

@@ -136,14 +136,34 @@ func setReservationWatcherPanicRecovered(f func()) {
 // reservationScanRange).
 const reservationDefaultLookBackBlocks = uint64(216000)
 
+// DefaultReservationStrandingStartupScanRetryDelay is the production
+// duration between the startup catch-up scan giving up on a wallet and
+// its second-chance retry pass.
+const DefaultReservationStrandingStartupScanRetryDelay = 30 * time.Second
+
 // reservationStrandingStartupScanRetryDelay bounds how long the startup
 // catch-up scan's second-chance retry pass (see
 // retryReservationStrandingStartupScan) waits before re-attempting wallets
 // whose GetWallet call failed on every one of the first 3 attempts. It runs
 // once, after WireReservationWatchers has already returned, giving a
 // transient RPC hiccup time to clear without blocking client/maintainer
-// startup on it.
-const reservationStrandingStartupScanRetryDelay = 30 * time.Second
+// startup on it. Declared as a var, rather than referencing the default
+// constant directly at the call site, solely so tests in this package can
+// shrink it to observe the retry pass that the scheduling condition at its
+// call site gates.
+var reservationStrandingStartupScanRetryDelay = DefaultReservationStrandingStartupScanRetryDelay
+
+func getReservationStrandingStartupScanRetryDelay() time.Duration {
+	reservationWiringMutex.RLock()
+	defer reservationWiringMutex.RUnlock()
+	return reservationStrandingStartupScanRetryDelay
+}
+
+func setReservationStrandingStartupScanRetryDelay(d time.Duration) {
+	reservationWiringMutex.Lock()
+	defer reservationWiringMutex.Unlock()
+	reservationStrandingStartupScanRetryDelay = d
+}
 
 // WalletClosedChain defines the chain interface required to subscribe to
 // wallet close events.
@@ -186,19 +206,19 @@ func reservationOperatorStaggerOffset(
 	uniqueKey string,
 	interval time.Duration,
 ) uint32 {
-	intervalSeconds := interval / time.Second
-	if intervalSeconds <= 0 {
+	sec := interval / time.Second
+	if sec <= 0 {
 		return 0
 	}
-	if intervalSeconds > math.MaxUint32 {
-		// The offset below is taken modulo intervalSeconds, so it cannot
+	if sec > math.MaxUint32 {
+		// The offset below is taken modulo sec, so it cannot
 		// exceed a representable interval; an interval this large only
 		// means the caller configured years, where any offset fits.
-		intervalSeconds = math.MaxUint32
+		sec = math.MaxUint32
 	}
 
 	hash := crypto.Keccak256(append(operatorAddress.Bytes(), []byte(uniqueKey)...))
-	offset := binary.BigEndian.Uint64(hash[:8]) % uint64(intervalSeconds)
+	offset := binary.BigEndian.Uint64(hash[:8]) % uint64(sec)
 	if offset > math.MaxUint32 {
 		offset = math.MaxUint32
 	}
@@ -489,7 +509,7 @@ func WireReservationWatchers(
 			spvChain,
 			strandingWatcher,
 			unresolvedWallets,
-			reservationStrandingStartupScanRetryDelay,
+			getReservationStrandingStartupScanRetryDelay(),
 		)
 	}
 

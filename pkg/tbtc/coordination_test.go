@@ -1531,6 +1531,65 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 	}
 }
 
+// TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock
+// verifies the inclusive comparison coordinationBlock >=
+// ReservationsActivationBlock at the exact activation block for a network
+// with a non-zero activation block. Since reservationsActivationBlocks is
+// empty in production (no network has been assigned a rollout height yet),
+// this test temporarily inserts an entry for ethereum.Sepolia to exercise
+// the boundary.
+func TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock(t *testing.T) {
+	// Set up a temporary activation block for Sepolia and clean up.
+	const activationBlock = 1000
+	reservationsActivationBlocks[ethereum.Sepolia] = activationBlock
+	t.Cleanup(func() { delete(reservationsActivationBlocks, ethereum.Sepolia) })
+
+	tests := map[string]struct {
+		coordinationBlock          uint64
+		windowIndex                uint64
+		expectedReservationActions []WalletActionType
+	}{
+		"coordination block exactly at activation block": {
+			coordinationBlock:          activationBlock,
+			windowIndex:                5,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
+		},
+		// Negative control: one block before activation must not include
+		// reservation actions, proving the inclusive comparison is what
+		// gates the actions.
+		"coordination block one before activation block": {
+			coordinationBlock:          activationBlock - 1,
+			windowIndex:                5,
+			expectedReservationActions: nil,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			executor := &coordinationExecutor{ethereumNetwork: ethereum.Sepolia}
+
+			seed := [32]byte{}
+
+			checklist := executor.getActionsChecklist(
+				test.windowIndex,
+				seed,
+				test.coordinationBlock,
+			)
+
+			var actualReservationActions []WalletActionType
+			for _, action := range checklist {
+				if action == ActionReservationAnchor || action == ActionReservationReanchor { // ubs:ignore
+					actualReservationActions = append(actualReservationActions, action)
+				}
+			}
+
+			if diff := deep.Equal(actualReservationActions, test.expectedReservationActions); diff != nil {
+				t.Errorf("reservation actions mismatch: %v", diff)
+			}
+		})
+	}
+}
+
 func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
 	// Mainnet must have no entry in reservationsActivationBlocks so that
 	// ReservationsActivationBlock returns math.MaxUint64 (never activates)

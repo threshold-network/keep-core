@@ -801,3 +801,101 @@ func acceptanceActionFixture(
 		TermSeconds: 0,
 	}
 }
+
+// TestReservationKeeperObserver_NoTargetCountIgnoresWalletCacheOrder pins
+// the contract of the no-target gauge: it counts (wallet, Active
+// reservation) pairs on retiring wallets that lack any eligible target,
+// so its value is a function of the SET of cached wallets, never of the
+// order the cache is walked. Two retiring sources with identical risk
+// and one never-fetched (nil-data) wallet are cached; the nil-data entry
+// must neither hide an eligible target nor hide a later source.
+//
+// Go randomizes map iteration on every range, so insertion order does
+// not decide the walk order. The assertions are therefore order-free
+// (the original code passes on every walk) and repeated, so a walk that
+// meets the nil-data entry first fails any variant that stops the loop
+// there instead of skipping it.
+func TestReservationKeeperObserver_NoTargetCountIgnoresWalletCacheOrder(t *testing.T) {
+	const walks = 200
+
+	sourceA := [20]byte{1}
+	sourceB := [20]byte{2}
+	target := [20]byte{3}
+	nilData := [20]byte{4}
+
+	cases := []struct {
+		name          string
+		withTarget    bool
+		nilDataFirst  bool
+		wantNoTargets int
+	}{
+		{"target present, nil-data inserted first", true, true, 0},
+		{"target present, nil-data inserted last", true, false, 0},
+		{"no target, nil-data inserted first", false, true, 2},
+		{"no target, nil-data inserted last", false, false, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spvChain, observer, _, head, _ := observerFixture(t)
+
+			add := func(pkh [20]byte, data *tbtc.WalletChainData) {
+				observer.cachedWallets[pkh] = &cachedWalletState{data: data}
+			}
+			addNilData := func() { add(nilData, nil) }
+			addRest := func() {
+				retiring := &tbtc.WalletChainData{State: tbtc.StateMovingFunds}
+				add(sourceA, retiring)
+				add(sourceB, retiring)
+				if tc.withTarget {
+					add(target, &tbtc.WalletChainData{
+						State:     tbtc.StateLive,
+						CreatedAt: head.Add(-31 * 24 * time.Hour),
+					})
+				}
+			}
+			if tc.nilDataFirst {
+				addNilData()
+				addRest()
+			} else {
+				addRest()
+				addNilData()
+			}
+
+			for i, source := range [][20]byte{sourceA, sourceB} {
+				key := big.NewInt(int64(11 * (i + 1)))
+				spvChain.setWalletReservations(source, []*big.Int{key})
+				spvChain.setReservation(key, &tbtc.Reservation{
+					State:      tbtc.ReservationStateActive,
+					AnchorUtxo: observerAnchorUtxo(1000),
+				})
+			}
+
+			params, err := spvChain.ReservationParameters()
+			if err != nil {
+				t.Fatalf("reservation parameters: [%v]", err)
+			}
+			walletParams := tbtc.WalletParameters{CreationPeriod: 30 * 24 * 3600}
+
+			for walk := range walks {
+				got, err := observer.countReanchorsWithoutTarget(
+					params,
+					walletParams,
+					head,
+				)
+				if err != nil {
+					t.Fatalf("walk %d: no-target count failed: [%v]", walk, err)
+				}
+				if got != tc.wantNoTargets {
+					t.Fatalf(
+						"walk %d: no-target count = %d, want %d "+
+							"(the count depends on the cache walk order)",
+						walk,
+						got,
+						tc.wantNoTargets,
+					)
+				}
+			}
+		})
+	}
+}

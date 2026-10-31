@@ -191,7 +191,7 @@ jobs:
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to commit 4c98e6b82 on the `reservations-upgrade`
+    # tbtc-v2 ref: pinned to commit d1bf5bc281 on the `reservations-upgrade`
     # integration branch, where the reservation contracts live (they are
     # not on tbtc-v2's `main`). A full commit hash is pinned rather than
     # a branch name because a branch can move after this repo's bindings,
@@ -200,9 +200,20 @@ jobs:
     # harness validator is built from this same commit (see the
     # provenance note in testdata/walletproposalvalidator/regenerate.sh),
     # so bump both together.
+    #
+    # The delta from the previous pin (4c98e6b82) is one contract change:
+    # a hard upper bound on the reservation dissolution delay, enforced in
+    # `Reservation.updateReservationParameters`. That check lives in the
+    # `Reservation` library, which `Bridge`, `WalletProposalValidator` and
+    # `ReservationRouter` all import, so it does not change any of the
+    # four artifacts this job stages - their ABIs are byte-identical to
+    # the ones at 4c98e6b82. `BridgeGovernance` gains two functions at
+    # this commit, but it is not one of the artifacts this job stages and
+    # not one of the module's `required_contracts`, so the gate never
+    # reads it.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: 4c98e6b82d75a5fdbb3c3504979245defe300846
+      TBTC_V2_REF: d1bf5bc281992885970f7c232cd9a66b7a6b5127
     steps:
       - uses: actions/checkout@v4
 
@@ -595,6 +606,55 @@ jobs:
           name: go-coverage-shard-${{ matrix.shard }}
           path: coverage/coverage.out
           if-no-files-found: error
+
+  # The reservation packages under the race detector. The sharded suite
+  # above runs `go test` without `-race`, so nothing in the public tree
+  # ever measured the reservation concurrency; the coverage file's
+  # `keep-core.go.race` freeze bar (zero data races in these three
+  # packages) therefore had no job behind it and could only borrow a
+  # measurement from an out-of-band assessment.
+  #
+  # Scoped to the three packages the bar names rather than a `-race` flag
+  # on the whole sharded suite: the race detector multiplies the suite's
+  # runtime, the bar's scope is these three packages, and the rest of the
+  # module is not covered by the bar.
+  #
+  # The same `go-build-env` image the sharded suite uses, so the toolchain
+  # and the module cache are identical to what the coverage run measured.
+  client-go-race:
+    needs: [client-detect-changes, client-build-image]
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download Docker Build Image
+        uses: actions/download-artifact@v4
+        with:
+          name: go-build-env-image
+          path: ${{ runner.temp }}
+
+      - name: Load Docker Build Image
+        run: |
+          docker load --input ${{ runner.temp }}/go-build-env-image.tar
+
+      # `-count=1` defeats the test cache: the race detector's result
+      # must come from a run at this commit, not from a cached one.
+      # `-timeout 30m` covers the slowest of the three packages
+      # (pkg/tbtc takes about 5 minutes under `-race`).
+      - name: Run the reservation packages with the race detector
+        run: |
+          set -euo pipefail
+          docker run \
+            --workdir /go/src/github.com/keep-network/keep-core \
+            go-build-env \
+            sh -c 'go test -race -count=1 -timeout 30m \
+              ./pkg/tbtcpg/... \
+              ./pkg/maintainer/spv/... \
+              ./pkg/tbtc/...'
 
   # R2: aggregator behind the required `client-build-test-publish`
   # check context. Fails whenever either test shard fails (via

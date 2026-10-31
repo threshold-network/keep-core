@@ -69,6 +69,13 @@ type ReservationKeeperObserver struct {
 	// registrations (bounded by the network's wallet count, not by
 	// time) and is re-fetched on a wall-clock refresh interval.
 	cachedWallets map[[20]byte]*cachedWalletState
+
+	// nowFn returns the wall-clock time the wallet-cache refresh
+	// interval is measured against. It defaults to time.Now and is a
+	// field rather than a direct call inside refreshWalletStates so
+	// tests can place an entry exactly on the interval boundary, which
+	// a live clock cannot hit at nanosecond resolution.
+	nowFn func() time.Time
 }
 
 // NewReservationKeeperObserver scans reservation events from activationBlock.
@@ -84,6 +91,7 @@ func NewReservationKeeperObserver(
 		spvChain:          spvChain,
 		activationBlock:   activationBlock,
 		recorder:          recorder,
+		nowFn:             time.Now,
 		trackedAcceptance: make(map[string]*trackedAcceptanceGeneration),
 		trackedDeposits:   make(map[string]*trackedUnrequestedDeposit),
 		cachedWallets:     make(map[[20]byte]*cachedWalletState),
