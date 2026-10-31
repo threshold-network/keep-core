@@ -1,12 +1,15 @@
 package ethereum
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
+	ethereumutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -314,6 +317,122 @@ func TestScanWalletReservationEventsInChunks(t *testing.T) {
 			t.Errorf(
 				"expected the error to name the reanchor query, got [%v]",
 				err,
+			)
+		}
+	})
+}
+
+// stalledHeadSubscription models a new-head subscription that delivers no
+// notifications: a subscription that is still open but silent, which is what
+// leaves the block counter's cached height behind the node.
+type stalledHeadSubscription struct {
+	err chan error
+}
+
+func (s *stalledHeadSubscription) Unsubscribe() {}
+
+func (s *stalledHeadSubscription) Err() <-chan error { return s.err }
+
+// stalledHeadChainReader feeds a block counter a startup height and then
+// never delivers a new head, so CurrentBlock keeps returning that height
+// while ordinary RPC calls see a later one.
+type stalledHeadChainReader struct {
+	startupHeight uint64
+}
+
+func (r *stalledHeadChainReader) HeaderByNumber(
+	context.Context,
+	*big.Int,
+) (*ethereumutil.Header, error) {
+	return &ethereumutil.Header{Number: new(big.Int).SetUint64(r.startupHeight)}, nil
+}
+
+func (r *stalledHeadChainReader) SubscribeNewHead(
+	context.Context,
+	chan<- *ethereumutil.Header,
+) (ethereumutil.Subscription, error) {
+	return &stalledHeadSubscription{err: make(chan error)}, nil
+}
+
+// TestWalletReservationScanEndBlock pins where the wallet reservation scan's
+// end block comes from: the node itself, read over RPC, never the
+// subscription-cached height. The custody count and every other reservation
+// read go to the node's current state, so a scan bounded by a lagging cache
+// would come back empty - with no error - for a wallet that still custodies
+// reservations, and the re-anchor and stranding consumers treat an empty key
+// set as a wallet with nothing left to move.
+func TestWalletReservationScanEndBlock(t *testing.T) {
+	const cachedStartupHeight = uint64(1000)
+	const nodeHeight = uint64(1200)
+
+	newChainWithStaleCounter := func(t *testing.T) *TbtcChain {
+		t.Helper()
+
+		// The counter is real, built over a reader whose head
+		// subscription never delivers, so its cached height stays at the
+		// startup value.
+		counter, err := ethereumutil.CreateBlockCounter(
+			&stalledHeadChainReader{startupHeight: cachedStartupHeight},
+		)
+		if err != nil {
+			t.Fatalf("cannot create the block counter: [%v]", err)
+		}
+
+		return &TbtcChain{baseChain: &baseChain{
+			client: &latestHeaderClient{
+				getHeader: func(
+					context.Context,
+					*big.Int,
+				) (*types.Header, error) {
+					return &types.Header{Number: new(big.Int).SetUint64(nodeHeight)}, nil
+				},
+			},
+			blockCounter: counter,
+		}}
+	}
+
+	t.Run("scan end comes from the node, not the stale cached height", func(t *testing.T) {
+		tbtcChain := newChainWithStaleCounter(t)
+
+		// Precondition: the cached height really is behind the node.
+		cachedHeight, err := tbtcChain.blockCounter.CurrentBlock()
+		if err != nil {
+			t.Fatalf("cannot read the cached height: [%v]", err)
+		}
+		if cachedHeight != cachedStartupHeight {
+			t.Fatalf(
+				"fixture precondition failed: cached height [%d], want the "+
+					"stale startup height [%d]",
+				cachedHeight,
+				cachedStartupHeight,
+			)
+		}
+
+		endBlock, err := tbtcChain.walletReservationScanEndBlock()
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if endBlock != nodeHeight {
+			t.Fatalf(
+				"expected the scan to end at the node's block [%d], got [%d]",
+				nodeHeight,
+				endBlock,
+			)
+		}
+	})
+
+	t.Run("node read failure fails the scan instead of using the cache", func(t *testing.T) {
+		tbtcChain := newChainWithStaleCounter(t)
+		tbtcChain.client = &latestHeaderClient{
+			getHeader: func(context.Context, *big.Int) (*types.Header, error) {
+				return nil, fmt.Errorf("simulated RPC failure")
+			},
+		}
+
+		if _, err := tbtcChain.walletReservationScanEndBlock(); err == nil {
+			t.Fatal(
+				"expected the scan to fail when the node's tip cannot be " +
+					"read, not to fall back to the cached height",
 			)
 		}
 	})
