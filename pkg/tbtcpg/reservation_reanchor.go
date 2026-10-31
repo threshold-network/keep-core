@@ -636,8 +636,11 @@ reservationLoop:
 			"re-anchor waiting on aged target: no live wallet has aged out " +
 				"of its creation period",
 		)
-	} else if reservationsReadErr == nil {
-		taskLogger.Info("no reservations eligible for re-anchor")
+	} else {
+		// True for a pass that skipped an unreadable reservation as well as
+		// for a pass with nothing to do: the per-item failures are logged
+		// where they happen and the incomplete-read error is returned below.
+		taskLogger.Info("no reservation proposed for re-anchor in this pass")
 	}
 	if rrt.metricsRecorder != nil {
 		rrt.metricsRecorder.SetGauge(
