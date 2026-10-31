@@ -127,7 +127,10 @@ func (rrt *ReservationReanchorTask) ActionType() tbtc.WalletActionType {
 // (see notifyMovingFundsBelowDustIfEligible).
 //
 // Returns (nil, false, nil) when no reservation is eligible; callers should
-// treat that as a benign no-op for the coordination window.
+// treat that as a benign no-op for the coordination window. A reservation
+// that cannot be read skips only itself, but a pass that ends without a
+// proposal while any reservation was unreadable returns an error: that
+// pass is incomplete, not empty.
 func (rrt *ReservationReanchorTask) Run(
 	request *tbtc.CoordinationProposalRequest,
 ) (
@@ -297,16 +300,35 @@ func (rrt *ReservationReanchorTask) Run(
 	}
 
 	var waitingOnAgedTarget bool
+	// The first reservation whose read failed in this pass: one
+	// unreadable reservation must not cost every other reservation its
+	// chance to re-anchor, but the pass also must not report success
+	// for a set it could not fully read.
+	var reservationsReadErr error
 
 reservationLoop:
 	for _, reservationKey := range reservationKeys {
 		reservation, err := rrt.chain.GetReservation(reservationKey)
 		if err != nil {
-			return nil, false, fmt.Errorf(
-				"cannot get reservation [0x%x]: [%w]",
+			// Skip only this reservation and keep going, mirroring the
+			// per-item error handling of the action reads below: an
+			// unreadable reservation is an RPC failure on one candidate,
+			// not a reason to abandon the later candidates of the same
+			// pass. The error is preserved so the pass still reports a
+			// failure instead of looking like a benign "nothing to do".
+			if reservationsReadErr == nil {
+				reservationsReadErr = fmt.Errorf(
+					"cannot get reservation [0x%x]: [%w]",
+					reservationKey,
+					err,
+				)
+			}
+			taskLogger.Errorf(
+				"cannot get reservation [0x%x]: [%v]; skipping for this pass",
 				reservationKey,
 				err,
 			)
+			continue reservationLoop
 		}
 
 		switch reservation.State {
@@ -614,13 +636,24 @@ reservationLoop:
 			"re-anchor waiting on aged target: no live wallet has aged out " +
 				"of its creation period",
 		)
-	} else {
+	} else if reservationsReadErr == nil {
 		taskLogger.Info("no reservations eligible for re-anchor")
 	}
 	if rrt.metricsRecorder != nil {
 		rrt.metricsRecorder.SetGauge(
 			"reanchor_waiting_on_aged_target",
 			waitingGauge,
+		)
+	}
+
+	if reservationsReadErr != nil {
+		// The pass finished without proposing anything, but it could not
+		// read the whole reservation set, so it is incomplete rather than
+		// empty: report it as a failed pass so the coordinator retries
+		// instead of treating it as a benign no-op.
+		return nil, false, fmt.Errorf(
+			"cannot read every wallet reservation in this pass: [%w]",
+			reservationsReadErr,
 		)
 	}
 
