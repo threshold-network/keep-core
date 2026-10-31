@@ -1615,26 +1615,53 @@ func TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck
 	})
 }
 
-// panicOnceAcceptanceScanChain wraps a *localChain and panics on its first
-// PastReservationAcceptanceRequestedEvents call, then succeeds on subsequent
-// calls, simulating a transient panic during an action-timeout watcher scan.
-type panicOnceAcceptanceScanChain struct {
+// panicOnceActionTimeoutPollChain wraps a *localChain and panics on its first
+// ReservationCaps call, then succeeds on subsequent calls, simulating a
+// transient panic inside the action-timeout watcher's poll pass.
+//
+// The fault is anchored to ReservationCaps because that read is made only by
+// the action-timeout watcher (through checkReservationParamsFeasibility). The
+// keeper observer runs at the same tick and also scans acceptance events, so a
+// fault on the shared acceptance scan lands in whichever goroutine reaches it
+// first: the observer could eat the panic, the watcher would never fail, and
+// the test would pass without exercising the watcher's restart at all.
+type panicOnceActionTimeoutPollChain struct {
 	*localChain
+
+	mutex sync.Mutex
+	// hasPanicked guards the single-shot fault: the first poll pass panics,
+	// every later pass succeeds.
 	hasPanicked bool
-	mutex       sync.Mutex
+	// pollsAfterPanic counts the poll passes that completed the caps read
+	// after the panic: it is nonzero only if the watcher was restarted and
+	// polled again.
+	pollsAfterPanic int
 }
 
-func (c *panicOnceAcceptanceScanChain) PastReservationAcceptanceRequestedEvents(
-	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
-) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+func (c *panicOnceActionTimeoutPollChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
 	c.mutex.Lock()
 	if !c.hasPanicked {
 		c.hasPanicked = true
 		c.mutex.Unlock()
 		panic("action-timeout watcher transient panic")
 	}
+	c.pollsAfterPanic++
 	c.mutex.Unlock()
-	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+
+	return c.localChain.ReservationCaps()
+}
+
+// capsReadsAfterPanic reports how many poll passes completed the caps read
+// after the injected panic.
+func (c *panicOnceActionTimeoutPollChain) capsReadsAfterPanic() int {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.pollsAfterPanic
 }
 
 // TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRelease
@@ -1708,7 +1735,7 @@ func TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRe
 		BlockNumber:         500,
 	})
 
-	panickingChain := &panicOnceAcceptanceScanChain{localChain: spvChain}
+	panickingChain := &panicOnceActionTimeoutPollChain{localChain: spvChain}
 
 	if err := WireReservationWatchers(ctx, &mockWalletClosedChain{}, panickingChain, true, nil, ethereum.Developer); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1719,6 +1746,17 @@ func TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRe
 	// timeout notification is never submitted.
 	// Under the new behavior, the action-timeout watcher restarts with backoff,
 	// discovers the overdue pending acceptance, and calls NotifyReservationAcceptanceTimedOut.
+	//
+	// A notification can only come from a poll pass that ran after the panic,
+	// so the caps read that pass completes is the direct proof the watcher
+	// itself recovered rather than some other goroutine carrying the test.
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return panickingChain.capsReadsAfterPanic() >= 1
+		},
+	)
 	waitForReservationWiringCondition(
 		t,
 		2*time.Second,
