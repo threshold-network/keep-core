@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-test/deep"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
@@ -38,6 +39,17 @@ import (
 //     client-side mirror of the deposit's refund window, and
 //   - the stranding watcher's dissolution-eligibility comparison
 //     (dissolutionEligibleAt).
+//
+// The stale-deposit watcher is driven twice, for two different reasons.
+// The first case pins the deadline-AT-the-horizon limitation: the
+// saturating clock reads the same value at the horizon and one second
+// past it, so a deposit whose deadline is the horizon itself is kept
+// rather than notified on a guess. The second case is the one that
+// DISTINGUISHES the two conversions: a deadline below the horizon by
+// more than the maximum per-operator stagger, with the chain head one
+// second past the horizon. The saturating clock reads the head as the
+// horizon and notifies; the wrapping clock reads the head as zero and
+// does not.
 //
 // Negative control: replace the saturating conversion with a wrapping
 // one (uint32(seconds)) and the horizon assertions below fail: the
@@ -216,6 +228,133 @@ func TestReservationTimestampHorizon_Uint32MaxBoundary(t *testing.T) {
 			t.Fatalf(
 				"expected no stale notification past the horizon, got %d",
 				len(calls),
+			)
+		}
+	})
+
+	// The case above cannot distinguish a saturating clock from a
+	// wrapping one: its deadline is AT the horizon, so every possible
+	// uint32 head value (the saturated max, the wrapped zero, anything
+	// in between) satisfies the watcher's `headNow <= deadline` guard.
+	//
+	// This case can. The deadline sits BELOW the horizon by more than
+	// the maximum per-operator stagger, and the chain head is one second
+	// past the horizon:
+	//
+	//   - the saturating clock reads the head as the horizon itself,
+	//     which is past the deadline by 1000 seconds - more than the
+	//     600-second maximum stagger - so the notification FIRES;
+	//   - the wrapping clock reads the head as zero, which is before
+	//     the deadline, so the notification does NOT fire.
+	//
+	// Saturation must notify and wrapping must not, so the assertion
+	// below distinguishes the two conversions where the previous case
+	// could not.
+	t.Run("stale deposit past the horizon distinguishes saturation from wrapping", func(t *testing.T) {
+		spvChain := newLocalChain()
+
+		key := reservationDepositKey(0xD004)
+		wallet := walletPKH()
+		spvChain.setReservedDeposit(key, wallet, true)
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{
+			State: tbtc.StateLive,
+		})
+		spvChain.setReservation(key, &tbtc.Reservation{RequestNonce: 1})
+		spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+			State:     tbtc.ReservationActionStateTimedOut,
+			TimeoutAt: 100,
+		})
+
+		watcher := NewReservationStaleDepositWatcher(
+			spvChain,
+			common.Address{},
+			0,
+		)
+
+		// The deadline is 1000 seconds below the horizon, which is
+		// more than the maximum stagger
+		// (actionTimeoutRenotifyInterval, 600 seconds), so the
+		// notification is not deferred by the stagger gate.
+		deadline := uint32(horizon) - 1000
+
+		// The chain head is one second past the horizon.
+		spvChain.setLatestBlockTimestamp(time.Unix(int64(horizon)+1, 0))
+
+		res, err := watcher.CheckStaleReservedDeposit(key, deadline, 5_000)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res != StaleDepositResolutionKeep {
+			t.Fatalf(
+				"expected resolution %v, got %v",
+				StaleDepositResolutionKeep,
+				res,
+			)
+		}
+
+		calls := spvChain.getSubmittedStaleReservedDeposits()
+		if len(calls) != 1 {
+			t.Fatalf(
+				"expected one stale notification past the horizon for a "+
+					"deadline below it, got %d",
+				len(calls),
+			)
+		}
+		if diff := deep.Equal(key, calls[0]); diff != nil {
+			t.Errorf("unexpected notified key: %v", diff)
+		}
+
+		// NEGATIVE CONTROL: the same head and deadline under a
+		// WRAPPING conversion. The wrapped head reads as zero, which
+		// is before the deadline, so the watcher's gate would keep the
+		// deposit and NOT notify. The notification above therefore
+		// distinguishes the two conversions: a wrapping clock would
+		// have produced no notification at all.
+		headSeconds := int64(horizon) + 1
+		wrappedHead := uint32(headSeconds)
+		if wrappedHead != 0 {
+			t.Fatalf(
+				"expected the wrapping conversion to read the head "+
+					"past the horizon as zero, got %d",
+				wrappedHead,
+			)
+		}
+		if wrappedHead <= deadline {
+			// The wrapping clock's gate keeps the deposit: this is
+			// the outcome the notification above rules out.
+			if len(spvChain.getSubmittedStaleReservedDeposits()) != 1 {
+				t.Error(
+					"expected the notification count to be unchanged " +
+						"by the wrapping-clock comparison",
+				)
+			}
+		} else {
+			t.Error(
+				"expected the wrapping clock to keep the deposit " +
+					"(head zero is before the deadline)",
+			)
+		}
+
+		// The saturating clock reads the same head as the horizon,
+		// which IS past the deadline by more than the maximum
+		// stagger, so the notification is due.
+		saturatedHead := tbtc.UnixSecondsToUint32(int64(horizon) + 1)
+		if saturatedHead != math.MaxUint32 {
+			t.Fatalf(
+				"expected the saturating conversion to read the head "+
+					"past the horizon as %d, got %d",
+				uint32(math.MaxUint32),
+				saturatedHead,
+			)
+		}
+		maxStagger := uint32(actionTimeoutRenotifyInterval / time.Second)
+		if saturatedHead <= deadline+maxStagger {
+			t.Errorf(
+				"expected the saturated head %d to be past the deadline "+
+					"%d by more than the maximum stagger %d",
+				saturatedHead,
+				deadline,
+				maxStagger,
 			)
 		}
 	})

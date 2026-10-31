@@ -1,50 +1,36 @@
 package tbtcpg
 
 import (
-	"bytes"
-	"encoding/json"
+	"fmt"
 	"math/big"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/keep-network/keep-core/internal/testdata/reservations"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// satoshiUnitsVectorFile is the shared cross-repo test vector for the
-// satoshi-to-TBTC-base-unit conversion. The same file is read by the
-// tbtc-v2 Solidity suite (as a Foundry test data file) and by the
-// tbtc-v2 TypeScript SDK suite, so one set of numbers pins the unit
+// satoshiUnitsVectorFile is the repository path of the shared cross-repo
+// test vector for the satoshi-to-TBTC-base-unit conversion. The same file
+// is read by the tbtc-v2 Solidity suite (as a Foundry test data file) and
+// by the tbtc-v2 TypeScript SDK suite, so one set of numbers pins the unit
 // across all three code bases.
 //
-// The path is relative to this package's directory. The file lives in the
-// tbtc-v2 repository (solidity/test/data/reservations/satoshi-units.json);
-// this copy under pkg/tbtcpg/internal/test/testdata/ keeps the keep-core
-// test self-contained.
+// The file lives in the shared internal/testdata/reservations package
+// because the production consumers of the unit boundary sit in two
+// different packages: the chain adapters that read the vault's
+// inKindFeeDebtSat view and TBTC balance (pkg/chain/ethereum) and the
+// gauge publisher that reports them (this package). A vector readable from
+// only one of them would let one side assert the boundary against its own
+// copy of the numbers.
 //
-// The two copies are kept in agreement BY HAND, not by a cross-repo check:
-// neither repository's CI can see the other repository's file, so there is
-// no automated comparison between them. What IS enforced here is that the
-// two sides agree on the FACTOR, and that this copy carries every key the
-// shared file carries: the parser rejects unknown keys, so a key added to
-// the shared file without being added to this copy fails this test rather
-// than being silently ignored.
-const satoshiUnitsVectorFile = "internal/test/testdata/satoshi-units.json"
-
-// satoshiToTbtcBaseUnits is the conversion factor the whole system
-// agrees on: one satoshi is 10^10 TBTC base units.
-//
-//   - the vault: `ReservationVault.SATOSHI_MULTIPLIER = 10 ** 10`
-//     (tbtc-v2:solidity/contracts/vault/ReservationVault.sol), used by
-//     `TBTCVault.mint(satoshis * SATOSHI_MULTIPLIER)`;
-//   - the SDK: `amountToSatoshi` divides by `BigNumber.from(1e10)`
-//     (tbtc-v2:typescript/src/lib/utils/bitcoin.ts);
-//   - keep-core: the amount a client carries is in satoshi, and the vault
-//     balances it reports are in TBTC base units, so the two are related
-//     by exactly this factor.
-//
-// INV-704 asks for ONE assertion tying the three together. This test
-// pins the keep-core side against the shared vector, so a change to the
-// factor on any one side breaks a test on the others.
-const satoshiToTbtcBaseUnits int64 = 10_000_000_000
+// The two copies of the file (this one and tbtc-v2's) are kept in
+// agreement BY HAND, not by a cross-repo check: neither repository's CI
+// can see the other repository's file, so there is no automated comparison
+// between them. What IS enforced here is that this copy carries every key
+// the shared file carries: the parser rejects unknown keys, so a key added
+// to the shared file without being added to this copy fails this test
+// rather than being silently ignored.
+const satoshiUnitsVectorFile = reservations.SatoshiUnitsVectorFile
 
 // satoshiUnitsVector is the parsed shared vector file.
 //
@@ -54,22 +40,7 @@ const satoshiToTbtcBaseUnits int64 = 10_000_000_000
 // amounts that are not multiples of 1e10, with the truncated satoshi value
 // and the remainder; keep-core does not compute a conversion of its own,
 // so it carries the key without asserting on it.
-type satoshiUnitsVector struct {
-	Vector  string `json:"vector"`
-	Version int    `json:"version"`
-	// Constant is the human-readable statement of the factor, for
-	// example "1 satoshi = 10000000000 TBTC base units (1e10)".
-	Constant string `json:"constant"`
-	Pairs    []struct {
-		Satoshis      int64  `json:"satoshis"`
-		TbtcBaseUnits string `json:"tbtcBaseUnits"`
-	} `json:"pairs"`
-	RoundingCases []struct {
-		TbtcBaseUnits string `json:"tbtcBaseUnits"`
-		Satoshis      int64  `json:"satoshis"`
-		Remainder     int64  `json:"remainder"`
-	} `json:"roundingCases"`
-}
+type satoshiUnitsVector = reservations.SatoshiUnitsVector
 
 // loadSatoshiUnitsVector reads and parses the shared vector file.
 //
@@ -83,21 +54,11 @@ type satoshiUnitsVector struct {
 func loadSatoshiUnitsVector(t *testing.T) satoshiUnitsVector {
 	t.Helper()
 
-	contents, err := os.ReadFile(filepath.Clean(satoshiUnitsVectorFile))
+	vector, err := reservations.ParseSatoshiUnitsVector(
+		reservations.SatoshiUnitsJSON(),
+	)
 	if err != nil {
-		t.Fatalf(
-			"failed to read the satoshi units vector file [%s]: %v",
-			satoshiUnitsVectorFile,
-			err,
-		)
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-
-	var vector satoshiUnitsVector
-	if err := decoder.Decode(&vector); err != nil {
-		t.Fatalf("failed to parse the satoshi units vector file: %v", err)
+		t.Fatalf("%v", err)
 	}
 
 	if vector.Vector != "satoshi-to-tbtc-base-units" {
@@ -114,22 +75,27 @@ func loadSatoshiUnitsVector(t *testing.T) satoshiUnitsVector {
 	return vector
 }
 
-// TestSatoshiToTbtcBaseUnits_Vector pins the keep-core side of INV-704:
-// one satoshi is 10^10 TBTC base units, and the shared cross-repo vector
-// file says so for every pair it lists.
+// TestSatoshiToTbtcBaseUnits_Vector pins the shared vector's own
+// self-consistency: every pair it lists is the pair's satoshi count
+// multiplied by the factor its defining pair states.
 //
-// The keep-core client carries reservation amounts in satoshi and reads
-// the reservation vault's fee reserve in TBTC base units (1e18 per whole
-// TBTC, see pkg/tbtc/chain.go's ReservationVaultFeeReserveTbtcBaseUnits
-// and pkg/tbtcpg/chain.go's). A factor that differs by a power of ten on
-// any one side would show up here as a mismatch against the shared
-// vector, which the Solidity and TypeScript suites read as well.
+// The factor is READ from the vector rather than declared in Go, so this
+// test is a check of the shared FILE and not of a test-local constant.
+// The production unit handling is asserted separately, by driving the
+// production consumers with the vector's own values (see
+// TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale and the matching
+// pkg/chain/ethereum test).
 //
-// NEGATIVE CONTROL: change satoshiToTbtcBaseUnits from 10^10 to 10^9
-// and this test fails, because the computed base units no longer match
-// the vector.
+// NEGATIVE CONTROL: change any pair's satoshi count or base-unit amount in
+// the vector file and this test fails, because the pair no longer equals
+// its satoshi count multiplied by the factor the defining pair states.
 func TestSatoshiToTbtcBaseUnits_Vector(t *testing.T) {
 	vector := loadSatoshiUnitsVector(t)
+
+	factor, err := vector.BaseUnitsPerSatoshi()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 
 	for _, pair := range vector.Pairs {
 		satoshis := pair.Satoshis
@@ -145,7 +111,7 @@ func TestSatoshiToTbtcBaseUnits_Vector(t *testing.T) {
 
 		actual := new(big.Int).Mul(
 			big.NewInt(satoshis),
-			big.NewInt(satoshiToTbtcBaseUnits),
+			factor,
 		)
 
 		if actual.Cmp(expected) != 0 {
@@ -165,16 +131,9 @@ func TestSatoshiToTbtcBaseUnits_Vector(t *testing.T) {
 // against, so a change to the factor on one side shows up as a mismatch
 // in the other's file.
 //
-// NEGATIVE CONTROL: change satoshiToTbtcBaseUnits and both this test and
-// TestSatoshiToTbtcBaseUnits_Vector fail.
+// NEGATIVE CONTROL: change the vector's defining pair or its constant
+// string and this test fails.
 func TestSatoshiToTbtcBaseUnits_Constant(t *testing.T) {
-	if satoshiToTbtcBaseUnits != 10_000_000_000 {
-		t.Fatalf(
-			"expected one satoshi to be 10000000000 TBTC base units, got %d",
-			satoshiToTbtcBaseUnits,
-		)
-	}
-
 	vector := loadSatoshiUnitsVector(t)
 
 	const expectedConstant = "1 satoshi = 10000000000 TBTC base units (1e10)"
@@ -186,20 +145,15 @@ func TestSatoshiToTbtcBaseUnits_Constant(t *testing.T) {
 		)
 	}
 
-	// The vector must contain the defining pair: one satoshi is
-	// 10000000000 base units. Without it the vector would not pin the
-	// factor at all.
-	found := false
-	for _, pair := range vector.Pairs {
-		if pair.Satoshis == 1 && pair.TbtcBaseUnits == "10000000000" {
-			found = true
-			break
-		}
+	factor, err := vector.BaseUnitsPerSatoshi()
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
-	if !found {
-		t.Error(
-			"expected the shared vector to contain the pair " +
-				"[1 satoshi -> 10000000000 base units]",
+
+	if factor.Cmp(big.NewInt(10_000_000_000)) != 0 {
+		t.Errorf(
+			"expected one satoshi to be 10000000000 TBTC base units, got %s",
+			factor.String(),
 		)
 	}
 }
@@ -319,63 +273,152 @@ func TestSatoshiToTbtcBaseUnits_VectorContents(t *testing.T) {
 	}
 }
 
-// TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale ties the unit factor
-// to the two keep-core quantities that cross the unit boundary: the
-// vault's fee DEBT, which is in satoshi, and the vault's fee RESERVE,
-// which is in TBTC base units.
+// feeGaugeUnitViolations returns the unit mismatches between the values
+// the production gauge publisher published and the vault readings it was
+// driven with.
+//
+// The two keep-core quantities that cross the unit boundary are read in
+// different units: the vault's in-kind fee DEBT is denominated in
+// satoshi and the vault's fee RESERVE is a TBTC token balance in TBTC
+// base units. The publisher reports them on two separate gauges, so each
+// gauge must carry its own reading unchanged: a publisher that scaled
+// either value by the satoshi-to-base-unit factor would publish a
+// plausible-looking number in the wrong unit.
+//
+// The comparison lives in the shared vector package so the chain-side
+// adapter test (pkg/chain/ethereum) asserts the same thing about the
+// same vector.
+func feeGaugeUnitViolations(
+	debtGauge float64,
+	reserveGauge float64,
+	debtSat uint64,
+	reserveUnits *big.Int,
+) []string {
+	return reservations.GaugeUnitViolations(
+		debtSat,
+		debtGauge,
+		reserveUnits,
+		reserveGauge,
+	)
+}
+
+// TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale ties the shared
+// vector's unit factor to the two keep-core quantities that cross the
+// unit boundary, through the production gauge publisher.
 //
 // The vault retains the initiation fee in TBTC base units while the
 // in-kind fee debt is denominated in satoshi, so the two are related by
-// exactly the satoshi-to-base-unit factor. A debt of one satoshi
-// corresponds to a base-unit obligation of 10^10; a debt of a million
-// satoshis corresponds to 10^16 base units.
+// exactly the satoshi-to-base-unit factor: a debt of one satoshi
+// corresponds to a base-unit obligation of 10^10, a debt of a million
+// satoshis to 10^16 base units.
 //
-// NEGATIVE CONTROL: change satoshiToTbtcBaseUnits and this test fails.
+// The test drives the vector's non-zero pairs through the REAL publisher:
+// the ReservationAcceptanceTask's Run publishes
+// reservation_vault_fee_debt_sat and
+// reservation_vault_fee_reserve_tbtc_base_units from the chain's fee
+// readings, and the assertions require each gauge to carry its reading
+// unchanged. That is what makes the factor a production claim: a
+// publisher that converted either reading would be caught here, and the
+// vector is what says which scale each reading is on.
+//
+// The matching chain-side test (pkg/chain/ethereum) drives the same
+// vector through the adapters that read the vault's on-chain values.
+//
+// NEGATIVE CONTROL: the mis-scaled readings the helper is asked to
+// reject are exactly the ones a scale error in the publisher would
+// produce - the debt published in base units and the reserve published in
+// satoshi - and the negative control requires the helper to reject them.
+// A publisher that scaled a reading would produce one of those, and the
+// positive assertion above would fail.
 func TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale(t *testing.T) {
-	tests := []struct {
-		name          string
-		debtSat       uint64
-		expectedUnits string
-	}{
-		{
-			name:          "one satoshi of debt is 1e10 base units",
-			debtSat:       1,
-			expectedUnits: "10000000000",
-		},
-		{
-			name:          "a million satoshis of debt is 1e16 base units",
-			debtSat:       1_000_000,
-			expectedUnits: "10000000000000000",
-		},
-		{
-			name:          "a billion satoshis of debt is 1e19 base units",
-			debtSat:       1_000_000_000,
-			expectedUnits: "10000000000000000000",
-		},
-	}
+	vector := loadSatoshiUnitsVector(t)
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			actual := new(big.Int).Mul(
-				new(big.Int).SetUint64(test.debtSat),
-				big.NewInt(satoshiToTbtcBaseUnits),
-			)
+	for _, pair := range vector.Pairs {
+		pair := pair
 
-			expected, ok := new(big.Int).SetString(test.expectedUnits, 10)
+		t.Run(fmt.Sprintf("%d satoshis", pair.Satoshis), func(t *testing.T) {
+			debtSat := uint64(pair.Satoshis)
+
+			reserveUnits, ok := new(big.Int).SetString(pair.TbtcBaseUnits, 10)
 			if !ok {
 				t.Fatalf(
 					"failed to parse the expected base units [%s]",
-					test.expectedUnits,
+					pair.TbtcBaseUnits,
 				)
 			}
 
-			if actual.Cmp(expected) != 0 {
-				t.Errorf(
-					"expected a debt of %d satoshis to correspond to %s "+
-						"TBTC base units, got %s",
-					test.debtSat,
-					expected.String(),
-					actual.String(),
+			lc := NewLocalChain()
+			btcChain := NewLocalBitcoinChain()
+
+			runFeeGaugeFixture(t, lc)
+
+			// The vault reads the pair's two values, in their own
+			// units: the debt in satoshi, the reserve in TBTC base
+			// units.
+			lc.SetReservationVaultFeeDebtSat(debtSat, nil)
+			lc.SetReservationVaultFeeReserveBalance(reserveUnits, nil)
+
+			task := NewReservationAcceptanceTask(lc, btcChain)
+			recorder := newFakeMetricsRecorder()
+			task.setMetricsRecorder(recorder)
+
+			walletPublicKeyHash := [20]byte{
+				1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+				11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+			}
+
+			if _, _, err := task.Run(&tbtc.CoordinationProposalRequest{
+				WalletPublicKeyHash: walletPublicKeyHash,
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			debtGauge, ok := recorder.calls["reservation_vault_fee_debt_sat"]
+			if !ok {
+				t.Fatal(
+					"expected the reservation_vault_fee_debt_sat gauge " +
+						"to be published",
+				)
+			}
+
+			reserveGauge, ok :=
+				recorder.calls["reservation_vault_fee_reserve_tbtc_base_units"]
+			if !ok {
+				t.Fatal(
+					"expected the reservation_vault_fee_reserve_tbtc_base_units " +
+						"gauge to be published",
+				)
+			}
+
+			violations := feeGaugeUnitViolations(
+				debtGauge,
+				reserveGauge,
+				debtSat,
+				reserveUnits,
+			)
+			for _, violation := range violations {
+				t.Error(violation)
+			}
+
+			// NEGATIVE CONTROL: the two mis-scaled readings a scale
+			// error in the publisher would produce - the debt
+			// published in base units, the reserve published in
+			// satoshi - must be rejected by the same comparison.
+			misScaledDebt, misScaledReserve :=
+				reservations.MisScaledReadings(debtSat, reserveUnits)
+			misScaledReserveFloat, _ := misScaledReserve.Float64()
+
+			misScaledViolations := feeGaugeUnitViolations(
+				float64(misScaledDebt),
+				misScaledReserveFloat,
+				debtSat,
+				reserveUnits,
+			)
+			if len(misScaledViolations) == 0 {
+				t.Fatal(
+					"expected the comparison to reject a fee-debt " +
+						"reading published in base units and a " +
+						"fee-reserve reading published in satoshi",
 				)
 			}
 		})
