@@ -1530,6 +1530,7 @@ func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
 		})
 	}
 }
+
 // TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock
 // verifies the inclusive comparison coordinationBlock >=
 // ReservationsActivationBlock at the exact activation block for a network

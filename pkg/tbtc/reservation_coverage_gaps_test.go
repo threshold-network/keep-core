@@ -57,7 +57,7 @@ func TestReservationEnumStrings(t *testing.T) {
 			WalletTerminationCauseUnknown:                "Unknown",
 			WalletTerminationCauseMovingFundsTimeout:     "MovingFundsTimeout",
 			WalletTerminationCauseMovedFundsSweepTimeout: "MovedFundsSweepTimeout",
-			WalletTerminationCauseFraudChallengeDefeat:    "FraudChallengeDefeat",
+			WalletTerminationCauseFraudChallengeDefeat:   "FraudChallengeDefeat",
 		}
 
 		for cause, expected := range tests {

@@ -14,6 +14,7 @@ import (
 type RetargetEvent struct {
 	oldDifficulty, newDifficulty uint32
 }
+
 // localBitcoinChain represents a local Bitcoin difficulty chain.
 type localBitcoinDifficultyChain struct {
 	mutex sync.Mutex
@@ -38,6 +39,7 @@ func (lbdc *localBitcoinDifficultyChain) Ready() (bool, error) {
 
 	return lbdc.ready, nil
 }
+
 // IsAuthorized checks whether the given address has been authorized to
 // submit a retarget directly to LightRelay. This function should be used
 // when retargetting via LightRelayMaintainerProxy is disabled.

@@ -4,8 +4,8 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/tbtc"
 	ethereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 // TestProveReservationAcceptanceActions_ReorgWithinConfirmationLag

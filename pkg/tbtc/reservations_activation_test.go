@@ -222,6 +222,7 @@ func TestEvaluateReservationsActivation_Consistent(t *testing.T) {
 		})
 	}
 }
+
 // TestEvaluateReservationsActivation_HeadExactlyAtBlock verifies that
 // the evaluation is consistent when the chain head is exactly at the
 // activation block and the contract is already active. The inclusive

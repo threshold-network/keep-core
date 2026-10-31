@@ -22,9 +22,9 @@ import (
 type feasibilityParamReadErrorChain struct {
 	*localChain
 
-	depositParametersErr   error
+	depositParametersErr     error
 	reservationParametersErr error
-	reservationCapsErr     error
+	reservationCapsErr       error
 }
 
 func (c *feasibilityParamReadErrorChain) GetDepositParameters() (
@@ -125,7 +125,7 @@ func TestReservationParamsFeasibilityReadFailuresAreLogged(t *testing.T) {
 		"deposit parameters": {
 			chain: func(base *localChain) Chain {
 				return &feasibilityParamReadErrorChain{
-					localChain:            base,
+					localChain:           base,
 					depositParametersErr: errors.New("deposit parameter read failed"),
 				}
 			},
@@ -134,7 +134,7 @@ func TestReservationParamsFeasibilityReadFailuresAreLogged(t *testing.T) {
 		"reservation parameters": {
 			chain: func(base *localChain) Chain {
 				return &feasibilityParamReadErrorChain{
-					localChain:              base,
+					localChain:               base,
 					reservationParametersErr: errors.New("reservation parameter read failed"),
 				}
 			},
@@ -143,7 +143,7 @@ func TestReservationParamsFeasibilityReadFailuresAreLogged(t *testing.T) {
 		"reservation caps": {
 			chain: func(base *localChain) Chain {
 				return &feasibilityParamReadErrorChain{
-					localChain:        base,
+					localChain:         base,
 					reservationCapsErr: errors.New("reservation caps read failed"),
 				}
 			},
@@ -210,7 +210,7 @@ func TestReservationParamsFeasibilityReadFailureIsLoggedOncePerStretch(t *testin
 	})
 
 	failing := &feasibilityParamReadErrorChain{
-		localChain:          base,
+		localChain:           base,
 		depositParametersErr: errors.New("deposit parameter read failed"),
 	}
 	ratw, _ := newFeasibilityReadFailureWatcher(t, failing)
