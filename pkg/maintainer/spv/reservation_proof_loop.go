@@ -723,6 +723,19 @@ func proveReservationAcceptanceActions(
 
 		candidates, ok := candidateTransactions[reservationKey]
 		if !ok {
+			// The generation is tracked and the wallet's history holds
+			// no transaction spending the reserved deposit, so the
+			// acceptance transaction does not exist yet. Say so: the
+			// operator must be able to tell "the wallet has not
+			// broadcast the acceptance sweep" from "the proof loop is
+			// dead".
+			logger.Infof(
+				"reservation acceptance generation [%v] has no Bitcoin "+
+					"transaction spending its reserved deposit [%v] yet; "+
+					"the wallet has not broadcast the acceptance sweep",
+				event.ReservationKey,
+				reservationKey,
+			)
 			continue
 		}
 
@@ -1243,6 +1256,20 @@ func proveReservationReanchorActions(
 						metricsRecorder,
 					)
 				},
+			)
+		} else {
+			// The generation is tracked and the wallet's history holds
+			// no transaction spending the anchor outpoint, so the
+			// re-anchor transaction does not exist yet. Say so: the
+			// operator must be able to tell "the wallet has not
+			// broadcast the re-anchor" from "the proof loop is dead".
+			logger.Infof(
+				"reservation re-anchor generation [%v] has no Bitcoin "+
+					"transaction spending its anchor outpoint [%s:%d] yet; "+
+					"the wallet has not broadcast the re-anchor",
+				event.ReservationKey,
+				reservation.AnchorUtxo.Outpoint.TransactionHash.String(),
+				reservation.AnchorUtxo.Outpoint.OutputIndex,
 			)
 		}
 		if outcome == reservationProofSubmitted && err == nil {
