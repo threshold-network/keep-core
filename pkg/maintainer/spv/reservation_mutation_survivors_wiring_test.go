@@ -548,6 +548,49 @@ func TestWireReservationWatchers_MutationSurvivors_RestartsAfterRunError(t *test
 		}
 	})
 
+	t.Run("action-timeout watcher", func(t *testing.T) {
+		capture := startSpvLogCapture(t)
+
+		// A zero poll interval makes this watcher's Run return an error on
+		// every attempt, so an original build logs and restarts
+		// repeatedly.
+		setReservationActionTimeoutPollInterval(0)
+		t.Cleanup(func() {
+			setReservationActionTimeoutPollInterval(DefaultReservationActionTimeoutPollInterval)
+		})
+		setReservationWatcherRestartBackoff(5 * time.Millisecond)
+		t.Cleanup(func() {
+			setReservationWatcherRestartBackoff(DefaultReservationWatcherRestartBackoff)
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		if err := WireReservationWatchers(
+			ctx,
+			&mockWalletClosedChain{},
+			newChain(),
+			true,
+			nil,
+			ethereum.Unknown,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// The message names this watcher alone. The keeper observer runs on
+		// the same interval and fails here too, but with its own message, so
+		// only an action-timeout restart can add to this count.
+		message := "reservation action-timeout watcher is not running"
+		if !capture.waitForCount(t, message, 3, 5*time.Second) {
+			t.Fatalf(
+				"expected the action-timeout watcher to be restarted after "+
+					"its Run error (%q logged %d times)",
+				message,
+				capture.count(message),
+			)
+		}
+	})
+
 	t.Run("keeper observer", func(t *testing.T) {
 		capture := startSpvLogCapture(t)
 

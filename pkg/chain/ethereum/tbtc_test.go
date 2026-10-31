@@ -797,62 +797,181 @@ func TestResolveEarliestWalletRegistrationBlock(t *testing.T) {
 		return &tbtc.NewWalletRegisteredEvent{BlockNumber: blockNumber}
 	}
 
-	t.Run("found in the initial window - single query", func(t *testing.T) {
-		var queried []uint64
-		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
-			queried = append(queried, startBlock)
-			return []*tbtc.NewWalletRegisteredEvent{event(900000)}, nil
+	type eventRange struct {
+		startBlock uint64
+		endBlock   uint64
+	}
+
+	// assertChunkedWalk checks that the queried ranges ascend contiguously,
+	// carry no more than one chunk of blocks each, and cover no more than
+	// the window the walk was given: the point of chunking is to keep every
+	// single eth_getLogs inside the range a provider accepts without
+	// scanning anything twice.
+	assertChunkedWalk := func(t *testing.T, queried []eventRange, windowStart, windowEnd uint64) {
+		t.Helper()
+
+		if len(queried) == 0 {
+			t.Fatal("expected at least one query")
+		}
+		for i, r := range queried {
+			if r.endBlock < r.startBlock {
+				t.Fatalf("query %d has an inverted range: %+v", i, r)
+			}
+			if width := r.endBlock - r.startBlock + 1; width > tbtc.DepositRevealLookupChunkBlocks {
+				t.Errorf(
+					"query %d spans %d blocks (%+v), more than the chunk "+
+						"size %d",
+					i,
+					width,
+					r,
+					tbtc.DepositRevealLookupChunkBlocks,
+				)
+			}
+			if i > 0 && r.startBlock != queried[i-1].endBlock+1 {
+				t.Errorf(
+					"query %d starts at [%d], not one block past the "+
+						"previous end [%d]",
+					i,
+					r.startBlock,
+					queried[i-1].endBlock,
+				)
+			}
+		}
+		if queried[0].startBlock != windowStart {
+			t.Errorf(
+				"expected the walk to start at [%d], got [%d]",
+				windowStart,
+				queried[0].startBlock,
+			)
+		}
+		if last := queried[len(queried)-1].endBlock; last > windowEnd {
+			t.Errorf(
+				"expected the walk to stay within the window ending at [%d], "+
+					"got [%d]",
+				windowEnd,
+				last,
+			)
+		}
+	}
+
+	t.Run("found in the initial window - chunked ascending, stops at the hit", func(t *testing.T) {
+		const currentBlock = uint64(1000000)
+		const registrationBlock = uint64(900000)
+
+		var queried []eventRange
+		fetch := func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, eventRange{startBlock, endBlock})
+			if startBlock <= registrationBlock && registrationBlock <= endBlock {
+				return []*tbtc.NewWalletRegisteredEvent{event(registrationBlock)}, nil
+			}
+			return nil, nil
 		}
 
-		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		actual, err := resolveEarliestWalletRegistrationBlock(currentBlock, fetch)
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
-		if actual != 900000 {
-			t.Errorf("expected block [900000], actual [%d]", actual)
+		if actual != registrationBlock {
+			t.Errorf("expected block [%d], actual [%d]", registrationBlock, actual)
 		}
-		if len(queried) != 1 {
-			t.Fatalf("expected exactly one query, got %d: %v", len(queried), queried)
+
+		initialWindowStart :=
+			currentBlock - reservationRegistrationLookBackBlocks -
+				reservationRegistrationReorgSafetyBlocks
+		assertChunkedWalk(t, queried, initialWindowStart, currentBlock)
+
+		// The walk stops at the chunk holding the event: the remaining
+		// chunks of the window cannot hold an earlier registration.
+		if last := queried[len(queried)-1]; last.endBlock < registrationBlock {
+			t.Fatalf("walk did not reach the chunk holding the event: %+v", last)
+		}
+		if firstHit := len(queried) - 1; firstHit > 0 {
+			previous := queried[firstHit-1]
+			if previous.endBlock >= registrationBlock {
+				t.Errorf(
+					"expected the walk to stop at the first chunk holding "+
+						"the event, but an earlier chunk [%d..%d] also "+
+						"covered it",
+					previous.startBlock,
+					previous.endBlock,
+				)
+			}
+		}
+
+		// A stale or wrong end bound would either scan past the hit or
+		// never reach it; neither may happen.
+		if len(queried) >= int((currentBlock-initialWindowStart)/tbtc.DepositRevealLookupChunkBlocks) {
+			t.Errorf(
+				"expected an early stop inside the window, got %d queries",
+				len(queried),
+			)
 		}
 	})
 
 	t.Run("not found in the initial window - widens backward and finds it", func(t *testing.T) {
-		var queried []uint64
-		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
-			queried = append(queried, startBlock)
-			if len(queried) == 1 {
-				return nil, nil
+		const currentBlock = uint64(1000000)
+		const registrationBlock = uint64(600000)
+
+		var queried []eventRange
+		fetch := func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, eventRange{startBlock, endBlock})
+			if startBlock <= registrationBlock && registrationBlock <= endBlock {
+				return []*tbtc.NewWalletRegisteredEvent{event(registrationBlock)}, nil
 			}
-			return []*tbtc.NewWalletRegisteredEvent{event(600000)}, nil
+			return nil, nil
 		}
 
-		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		actual, err := resolveEarliestWalletRegistrationBlock(currentBlock, fetch)
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
-		if actual != 600000 {
-			t.Errorf("expected block [600000], actual [%d]", actual)
+		if actual != registrationBlock {
+			t.Errorf("expected block [%d], actual [%d]", registrationBlock, actual)
 		}
-		if len(queried) != 2 {
-			t.Fatalf("expected exactly two queries, got %d: %v", len(queried), queried)
+		if len(queried) == 0 {
+			t.Fatal("expected at least one query")
 		}
-		if queried[1] >= queried[0] {
-			t.Errorf(
-				"expected the second query's start block [%d] to be further back than the first [%d]",
-				queried[1],
-				queried[0],
+
+		// The first window is scanned from its own start upward, so the
+		// walk moves further back only after that whole window came back
+		// empty.
+		initialWindowStart :=
+			currentBlock - reservationRegistrationLookBackBlocks -
+				reservationRegistrationReorgSafetyBlocks
+		if queried[0].startBlock != initialWindowStart {
+			t.Fatalf(
+				"expected the walk to start at the initial window [%d], got [%d]",
+				initialWindowStart,
+				queried[0].startBlock,
+			)
+		}
+		var widenedStart uint64
+		for _, r := range queried {
+			if r.startBlock < initialWindowStart {
+				widenedStart = r.startBlock
+				break
+			}
+		}
+		if widenedStart == 0 || widenedStart >= initialWindowStart {
+			t.Fatalf(
+				"expected a later query to start further back than the "+
+					"initial window [%d], got [%d]",
+				initialWindowStart,
+				widenedStart,
 			)
 		}
 	})
 
 	t.Run("never found - walks all the way back to genesis then stops", func(t *testing.T) {
-		var queried []uint64
-		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
-			queried = append(queried, startBlock)
+		const currentBlock = uint64(1000000)
+
+		var queried []eventRange
+		fetch := func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, eventRange{startBlock, endBlock})
 			return nil, nil
 		}
 
-		actual, err := resolveEarliestWalletRegistrationBlock(1000000, fetch)
+		actual, err := resolveEarliestWalletRegistrationBlock(currentBlock, fetch)
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
@@ -862,42 +981,60 @@ func TestResolveEarliestWalletRegistrationBlock(t *testing.T) {
 		if len(queried) == 0 {
 			t.Fatal("expected at least one query")
 		}
-		if last := queried[len(queried)-1]; last != 0 {
-			t.Errorf("expected the walk to terminate at genesis (start block 0), last queried [%d]", last)
-		}
-		// The walk must not loop forever re-querying genesis once reached.
+
+		// The walk must not loop forever re-querying genesis once reached:
+		// exactly one query may start at block 0.
 		genesisQueries := 0
-		for _, sb := range queried {
-			if sb == 0 {
+		for _, r := range queried {
+			if r.startBlock == 0 {
 				genesisQueries++
 			}
 		}
 		if genesisQueries != 1 {
 			t.Errorf("expected exactly one genesis query, got %d in %v", genesisQueries, queried)
 		}
+		for i, r := range queried {
+			if width := r.endBlock - r.startBlock + 1; width > tbtc.DepositRevealLookupChunkBlocks {
+				t.Errorf(
+					"query %d spans %d blocks, more than the chunk size %d",
+					i,
+					width,
+					tbtc.DepositRevealLookupChunkBlocks,
+				)
+			}
+		}
 	})
 
 	t.Run("chain younger than the initial window - first query already starts at genesis", func(t *testing.T) {
-		var queried []uint64
-		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
-			queried = append(queried, startBlock)
-			return []*tbtc.NewWalletRegisteredEvent{event(10)}, nil
+		const currentBlock = uint64(50)
+
+		var queried []eventRange
+		fetch := func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+			queried = append(queried, eventRange{startBlock, endBlock})
+			if startBlock <= 10 && 10 <= endBlock {
+				return []*tbtc.NewWalletRegisteredEvent{event(10)}, nil
+			}
+			return nil, nil
 		}
 
-		actual, err := resolveEarliestWalletRegistrationBlock(50, fetch)
+		actual, err := resolveEarliestWalletRegistrationBlock(currentBlock, fetch)
 		if err != nil {
 			t.Fatalf("unexpected error: [%v]", err)
 		}
 		if actual != 10 {
 			t.Errorf("expected block [10], actual [%d]", actual)
 		}
-		if len(queried) != 1 || queried[0] != 0 {
-			t.Errorf("expected a single query starting at genesis, got %v", queried)
+		if len(queried) != 1 || queried[0] != (eventRange{0, currentBlock}) {
+			t.Errorf(
+				"expected a single query over [0..%d], got %v",
+				currentBlock,
+				queried,
+			)
 		}
 	})
 
 	t.Run("fetch error propagates immediately", func(t *testing.T) {
-		fetch := func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+		fetch := func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
 			return nil, fmt.Errorf("simulated fetch failure")
 		}
 

@@ -12,6 +12,7 @@
 package ethereum
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/binary"
 	"errors"
@@ -1381,17 +1382,19 @@ func (tc *TbtcChain) WalletReservationsCount(
 //
 // WalletReservationsCount is checked first as a cheap short-circuit: the
 // vast majority of wallets never custody a reservation, and skipping the
-// full-history event scan for them avoids an unbounded eth_getLogs query
-// (genesis to tip) on every wallet-close notification for the common
+// full-history event scan for them avoids a scan across the wallet's
+// whole lifetime on every wallet-close notification for the common
 // case. Wallets that do have reservations pay a reservation-event scan
 // bounded by earliestWalletRegistrationBlock, which resolves the
 // wallet's actual earliest registration block by walking
 // NewWalletRegistered events backwards in doubling windows from the
 // chain tip until one is found or genesis is reached, then memoizes
 // the result for the lifetime of this chain adapter - see that
-// method's doc comment. This correctly bounds the dominant case (a
-// wallet closed long after it registered) instead of degenerating
-// into the genesis-to-tip scan the bound exists to avoid.
+// method's doc comment. That bound decides how many blocks the scan
+// covers, and scanWalletReservationEventsInChunks decides how the
+// covered range is queried: in 10,000-block chunks, because providers
+// cap the range of a single eth_getLogs and one unbounded query from
+// the registration block to the tip would fail the whole call there.
 // Governance-capped reservation volume keeps the reservation-having
 // case rare in absolute terms, and correctness (never missing a real
 // reservation) takes priority over narrowing the block range further
@@ -1416,7 +1419,7 @@ func (tc *TbtcChain) WalletReservations(
 	// a wallet cannot have reservation events before it existed. A failed
 	// registration lookup fails this call instead of widening the scan to
 	// genesis: the caller retries on its next pass, whereas a genesis scan
-	// is a chain of 10,000-block eth_getLogs chunks most providers reject.
+	// is a 10,000-block chunk walk over the whole chain.
 	startBlock, err := registrationScanStartBlock(
 		walletPublicKeyHash,
 		tc.earliestWalletRegistrationBlock,
@@ -1425,32 +1428,47 @@ func (tc *TbtcChain) WalletReservations(
 		return nil, err
 	}
 
-	acceptanceEvents, err := tc.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{
-			StartBlock:          startBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		},
-	)
+	currentBlock, err := tc.walletReservationScanEndBlock()
 	if err != nil {
 		return nil, fmt.Errorf(
-			"cannot get past reservation acceptance events for [0x%x]: [%v]",
+			"cannot get the chain tip for the wallet [0x%x] reservation "+
+				"scan: [%w]",
 			walletPublicKeyHash,
 			err,
 		)
 	}
 
-	reanchorEvents, err := tc.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			StartBlock:                startBlock,
-			TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	acceptanceEvents, reanchorEvents, err := scanWalletReservationEventsInChunks(
+		walletPublicKeyHash,
+		startBlock,
+		currentBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) (
+			[]*tbtc.ReservationAcceptanceRequestedEvent,
+			error,
+		) {
+			return tc.PastReservationAcceptanceRequestedEvents(
+				&tbtc.ReservationAcceptanceRequestedEventFilter{
+					StartBlock:          chunkStartBlock,
+					EndBlock:            &chunkEndBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
+		},
+		func(chunkStartBlock, chunkEndBlock uint64) (
+			[]*tbtc.ReservationReanchorRequestedEvent,
+			error,
+		) {
+			return tc.PastReservationReanchorRequestedEvents(
+				&tbtc.ReservationReanchorRequestedEventFilter{
+					StartBlock:                chunkStartBlock,
+					EndBlock:                  &chunkEndBlock,
+					TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot get past reservation reanchor events for [0x%x]: [%v]",
-			walletPublicKeyHash,
-			err,
-		)
+		return nil, err
 	}
 
 	return resolveCustodiedReservationKeys(
@@ -1461,11 +1479,39 @@ func (tc *TbtcChain) WalletReservations(
 	)
 }
 
+// walletReservationScanEndBlock returns the block the wallet reservation
+// scan ends at.
+//
+// The height comes from the node over RPC (LatestBlockNumber), not from
+// tc.blockCounter: that counter is advanced only by new-head subscription
+// notifications (it re-reads a header at startup and when the subscription
+// is re-established, and keeps returning its last known height in between),
+// while WalletReservationsCount and every other reservation read go to the
+// node's current state over ordinary RPC calls. A stalled or disconnected
+// head subscription would otherwise bound the scan below the blocks that
+// explain a non-zero count, and the scan would return an empty key set with
+// no error - which the re-anchor and stranding consumers treat as a wallet
+// with nothing left to move. A failing RPC read fails the scan instead, so
+// the caller retries on its next pass rather than acting on a truncated
+// answer.
+func (tc *TbtcChain) walletReservationScanEndBlock() (uint64, error) {
+	// The read timeout mirrors the adapter's other header lookups (see
+	// baseChain.currentBlock).
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCtx()
+
+	return tc.LatestBlockNumber(ctx)
+}
+
 // earliestWalletRegistrationBlock returns the actual earliest block at
 // which the given wallet was registered. NewWalletRegistered events are
-// walked backwards from the current chain tip - see
+// walked backwards from the node's current chain tip - see
 // resolveEarliestWalletRegistrationBlock for the doubling-window walk
-// itself - until a registration event is found or genesis is reached.
+// itself - until a registration event is found or genesis is reached. The
+// tip comes from the node over RPC rather than from the subscription-cached
+// height, for the reason given on walletReservationScanEndBlock: a lagging
+// cache would bound the walk below a registration that has already
+// happened.
 // NewWalletRegistered fires once per wallet registration and a past
 // registration is immutable, so the resolved block is memoized in
 // tc.walletRegistrationBlockCache for the lifetime of this chain
@@ -1484,10 +1530,10 @@ func (tc *TbtcChain) earliestWalletRegistrationBlock(
 		return cached.(uint64), nil
 	}
 
-	currentBlock, err := tc.blockCounter.CurrentBlock()
+	currentBlock, err := tc.walletReservationScanEndBlock()
 	if err != nil {
 		return 0, fmt.Errorf(
-			"cannot get current block to resolve registration block for wallet [0x%x]: [%v]",
+			"cannot get the chain tip to resolve registration block for wallet [0x%x]: [%v]",
 			walletPublicKeyHash,
 			err,
 		)
@@ -1495,10 +1541,11 @@ func (tc *TbtcChain) earliestWalletRegistrationBlock(
 
 	registrationBlock, err := resolveEarliestWalletRegistrationBlock(
 		currentBlock,
-		func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
+		func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error) {
 			return tc.PastNewWalletRegisteredEvents(
 				&tbtc.NewWalletRegisteredEventFilter{
 					StartBlock:          startBlock,
+					EndBlock:            &endBlock,
 					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
 				},
 			)
@@ -1521,9 +1568,10 @@ func (tc *TbtcChain) earliestWalletRegistrationBlock(
 
 // registrationScanStartBlock returns the block from which a wallet's event
 // scans start. A failed registration lookup is returned as an error and
-// never degrades to block 0: the chunked genesis scan it would trigger is
-// made of eth_getLogs ranges most providers reject, so the caller retries
-// on its next pass instead.
+// never degrades to block 0: the full-history scan it would trigger is a
+// 10,000-block chunk walk from genesis whose exit is bounded only by the
+// chain's height, so the caller retries on its next pass instead of paying
+// a permanently unbounded number of round trips.
 func registrationScanStartBlock(
 	walletPublicKeyHash [20]byte,
 	resolve func(walletPublicKeyHash [20]byte) (uint64, error),
@@ -1543,23 +1591,30 @@ func registrationScanStartBlock(
 // resolveEarliestWalletRegistrationBlock is the pure-logic core of
 // earliestWalletRegistrationBlock: given the current chain tip and a
 // callback that fetches NewWalletRegistered events for one wallet from a
-// given start block through the tip, it walks the start block backwards
-// - beginning at the last reservationRegistrationLookBackBlocks blocks
-// (plus a reservationRegistrationReorgSafetyBlocks reorg-safety margin),
-// doubling the window and shifting further back each time nothing is
-// found - until a registration event turns up or the walk reaches
-// genesis (start block 0). Extracted as a standalone function -
-// mirroring the existing pattern in this file (e.g.
-// resolveCustodiedReservationKeys, resolveWalletTerminationCause) - so
-// the walk/doubling logic can be unit tested directly with a fake
-// fetchEvents callback, since the surrounding TbtcChain method depends
-// on real go-ethereum simulated-backend infrastructure that does not
-// exist anywhere in pkg/chain/ethereum today (a package-wide gap,
-// explicitly deferred). Returns 0 if genesis is reached without finding
-// a registration event.
+// given block range, it walks the start block backwards - beginning at the
+// last reservationRegistrationLookBackBlocks blocks (plus a
+// reservationRegistrationReorgSafetyBlocks reorg-safety margin), doubling
+// the window and shifting further back each time nothing is found - until a
+// registration event turns up or the walk reaches genesis (start block 0).
+// Each window is fetched in ascending chunks of at most
+// tbtc.DepositRevealLookupChunkBlocks blocks and the walk stops at the first
+// chunk that yields a registration: that chunk holds the window's earliest
+// registration, because the chunks ascend. A doubled window can span
+// millions of blocks on an old wallet, so leaving the range unbounded would
+// hand the provider the same oversized eth_getLogs the chunking exists to
+// avoid.
+//
+// Extracted as a standalone function - mirroring the existing pattern in
+// this file (e.g. resolveCustodiedReservationKeys,
+// resolveWalletTerminationCause) - so the walk/doubling logic can be unit
+// tested directly with a fake fetchEvents callback, since the surrounding
+// TbtcChain method depends on real go-ethereum simulated-backend
+// infrastructure that does not exist anywhere in pkg/chain/ethereum today
+// (a package-wide gap, explicitly deferred). Returns 0 if genesis is reached
+// without finding a registration event.
 func resolveEarliestWalletRegistrationBlock(
 	currentBlock uint64,
-	fetchEvents func(startBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error),
+	fetchEvents func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error),
 ) (uint64, error) {
 	windowSize := reservationRegistrationLookBackBlocks + reservationRegistrationReorgSafetyBlocks
 
@@ -1569,12 +1624,16 @@ func resolveEarliestWalletRegistrationBlock(
 	}
 
 	for {
-		events, err := fetchEvents(startBlock)
+		registrationBlock, err := earliestRegistrationEventBlockInRange(
+			startBlock,
+			currentBlock,
+			fetchEvents,
+		)
 		if err != nil {
 			return 0, err
 		}
 
-		if registrationBlock := earliestRegistrationEventBlock(events); registrationBlock != 0 {
+		if registrationBlock != 0 {
 			return registrationBlock, nil
 		}
 
@@ -1589,6 +1648,33 @@ func resolveEarliestWalletRegistrationBlock(
 		}
 		windowSize *= 2
 	}
+}
+
+// earliestRegistrationEventBlockInRange walks the inclusive block range
+// [startBlock, endBlock] in ascending chunks and returns the earliest
+// registration event block found, or 0 if no chunk yields one. It stops at
+// the first chunk that yields events: chunks ascend, so that chunk holds the
+// range's earliest registration and the remaining chunks cannot change the
+// answer.
+func earliestRegistrationEventBlockInRange(
+	startBlock uint64,
+	endBlock uint64,
+	fetchEvents func(startBlock, endBlock uint64) ([]*tbtc.NewWalletRegisteredEvent, error),
+) (uint64, error) {
+	var earliest uint64
+	err := fetchEventRangeInChunks(
+		startBlock,
+		endBlock,
+		fetchEvents,
+		func(chunkEvents []*tbtc.NewWalletRegisteredEvent) bool {
+			earliest = earliestRegistrationEventBlock(chunkEvents)
+			return earliest == 0
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return earliest, nil
 }
 
 // earliestRegistrationEventBlock is the pure-logic core of
@@ -1613,6 +1699,137 @@ func earliestRegistrationEventBlock(events []*tbtc.NewWalletRegisteredEvent) uin
 		return 0
 	}
 	return earliest
+}
+
+// fetchEventRangeInChunks walks the inclusive block range
+// [startBlock, endBlock] in chunks of at most
+// tbtc.DepositRevealLookupChunkBlocks blocks, in ascending order, and calls
+// onChunk with each chunk's events. onChunk reports whether the walk should
+// continue, so a caller interested only in the first chunk that yields
+// events can stop there. A fetch error stops the walk and is returned
+// wrapped with the failing chunk's range; chunks already delivered to
+// onChunk keep their effects, but events are no longer returned to the
+// caller, so a failed walk never looks complete. An inverted range
+// (startBlock > endBlock) is a no-op that calls neither fetch nor onChunk.
+//
+// The caller builds a fetch closure for the event type it needs, so one
+// implementation serves the wallet reservation scans and the registration
+// walk. Both start from a wallet's own past and can therefore span millions
+// of blocks, which providers cap for a single eth_getLogs: chunking keeps
+// every request inside the cap while still covering the whole range.
+func fetchEventRangeInChunks[T any](
+	startBlock uint64,
+	endBlock uint64,
+	fetch func(chunkStartBlock, chunkEndBlock uint64) ([]T, error),
+	onChunk func(events []T) (continueWalk bool),
+) error {
+	if startBlock > endBlock {
+		return nil
+	}
+
+	for chunkStartBlock := startBlock; ; {
+		chunkEndBlock := chunkStartBlock + tbtc.DepositRevealLookupChunkBlocks - 1
+		if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {
+			chunkEndBlock = endBlock
+		}
+
+		chunkEvents, err := fetch(chunkStartBlock, chunkEndBlock)
+		if err != nil {
+			return fmt.Errorf(
+				"fetching events in blocks [%d..%d]: [%w]",
+				chunkStartBlock,
+				chunkEndBlock,
+				err,
+			)
+		}
+		if !onChunk(chunkEvents) {
+			return nil
+		}
+
+		if chunkEndBlock == endBlock {
+			return nil
+		}
+		chunkStartBlock = chunkEndBlock + 1
+	}
+}
+
+// scanWalletReservationEventsInChunks walks the inclusive block range
+// [startBlock, endBlock] in chunks of at most
+// tbtc.DepositRevealLookupChunkBlocks blocks, in ascending order, and
+// returns the merged ReservationAcceptanceRequested and
+// ReservationReanchorRequested events for the given wallet. The range
+// starts at the wallet's earliest registration block, so for a wallet
+// closed long after it registered it can span millions of blocks: a
+// single eth_getLogs over that span is rejected by providers that cap
+// the range, which would fail every re-anchor pass for wallets whose
+// providers enforce a cap. Chunking the same way the other reservation
+// scans in this repo do (see pkg/maintainer/spv/reservation_event_scan.go
+// and the acceptance task's request scan) keeps each request inside the
+// cap while still covering the whole range, so correctness (never
+// missing a real reservation) is preserved rather than traded away.
+//
+// A failed chunk fails the scan, and with it this call: the events found
+// by earlier chunks are discarded rather than returned as a partial set,
+// because callers treat the returned key set as the wallet's complete
+// custody. The caller retries on its next pass.
+//
+// Extracted as a standalone function - mirroring the existing pattern in
+// this file (e.g. resolveCustodiedReservationKeys) - so the chunk
+// boundaries and the merge can be unit tested directly with fake fetch
+// callbacks, since the surrounding TbtcChain methods depend on real
+// go-ethereum simulated-backend infrastructure that does not exist
+// anywhere in pkg/chain/ethereum today (a package-wide gap, explicitly
+// deferred).
+func scanWalletReservationEventsInChunks(
+	walletPublicKeyHash [20]byte,
+	startBlock uint64,
+	endBlock uint64,
+	fetchAcceptance func(chunkStartBlock, chunkEndBlock uint64) (
+		[]*tbtc.ReservationAcceptanceRequestedEvent,
+		error,
+	),
+	fetchReanchor func(chunkStartBlock, chunkEndBlock uint64) (
+		[]*tbtc.ReservationReanchorRequestedEvent,
+		error,
+	),
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, []*tbtc.ReservationReanchorRequestedEvent, error) {
+	var acceptanceEvents []*tbtc.ReservationAcceptanceRequestedEvent
+	err := fetchEventRangeInChunks(
+		startBlock,
+		endBlock,
+		fetchAcceptance,
+		func(chunkEvents []*tbtc.ReservationAcceptanceRequestedEvent) bool {
+			acceptanceEvents = append(acceptanceEvents, chunkEvents...)
+			return true
+		},
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"cannot get past reservation acceptance events for [0x%x]: [%w]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	var reanchorEvents []*tbtc.ReservationReanchorRequestedEvent
+	err = fetchEventRangeInChunks(
+		startBlock,
+		endBlock,
+		fetchReanchor,
+		func(chunkEvents []*tbtc.ReservationReanchorRequestedEvent) bool {
+			reanchorEvents = append(reanchorEvents, chunkEvents...)
+			return true
+		},
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"cannot get past reservation reanchor events for [0x%x]: [%w]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return acceptanceEvents, reanchorEvents, nil
 }
 
 // resolveCustodiedReservationKeys is the pure-logic core of
