@@ -22,13 +22,14 @@
 # One entry covers every mutant of that mutator on that line. A changed line
 # text no longer matches, so the entry must be reviewed again.
 # Reservations M1 freeze decision, 2026-10-30. Option B: the 58 surviving
-# keep-core Go mutants that a test cannot or should not pin: the 26 that are
-# equivalent and the 32 whose only effect is log text, a pause between fixed
-# retry attempts, or a branch no caller can reach. Measured over the 13
-# reservation files of pkg/tbtcpg and pkg/maintainer/spv with gremlins v0.6.0
-# (--workers 4 --timeout-coefficient 10). The bar keep-core.go.mutation.survivors
-# reads 60 living mutants; the 58 listed below leave 2 against the ceiling of
-# 40, and those 2 are the real gaps this option does not excuse.
+# keep-core Go mutants that a test cannot or should not pin — provably
+# equivalent, or with no effect beyond log text, a pause between fixed retry
+# attempts, or a branch no caller can reach. Measured over the 13 reservation
+# files of pkg/tbtcpg and pkg/maintainer/spv with gremlins v0.6.0
+# (--workers 4 --timeout-coefficient 10) at head 8e7e2b30f, where the bar
+# keep-core.go.mutation.survivors reads 58 living mutants (spv 37, tbtcpg 21).
+# The 52 entries below match all 58 — six of them pin two sites each — so the
+# reading is 0 against the ceiling of 40 and no survivor is left undocumented.
 equivalent_mutants:
   # pkg/maintainer/spv
   - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
