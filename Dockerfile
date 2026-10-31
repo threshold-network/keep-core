@@ -68,10 +68,25 @@ COPY ./tools $APP_DIR/tools
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
 
 # Environment is to download published and tagged NPM packages versions.
-ARG ENVIRONMENT
+# Defaults to `development` to mirror the root Makefile's `ifndef environment`
+# fallback (the "Build Docker Build Image" CI step never passes this build-arg).
+ARG ENVIRONMENT=development
 
 COPY ./Makefile $APP_DIR/Makefile
 RUN make get_artifacts environment=$ENVIRONMENT
+
+# TODO(https://github.com/threshold-network/tbtc-v2/pull/1112): remove once
+# @keep-network/tbtc-v2 publishes Bridge/WalletProposalValidator/RedemptionWatchtower/
+# ReservationRouter (and the rest of the tbtc module's required_contracts) under the
+# `development` npm tag. Until then, `get_artifacts` fetches a tbtc-v2 package whose
+# Bridge/WalletProposalValidator/RedemptionWatchtower don't yet expose the reservation
+# methods this PR binds against, and has no ReservationRouter artifact at all.
+# Missing/stale reservation ABI methods are patched in at generate-time via the
+# vendored fallback artifacts in pkg/chain/ethereum/tbtc/gen/Makefile (see the
+# ReservationRouter.fallback-artifact.json rule and the patch-artifacts target) -
+# see threshold-network/keep-core#4281. This only affects the tbtc module's
+# artifacts, and only for `environment=development` (PR CI) builds - sepolia/mainnet
+# builds and the beacon/ecdsa/threshold modules are untouched.
 
 # Need this to resolve imports in generated Ethereum commands.
 COPY ./config $APP_DIR/config

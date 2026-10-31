@@ -14,6 +14,7 @@ type LocalBitcoinChain struct {
 	transactions              map[bitcoin.Hash]*bitcoin.Transaction
 	transactionsConfirmations map[bitcoin.Hash]uint
 	satPerVByteFeeEstimation  map[uint32]int64
+	txHashesByPublicKeyHash   map[[20]byte][]bitcoin.Hash
 }
 
 func NewLocalBitcoinChain() *LocalBitcoinChain {
@@ -21,6 +22,7 @@ func NewLocalBitcoinChain() *LocalBitcoinChain {
 		transactions:              make(map[bitcoin.Hash]*bitcoin.Transaction),
 		transactionsConfirmations: make(map[bitcoin.Hash]uint),
 		satPerVByteFeeEstimation:  make(map[uint32]int64),
+		txHashesByPublicKeyHash:   make(map[[20]byte][]bitcoin.Hash),
 	}
 }
 
@@ -104,7 +106,23 @@ func (lbc *LocalBitcoinChain) GetTransactionsForPublicKeyHash(
 func (lbc *LocalBitcoinChain) GetTxHashesForPublicKeyHash(
 	publicKeyHash [20]byte,
 ) ([]bitcoin.Hash, error) {
-	panic("unsupported")
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
+	return lbc.txHashesByPublicKeyHash[publicKeyHash], nil
+}
+
+// SetTxHashesForPublicKeyHash wires the wallet's transaction history for
+// GetTxHashesForPublicKeyHash, used by tbtc.DetermineWalletMainUtxo to
+// locate the wallet's main UTXO among its past transactions.
+func (lbc *LocalBitcoinChain) SetTxHashesForPublicKeyHash(
+	publicKeyHash [20]byte,
+	hashes []bitcoin.Hash,
+) {
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
+	lbc.txHashesByPublicKeyHash[publicKeyHash] = hashes
 }
 
 func (lbc *LocalBitcoinChain) GetMempoolForPublicKeyHash(

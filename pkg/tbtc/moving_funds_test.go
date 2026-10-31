@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,190 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+// movingFundsVsize returns the virtual size ValidateMovingFundsProposal
+// estimates for a moving funds transaction with the given target wallets
+// count.
+func movingFundsVsize(t *testing.T, targetWalletsCount int) int64 {
+	t.Helper()
+
+	vsize, err := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(targetWalletsCount, true).
+		VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return vsize
+}
+
+// validateMovingFundsFee runs ValidateMovingFundsProposal for a proposal
+// with the given number of target wallets and fee against a local chain on
+// which the on-chain validation passes and the safety margin has elapsed,
+// isolating the follower-side fee gate. It returns the warnings that were
+// logged and the validation error.
+func validateMovingFundsFee(
+	t *testing.T,
+	targetWalletsCount int,
+	fee *big.Int,
+) ([]string, error) {
+	t.Helper()
+
+	hostChain := Connect()
+
+	walletPublicKeyHash := [20]byte{0x11}
+	mainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: bitcoin.Hash{0xaa},
+			OutputIndex:     0,
+		},
+		Value: 1_000_000,
+	}
+
+	targetWallets := make([][20]byte, targetWalletsCount)
+	for i := range targetWallets {
+		targetWallets[i] = [20]byte{0x01, byte(i)}
+	}
+	proposal := &MovingFundsProposal{
+		TargetWallets:    targetWallets,
+		MovingFundsTxFee: fee,
+	}
+
+	// The default zero MovingFundsRequestedAt puts the safety margin far in
+	// the past, and no commitment events mean the wallet is not a target of
+	// another moving funds procedure.
+	hostChain.SetMovingFundsParameters(
+		0, 0, 0, 604800, big.NewInt(0), 0, 0, 0, 0, big.NewInt(0), 0,
+	)
+	hostChain.setWallet(walletPublicKeyHash, &WalletChainData{})
+	err := hostChain.setPastMovingFundsCommitmentSubmittedEvents(
+		&MovingFundsCommitmentSubmittedEventFilter{StartBlock: 0},
+		[]*MovingFundsCommitmentSubmittedEvent{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = hostChain.setMovingFundsProposalValidationResult(
+		walletPublicKeyHash,
+		mainUtxo,
+		proposal,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logger := &capturingLogger{}
+
+	err = ValidateMovingFundsProposal(
+		logger,
+		walletPublicKeyHash,
+		mainUtxo,
+		proposal,
+		hostChain,
+	)
+
+	return logger.warnings, err
+}
+
+// TestMovingFundsValidator_RejectsBelowProtocolMinimum verifies that the
+// follower refuses a moving funds proposal whose fee is below
+// ProtocolMinWalletTxSatPerVByteFee * (vsize - 1). On the base code the
+// check only warned, so the proposal validated without error.
+func TestMovingFundsValidator_RejectsBelowProtocolMinimum(t *testing.T) {
+	for _, targetWalletsCount := range []int{1, 3} {
+		vsize := movingFundsVsize(t, targetWalletsCount)
+		threshold := ProtocolMinWalletTxSatPerVByteFee * (vsize - 1)
+
+		scenarios := map[string]*big.Int{
+			"one satoshi below the threshold": big.NewInt(threshold - 1),
+			"relay floor fee":                 big.NewInt(vsize),
+		}
+
+		for name, fee := range scenarios {
+			t.Run(
+				fmt.Sprintf("%d targets/%s", targetWalletsCount, name),
+				func(t *testing.T) {
+					_, err := validateMovingFundsFee(t, targetWalletsCount, fee)
+					if err == nil {
+						t.Fatalf(
+							"expected fee [%v] to be rejected (threshold [%d])",
+							fee,
+							threshold,
+						)
+					}
+					if !strings.Contains(err.Error(), "protocol minimum") {
+						t.Errorf(
+							"expected a protocol minimum error, got: [%v]",
+							err,
+						)
+					}
+				},
+			)
+		}
+	}
+}
+
+// TestMovingFundsValidator_AcceptsAtProtocolMinimum verifies that fees at the
+// reject threshold and at the full protocol minimum both validate.
+func TestMovingFundsValidator_AcceptsAtProtocolMinimum(t *testing.T) {
+	for _, targetWalletsCount := range []int{1, 3} {
+		vsize := movingFundsVsize(t, targetWalletsCount)
+
+		scenarios := map[string]*big.Int{
+			"exactly at the threshold": big.NewInt(
+				ProtocolMinWalletTxSatPerVByteFee * (vsize - 1),
+			),
+			"exactly at the full protocol minimum": big.NewInt(
+				ProtocolMinWalletTxSatPerVByteFee * vsize,
+			),
+		}
+
+		for name, fee := range scenarios {
+			t.Run(
+				fmt.Sprintf("%d targets/%s", targetWalletsCount, name),
+				func(t *testing.T) {
+					_, err := validateMovingFundsFee(t, targetWalletsCount, fee)
+					if err != nil {
+						t.Errorf(
+							"expected fee [%v] to be accepted, got: [%v]",
+							fee,
+							err,
+						)
+					}
+				},
+			)
+		}
+	}
+}
+
+// TestMovingFundsValidator_WarnsBelowBareFloor verifies that the soft warning
+// fires below the operator's bare floor and stays quiet at it, for a fee that
+// already clears the protocol minimum threshold.
+func TestMovingFundsValidator_WarnsBelowBareFloor(t *testing.T) {
+	vsize := movingFundsVsize(t, 1)
+	bareFloorFee := MinWalletTxSatPerVByteFee * vsize
+
+	warnings, err := validateMovingFundsFee(t, 1, big.NewInt(bareFloorFee-1))
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if len(warnings) == 0 {
+		t.Error("expected a warning for a fee below the bare floor")
+	}
+
+	warnings, err = validateMovingFundsFee(t, 1, big.NewInt(bareFloorFee))
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf(
+			"expected no warning for a fee at the bare floor, got: %v",
+			warnings,
+		)
+	}
+}
 
 // TODO: Think about covering unhappy paths for specific steps of the moving funds action.
 func TestMovingFundsAction_Execute(t *testing.T) {

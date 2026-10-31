@@ -97,6 +97,42 @@ func TestApplyWalletTxFeePolicy(t *testing.T) {
 		}
 	})
 
+	// A floor below the protocol minimum (ProtocolMinWalletTxSatPerVByteFee = 5)
+	// is rejected: an operator-tuned floor under the fixed protocol minimum would
+	// let every follower co-sign underpriced wallet transactions on all five paths.
+	t.Run("floor below protocol minimum is rejected", func(t *testing.T) {
+		err := applyWalletTxFeePolicy(Config{
+			WalletTxSatPerVByteFloor: 4, // below ProtocolMinWalletTxSatPerVByteFee=5
+		})
+		if err == nil {
+			t.Error("expected error for floor=4 (below protocol minimum 5); got nil")
+		}
+	})
+
+	t.Run("floor at protocol minimum is accepted", func(t *testing.T) {
+		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
+		err := applyWalletTxFeePolicy(Config{
+			WalletTxSatPerVByteFloor: 5, // exactly at ProtocolMinWalletTxSatPerVByteFee=5
+		})
+		if err != nil {
+			t.Errorf("expected no error for floor=5 (at protocol minimum); got: %v", err)
+		}
+		if MinWalletTxSatPerVByteFee != 5 {
+			t.Errorf("expected floor=5, got %d", MinWalletTxSatPerVByteFee)
+		}
+	})
+
+	t.Run("zero floor (default) is accepted", func(t *testing.T) {
+		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
+		err := applyWalletTxFeePolicy(Config{}) // zero = use default, no error
+		if err != nil {
+			t.Errorf("expected no error for zero floor (default); got: %v", err)
+		}
+		if MinWalletTxSatPerVByteFee != DefaultWalletTxSatPerVByteFloor {
+			t.Errorf("expected default floor %d, got %d", DefaultWalletTxSatPerVByteFloor, MinWalletTxSatPerVByteFee)
+		}
+	})
+
 	t.Run("negative floor returns error and preserves state", func(t *testing.T) {
 		MinWalletTxSatPerVByteFee = DefaultWalletTxSatPerVByteFloor
 		WalletTxFeeBufferPercent = DefaultWalletTxFeeBufferPercent

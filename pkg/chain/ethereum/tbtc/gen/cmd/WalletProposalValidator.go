@@ -59,6 +59,8 @@ func init() {
 		wpvValidateMovedFundsSweepProposalCommand(),
 		wpvValidateMovingFundsProposalCommand(),
 		wpvValidateRedemptionProposalCommand(),
+		wpvValidateReservationAnchorProposalCommand(),
+		wpvValidateReservationReanchorProposalCommand(),
 	)
 
 	ModuleCommand.AddCommand(WalletProposalValidatorCommand)
@@ -457,6 +459,92 @@ func wpvValidateRedemptionProposal(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.ValidateRedemptionProposalAtBlock(
+		arg_proposal_json,
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func wpvValidateReservationAnchorProposalCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "validate-reservation-anchor-proposal [arg_proposal_json] [arg_depositExtraInfo_json]",
+		Short:                 "Calls the view method validateReservationAnchorProposal on the WalletProposalValidator contract.",
+		Args:                  cmd.ArgCountChecker(2),
+		RunE:                  wpvValidateReservationAnchorProposal,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func wpvValidateReservationAnchorProposal(c *cobra.Command, args []string) error {
+	contract, err := initializeWalletProposalValidator(c)
+	if err != nil {
+		return err
+	}
+
+	arg_proposal_json := abi.WalletProposalValidatorReservationAnchorProposal{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_proposal_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_proposal_json to abi.WalletProposalValidatorReservationAnchorProposal: %w", err)
+	}
+
+	arg_depositExtraInfo_json := abi.WalletProposalValidatorDepositExtraInfo{}
+	if err := json.Unmarshal([]byte(args[1]), &arg_depositExtraInfo_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_depositExtraInfo_json to abi.WalletProposalValidatorDepositExtraInfo: %w", err)
+	}
+
+	result, err := contract.ValidateReservationAnchorProposalAtBlock(
+		arg_proposal_json,
+		arg_depositExtraInfo_json,
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func wpvValidateReservationReanchorProposalCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "validate-reservation-reanchor-proposal [arg_proposal_json]",
+		Short:                 "Calls the view method validateReservationReanchorProposal on the WalletProposalValidator contract.",
+		Args:                  cmd.ArgCountChecker(1),
+		RunE:                  wpvValidateReservationReanchorProposal,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func wpvValidateReservationReanchorProposal(c *cobra.Command, args []string) error {
+	contract, err := initializeWalletProposalValidator(c)
+	if err != nil {
+		return err
+	}
+
+	arg_proposal_json := abi.WalletProposalValidatorReservationReanchorProposal{}
+	if err := json.Unmarshal([]byte(args[0]), &arg_proposal_json); err != nil {
+		return fmt.Errorf("failed to unmarshal arg_proposal_json to abi.WalletProposalValidatorReservationReanchorProposal: %w", err)
+	}
+
+	result, err := contract.ValidateReservationReanchorProposalAtBlock(
 		arg_proposal_json,
 		cmd.BlockFlagValue.Int,
 	)

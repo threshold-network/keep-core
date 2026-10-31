@@ -1,0 +1,1756 @@
+package spv
+
+import (
+	"context"
+	"fmt"
+	"math/big"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/subscription"
+	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+// TestResolveWalletPublicKeyHash covers the three branches of
+// resolveWalletPublicKeyHash: a matching NewWalletRegistered event found, no
+// matching event found, and a chain read error.
+func TestResolveWalletPublicKeyHash(t *testing.T) {
+	walletID := [32]byte{0x01, 0x02, 0x03}
+	expectedPKH := [20]byte{0xAA, 0xBB, 0xCC}
+	const currentBlock = 2_000_000
+
+	newChain := func() *localChain {
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock)
+		spvChain.setBlockCounter(blockCounter)
+		return spvChain
+	}
+
+	t.Run("found", func(t *testing.T) {
+		spvChain := newChain()
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+		})
+
+		pkh, err := resolveWalletPublicKeyHash(spvChain, walletID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pkh != expectedPKH {
+			t.Errorf(
+				"unexpected public key hash\nexpected: %x\nactual:   %x",
+				expectedPKH,
+				pkh,
+			)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		spvChain := newChain()
+		// No matching event registered for walletID; a different wallet's
+		// event exists to confirm the filter, not just an empty set, drives
+		// the not-found path.
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       [32]byte{0x99},
+			WalletPublicKeyHash: expectedPKH,
+		})
+
+		_, err := resolveWalletPublicKeyHash(spvChain, walletID)
+		if err == nil {
+			t.Fatal("expected error for missing wallet registration event")
+		}
+	})
+
+	t.Run("chain error", func(t *testing.T) {
+		spvChain := newChain()
+		spvChain.setPastNewWalletRegisteredEventsErr(
+			fmt.Errorf("rpc unavailable"),
+		)
+
+		_, err := resolveWalletPublicKeyHash(spvChain, walletID)
+		if err == nil {
+			t.Fatal("expected chain error to propagate")
+		}
+	})
+
+	t.Run("duplicate event delivery uses the latest match", func(t *testing.T) {
+		spvChain := newChain()
+		staleePKH := [20]byte{0x11}
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: staleePKH,
+		})
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+		})
+
+		pkh, err := resolveWalletPublicKeyHash(spvChain, walletID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pkh != expectedPKH {
+			t.Errorf(
+				"expected the latest matching event to win\nexpected: %x\nactual:   %x",
+				expectedPKH,
+				pkh,
+			)
+		}
+	})
+
+	t.Run("recent registration is found in the first bounded window", func(t *testing.T) {
+		recording := &filterRecordingChain{localChain: newChain()}
+		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+			BlockNumber:         currentBlock - 1000,
+		})
+
+		if _, err := resolveWalletPublicKeyHash(recording, walletID); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		starts := recording.pastNewWalletRegisteredStartBlocks
+		if len(starts) != 1 || starts[0] != currentBlock-reservationDefaultLookBackBlocks {
+			t.Errorf(
+				"expected one lookup bounded to the last %d blocks, got start blocks %v",
+				reservationDefaultLookBackBlocks,
+				starts,
+			)
+		}
+	})
+
+	t.Run("old registration is found by widening the window, never by a genesis scan first", func(t *testing.T) {
+		recording := &filterRecordingChain{localChain: newChain()}
+		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: expectedPKH,
+			BlockNumber:         currentBlock - 500_000,
+		})
+
+		pkh, err := resolveWalletPublicKeyHash(recording, walletID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pkh != expectedPKH {
+			t.Errorf("unexpected public key hash %x", pkh)
+		}
+		starts := recording.pastNewWalletRegisteredStartBlocks
+		expected := []uint64{
+			currentBlock - reservationDefaultLookBackBlocks,
+			currentBlock - 2*reservationDefaultLookBackBlocks,
+			currentBlock - 4*reservationDefaultLookBackBlocks,
+		}
+		if len(starts) != len(expected) {
+			t.Fatalf("expected start blocks %v, got %v", expected, starts)
+		}
+		for i := range expected {
+			if starts[i] != expected[i] {
+				t.Errorf("expected start blocks %v, got %v", expected, starts)
+				break
+			}
+		}
+	})
+}
+
+// TestCheckStaleReservedDeposit_Resolution covers the resolution outcomes of
+// CheckStaleReservedDeposit used by the poller to decide tracking-set
+// retention: a deposit not yet at its snapshotted refund deadline must be
+// kept without any chain read; past the deadline, a still-Pending action
+// must be kept (the contract would revert the notification); past the
+// deadline with an action that is not Pending (TimedOut, Settled, ...) must
+// be notified and kept until the record clears, regardless of wallet state
+// (C-3); and a non-reserved deposit must be dropped.
+func TestCheckStaleReservedDeposit_Resolution(t *testing.T) {
+	tests := map[string]struct {
+		isReserved          bool
+		walletState         tbtc.WalletState
+		actionState         tbtc.ReservationActionState
+		refundDeadline      uint32
+		now                 uint32
+		expectedResolution  StaleDepositResolution
+		expectedNotifyCalls int
+	}{
+		"not reserved": {
+			isReserved:         false,
+			walletState:        tbtc.StateMovingFunds,
+			actionState:        tbtc.ReservationActionStatePending,
+			refundDeadline:     100,
+			now:                1000,
+			expectedResolution: StaleDepositResolutionDrop,
+		},
+		"reserved, deadline not yet reached": {
+			isReserved:         true,
+			walletState:        tbtc.StateMovingFunds,
+			actionState:        tbtc.ReservationActionStatePending,
+			refundDeadline:     5000,
+			now:                1000,
+			expectedResolution: StaleDepositResolutionKeep,
+		},
+		// Past the deadline, a still-Pending action must not be
+		// notified: the contract would revert with "Acceptance
+		// authorization pending".
+		"reserved, deadline reached, action still pending": {
+			isReserved:         true,
+			walletState:        tbtc.StateLive,
+			actionState:        tbtc.ReservationActionStatePending,
+			refundDeadline:     100,
+			now:                1000,
+			expectedResolution: StaleDepositResolutionKeep,
+		},
+		// C-3 case 1: a Live wallet that never accepted the deposit is
+		// still notified once its action generation is no longer
+		// Pending and the deadline has passed.
+		"reserved, deadline reached, live wallet, timed-out action": {
+			isReserved:          true,
+			walletState:         tbtc.StateLive,
+			actionState:         tbtc.ReservationActionStateTimedOut,
+			refundDeadline:      100,
+			now:                 1000,
+			expectedResolution:  StaleDepositResolutionKeep,
+			expectedNotifyCalls: 1,
+		},
+		// C-3 case 2: an action that timed out before the refund
+		// deadline must still be notified once the deadline passes,
+		// not dropped as soon as TimedOut is observed.
+		"reserved, deadline reached, moving funds wallet, settled action": {
+			isReserved:          true,
+			walletState:         tbtc.StateMovingFunds,
+			actionState:         tbtc.ReservationActionStateSettled,
+			refundDeadline:      100,
+			now:                 1000,
+			expectedResolution:  StaleDepositResolutionKeep,
+			expectedNotifyCalls: 1,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			spvChain := newLocalChain()
+			depositKey := reservationDepositKey(0xCC01)
+			wallet := walletPKH()
+			spvChain.setReservedDeposit(depositKey, wallet, test.isReserved)
+			spvChain.setWallet(wallet, &tbtc.WalletChainData{
+				State: test.walletState,
+			})
+			spvChain.setReservation(depositKey, &tbtc.Reservation{
+				RequestNonce: 1,
+			})
+			spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+				State: test.actionState,
+			})
+			watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+			// The refund-deadline gate now runs on the chain head's
+			// block time, so drive it to the case's `now` and keep the node
+			// clock at `now` for the renotify backoff.
+			spvChain.setLatestBlockTimestamp(time.Unix(int64(test.now), 0))
+
+			resolution, err := watcher.CheckStaleReservedDeposit(
+				depositKey,
+				test.refundDeadline,
+				test.now,
+			)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resolution != test.expectedResolution {
+				t.Errorf(
+					"unexpected resolution\nexpected: %v\nactual:   %v",
+					test.expectedResolution,
+					resolution,
+				)
+			}
+			if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != test.expectedNotifyCalls {
+				t.Errorf(
+					"unexpected notify call count\nexpected: %v\nactual:   %v",
+					test.expectedNotifyCalls,
+					len(calls),
+				)
+			}
+		})
+	}
+}
+
+type mockWalletClosedChain struct {
+	onWalletClosedHandler func(event *tbtc.WalletClosedEvent)
+}
+
+func (m *mockWalletClosedChain) OnWalletClosed(
+	handler func(event *tbtc.WalletClosedEvent),
+) subscription.EventSubscription {
+	m.onWalletClosedHandler = handler
+	return subscription.NewEventSubscription(func() {})
+}
+
+// mockSigning is a minimal chain.Signing fake exposing a fixed operator
+// address. WireReservationWatchers only ever calls Address() on it (to
+// derive reservationOperatorStaggerOffset); the remaining methods exist
+// only to satisfy the interface and are never exercised by these tests.
+type mockSigning struct {
+	address chain.Address
+}
+
+func (m mockSigning) Address() chain.Address { return m.address }
+func (m mockSigning) PublicKey() []byte      { return nil }
+func (m mockSigning) Sign(message []byte) ([]byte, error) {
+	return nil, nil
+}
+func (m mockSigning) Verify(message []byte, signature []byte) (bool, error) {
+	return false, nil
+}
+func (m mockSigning) VerifyWithPublicKey(
+	message []byte,
+	signature []byte,
+	publicKey []byte,
+) (bool, error) {
+	return false, nil
+}
+func (m mockSigning) PublicKeyToAddress(publicKey *operator.PublicKey) (chain.Address, error) {
+	return "", nil
+}
+func (m mockSigning) PublicKeyBytesToAddress(publicKey []byte) chain.Address { return "" }
+
+func (m *mockWalletClosedChain) Signing() chain.Signing {
+	return mockSigning{address: chain.Address("0x0000000000000000000000000000000000000001")}
+}
+
+func TestWireReservationWatchers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Unknown); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWireReservationWatchers_NilParameters(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+
+	t.Run("nil wallet closed chain", func(t *testing.T) {
+		err := WireReservationWatchers(ctx, nil, spvChain, true, nil, ethereum.Unknown)
+		if err == nil {
+			t.Fatal("expected error for nil wallet closed chain")
+		}
+	})
+
+	t.Run("nil spv chain", func(t *testing.T) {
+		err := WireReservationWatchers(ctx, walletClosedChain, nil, true, nil, ethereum.Unknown)
+		if err == nil {
+			t.Fatal("expected error for nil spv chain")
+		}
+	})
+}
+
+// TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort
+// verifies that the stranding watcher's startup catch-up scan tolerates a
+// transient chain-read failure against one wallet (e.g. GetWallet
+// returning an error): the scan continues to the remaining wallets rather
+// than aborting client startup, correctly notifying both sites and the
+// stranded reservations while skipping Live ones.
+func TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(5000)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletTransientError := walletPKHAt(0x01)
+	walletClosed := walletPKHAt(0x02)
+	walletLive := walletPKHAt(0x03)
+	walletTerminated := walletPKHAt(0x04)
+
+	resKeyClosed := reservationKey(0xDD02)
+	resKeyLive := reservationKey(0xDD03)
+	resKeyTerminated := reservationKey(0xDD04)
+
+	// Register all 4 wallets in NewWalletRegisteredEvents.
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       [32]byte{0x01},
+		WalletPublicKeyHash: walletTransientError,
+	})
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       [32]byte{0x02},
+		WalletPublicKeyHash: walletClosed,
+	})
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       [32]byte{0x03},
+		WalletPublicKeyHash: walletLive,
+	})
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       [32]byte{0x04},
+		WalletPublicKeyHash: walletTerminated,
+	})
+
+	// walletTransientError is NOT added to spvChain.wallets, so GetWallet
+	// returns "no wallet for given PKH" simulating a transient RPC error.
+
+	// walletClosed is Closed with an Active reservation.
+	spvChain.setWallet(walletClosed, &tbtc.WalletChainData{
+		State: tbtc.StateClosed,
+	})
+	spvChain.setWalletReservations(walletClosed, []*big.Int{resKeyClosed})
+	spvChain.setReservation(resKeyClosed, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	// walletLive is Live with an Active reservation (must be skipped).
+	spvChain.setWallet(walletLive, &tbtc.WalletChainData{
+		State: tbtc.StateLive,
+	})
+	spvChain.setWalletReservations(walletLive, []*big.Int{resKeyLive})
+	spvChain.setReservation(resKeyLive, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	// walletTerminated is Terminated with an Active reservation.
+	spvChain.setWallet(walletTerminated, &tbtc.WalletChainData{
+		State: tbtc.StateTerminated,
+	})
+	spvChain.setWalletReservations(walletTerminated, []*big.Int{resKeyTerminated})
+	spvChain.setReservation(resKeyTerminated, &tbtc.Reservation{
+		State: tbtc.ReservationStateActive,
+	})
+
+	// WireReservationWatchers must succeed without returning an error despite
+	// walletTransientError failing GetWallet.
+	err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Unknown)
+	if err != nil {
+		t.Fatalf("expected WireReservationWatchers to succeed despite transient wallet error: %v", err)
+	}
+
+	// Verify that the stranded active reservations for walletClosed and
+	// walletTerminated were both notified, while walletLive was skipped.
+	notifiedKeys := spvChain.getSubmittedReservationStrandedKeys()
+	if len(notifiedKeys) != 2 {
+		t.Fatalf("expected 2 notified stranded keys, got %d: %v", len(notifiedKeys), notifiedKeys)
+	}
+
+	foundClosed := false
+	foundTerminated := false
+	for _, k := range notifiedKeys {
+		if k.Cmp(resKeyClosed) == 0 {
+			foundClosed = true
+		}
+		if k.Cmp(resKeyTerminated) == 0 {
+			foundTerminated = true
+		}
+		if k.Cmp(resKeyLive) == 0 {
+			t.Errorf("live wallet reservation was unexpectedly notified as stranded")
+		}
+	}
+
+	if !foundClosed {
+		t.Errorf("expected closed wallet reservation [%v] to be notified", resKeyClosed)
+	}
+	if !foundTerminated {
+		t.Errorf("expected terminated wallet reservation [%v] to be notified", resKeyTerminated)
+	}
+}
+
+// TestReservationSelfCheckMisconfigured covers
+// reservationSelfCheckMisconfigured, the pure function backing
+// WireReservationWatchers's misconfiguration self-check. The self-check
+// itself now runs asynchronously and reports a confirmed
+// misconfiguration via reservationWiringLogger.Errorf from a background
+// goroutine (see reservation_wiring.go); this test instead covers the
+// extracted pure decision function directly, independent of that
+// goroutine's asynchronous timing and logging side effect.
+func TestReservationSelfCheckMisconfigured(t *testing.T) {
+	definitiveZero := scanResult{count: 0, scanOK: true}
+	definitiveActivity := scanResult{count: 1, scanOK: true}
+	unreliable := scanResult{count: 0, scanOK: false}
+
+	tests := map[string]struct {
+		pairedFlagEnabled                         bool
+		registration, staleDeposit, actionTimeout scanResult
+		expectMisconfigured                       bool
+	}{
+		"paired flag enabled always skips regardless of scan results": {
+			pairedFlagEnabled: true,
+			registration:      definitiveZero,
+			staleDeposit:      definitiveZero,
+			actionTimeout:     definitiveZero,
+		},
+		"all three scans definitively found zero activity is misconfigured": {
+			pairedFlagEnabled:   false,
+			registration:        definitiveZero,
+			staleDeposit:        definitiveZero,
+			actionTimeout:       definitiveZero,
+			expectMisconfigured: true,
+		},
+		"unreliable registration scan is not misconfigured": {
+			pairedFlagEnabled: false,
+			registration:      unreliable,
+			staleDeposit:      definitiveZero,
+			actionTimeout:     definitiveZero,
+		},
+		"unreliable stale-deposit scan is not misconfigured": {
+			pairedFlagEnabled: false,
+			registration:      definitiveZero,
+			staleDeposit:      unreliable,
+			actionTimeout:     definitiveZero,
+		},
+		"unreliable action-timeout scan is not misconfigured": {
+			pairedFlagEnabled: false,
+			registration:      definitiveZero,
+			staleDeposit:      definitiveZero,
+			actionTimeout:     unreliable,
+		},
+		"nonzero registration activity with zero reservation scans is misconfigured": {
+			pairedFlagEnabled:   false,
+			registration:        definitiveActivity,
+			staleDeposit:        definitiveZero,
+			actionTimeout:       definitiveZero,
+			expectMisconfigured: true,
+		},
+		"nonzero stale-deposit activity is not misconfigured": {
+			pairedFlagEnabled: false,
+			registration:      definitiveZero,
+			staleDeposit:      definitiveActivity,
+			actionTimeout:     definitiveZero,
+		},
+		"nonzero action-timeout activity is not misconfigured": {
+			pairedFlagEnabled: false,
+			registration:      definitiveZero,
+			staleDeposit:      definitiveZero,
+			actionTimeout:     definitiveActivity,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actual := reservationSelfCheckMisconfigured(
+				test.pairedFlagEnabled,
+				test.registration,
+				test.staleDeposit,
+				test.actionTimeout,
+			)
+			if actual != test.expectMisconfigured {
+				t.Fatalf(
+					"expected misconfigured=%v, got %v",
+					test.expectMisconfigured,
+					actual,
+				)
+			}
+		})
+	}
+}
+
+// TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess
+// verifies that WireReservationWatchers actually drives the stale-deposit
+// and action-timeout watchers to submit real Bridge notifications when
+// on-chain data is already overdue at wiring time, via each watcher's
+// initial poll (staleDepositWatcher.pollTick and
+// actionTimeoutWatcher.pollPendingActions, both run inside backgrounded
+// goroutines before the Run loops start - see WireReservationWatchers) -
+// not merely that the wiring call itself returns nil. Because those
+// initial passes now run asynchronously rather than synchronously before
+// WireReservationWatchers returns, the test polls for the expected
+// notifications instead of asserting on them immediately. The stranding
+// watcher's equivalent startup-scan behavior is already covered by
+// TestWireReservationWatchers_StartupCatchUpScan_TransientErrorsDoNotAbort.
+func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+	// Deadline decisions are judged on the chain head's block time,
+	// not on the wall clock: put the head past every seeded
+	// deadline plus the maximum stagger offset.
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
+
+	// Seed an overdue Reanchor action generation: the action-timeout
+	// watcher's backgrounded initial pollPendingActions pass must
+	// discover and notify it. TimeoutAt is far in the past relative to
+	// the real wall-clock time.Now() WireReservationWatchers uses, so
+	// the FIRST-attempt stagger offset (bounded by
+	// actionTimeoutRenotifyInterval, 600s) can never mask it.
+	actionWallet := walletPKHAt(0x60)
+	actionKey := reservationKey(0xAA01)
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            actionKey,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: actionWallet,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		actionKey,
+		actionWallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// Seed an overdue reserved deposit: the stale-deposit watcher's
+	// backgrounded initial pollTick pass must discover and notify it.
+	depositWallet := walletPKHAt(0x61)
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+	fundingTxHash := bitcoin.Hash{0x02}
+	fundingOutputIndex := uint32(0)
+	// The reveal sits below the confirmed tip (currentBlock 1000 minus
+	// reservationEventScanConfirmationBlocks), inside the first scan's
+	// activation-to-tip range on the Developer network.
+	startBlock := uint64(0)
+	endBlock := uint64(900)
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			// RefundLocktime left at its zero value: reverseUint32
+			// decodes it to refund deadline 0, which the real
+			// wall-clock time.Now() WireReservationWatchers uses is
+			// always past.
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	spvChain.setReservedDeposit(depositKey, depositWallet, true)
+	spvChain.setWallet(depositWallet, &tbtc.WalletChainData{State: tbtc.StateUnknown})
+	spvChain.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+	// C-3: the deposit's acceptance action already timed out - the
+	// notification must still fire once the (already-past) refund
+	// deadline is checked, not be skipped just because the action left
+	// Pending.
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStateTimedOut,
+		TimeoutAt: 100,
+	})
+
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	waitForReservationWiringCondition(
+		t,
+		500*time.Millisecond,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) == 1 &&
+				len(spvChain.getSubmittedStaleReservedDeposits()) == 1
+		},
+	)
+
+	if calls := spvChain.getSubmittedReservationActionTimeouts(); len(calls) != 1 {
+		t.Fatalf(
+			"expected WireReservationWatchers's backgrounded initial poll "+
+				"to drive a real NotifyReservationActionTimeout call, got %d",
+			len(calls),
+		)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf(
+			"expected WireReservationWatchers's backgrounded initial poll "+
+				"to drive a real NotifyStaleReservedDeposit call, got %d",
+			len(calls),
+		)
+	}
+}
+
+// TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring
+// verifies that WireReservationWatchers - not a directly-constructed
+// ReservationActionTimeoutWatcher, as every existing cross-watcher
+// recheck test in reservation_action_timeout_watch_test.go uses -
+// actually wires the real strandingWatcher into
+// NewReservationActionTimeoutWatcher's constructor argument, end to
+// end: a successful Reanchor-timeout notification defers its wallet to
+// a stranding recheck (see
+// ReservationActionTimeoutWatcher.strandingRecheckWallets), and that
+// recheck - drained on the action-timeout watcher's own next poll tick,
+// not the wallet's one-shot OnWalletClosed subscription, which has
+// already fired and been consumed by this point (see
+// strandingRecheckWallets's doc comment) - must notify the reservation
+// stranded. reservationActionTimeoutPollInterval is temporarily
+// shrunk so the test does not wait on the real one-minute default.
+func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *testing.T) {
+	originalInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalInterval) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+	// The notify decision is judged on the chain head's block time.
+	spvChain.setLatestBlockTimestamp(time.Unix(900, 0))
+
+	wallet := walletPKHAt(0x70)
+	key := reservationKey(0xBB01)
+
+	spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            key,
+		RequestNonce:              1,
+		SourceWalletPublicKeyHash: wallet,
+		BlockNumber:               500,
+	})
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbtc.ReservationActionStatePending,
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// The wallet already reads Closed, and the reservation already
+	// reads Active under it (as ReservationRouter.sol's
+	// notifyReservationActionTimeout will restore it to be, once
+	// mined), mirroring the production race the deferred recheck exists
+	// to catch: the wallet's one-shot OnWalletClosed subscription has
+	// already fired and been consumed before the timeout notification
+	// below lands, so only the action-timeout watcher's own next poll
+	// tick can notice this wallet is stranded (see
+	// TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NotifiesWhenWalletClosed
+	// in reservation_action_timeout_watch_test.go for the equivalent
+	// directly-constructed-watcher scenario this test proves through
+	// the real wiring path instead).
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	spvChain.setWalletReservations(wallet, []*big.Int{key})
+	spvChain.setReservation(key, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+		State:               tbtc.ReservationStateActive,
+	})
+
+	if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	waitForReservationWiringCondition(
+		t,
+		500*time.Millisecond,
+		func() bool {
+			return len(spvChain.getSubmittedReservationActionTimeouts()) == 1
+		},
+	)
+
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+		},
+	)
+
+	stranded := spvChain.getSubmittedReservationStrandedKeys()
+	if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+		t.Fatalf(
+			"expected WireReservationWatchers's own action-timeout "+
+				"watcher to drain the deferred stranding recheck for "+
+				"reservation [%v] through its real strandingWatcher "+
+				"wiring, got %v",
+			key,
+			stranded,
+		)
+	}
+}
+
+// waitForReservationWiringCondition polls cond every 5ms until it
+// reports true or timeout elapses, then fails the test. It exists
+// because WireReservationWatchers's initial watcher passes now run
+// inside backgrounded goroutines (see reservation_wiring.go) rather
+// than synchronously before WireReservationWatchers returns, so tests
+// asserting on their side effects can no longer rely on a synchronous
+// return to guarantee those passes have already completed.
+func waitForReservationWiringCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition was not met before timeout")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// blockingActionScanChain wraps a *localChain, blocking inside
+// PastReservationAcceptanceRequestedEvents - the first chain read
+// actionTimeoutWatcher.pollPendingActions performs - until unblock is
+// closed. It embeds *localChain so every other Chain method delegates
+// to the normal fake; only this one read is intercepted, letting
+// TestWireReservationWatchers_ReturnsBeforeInitialPassesComplete prove
+// WireReservationWatchers returns before the action-timeout watcher's
+// backgrounded initial pass completes.
+type blockingActionScanChain struct {
+	*localChain
+	unblock chan struct{}
+}
+
+func (b *blockingActionScanChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	<-b.unblock
+	return b.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+// TestWireReservationWatchers_ReturnsBeforeInitialPassesComplete proves
+// that WireReservationWatchers returns before the stale-deposit and
+// action-timeout watchers' backgrounded initial passes complete, rather
+// than blocking on them synchronously: it wires against a chain double
+// that blocks the action-timeout watcher's first chain read
+// indefinitely, and asserts WireReservationWatchers still returns well
+// within a short timeout.
+func TestWireReservationWatchers_ReturnsBeforeInitialPassesComplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+
+	unblock := make(chan struct{})
+	defer close(unblock)
+	spvChain := &blockingActionScanChain{localChain: newLocalChain(), unblock: unblock}
+	spvChain.setBlockCounter(blockCounter)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Unknown)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal(
+			"expected WireReservationWatchers to return promptly without " +
+				"blocking on its backgrounded initial watcher passes, but " +
+				"it had not returned after 500ms while the action-timeout " +
+				"watcher's initial scan remained blocked",
+		)
+	}
+}
+
+// TestRetryReservationStrandingStartupScan covers
+// retryReservationStrandingStartupScan's three outcomes: a wallet that
+// becomes fetchable during the retry delay is checked and, if
+// stranded, notified; a wallet that remains unfetchable is skipped without
+// error; and a context canceled before the delay elapses aborts before any
+// wallet is processed.
+func TestRetryReservationStrandingStartupScan(t *testing.T) {
+	t.Run("resolves once the wallet becomes fetchable", func(t *testing.T) {
+		spvChain := newLocalChain()
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+		wallet := walletPKHAt(0x50)
+		resKey := reservationKey(0xFF01)
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{resKey})
+		spvChain.setReservation(resKey, &tbtc.Reservation{State: tbtc.ReservationStateActive})
+
+		retryReservationStrandingStartupScan(
+			context.Background(),
+			spvChain,
+			strandingWatcher,
+			[][20]byte{wallet},
+			0,
+		)
+
+		notifiedKeys := spvChain.getSubmittedReservationStrandedKeys()
+		if len(notifiedKeys) != 1 || notifiedKeys[0].Cmp(resKey) != 0 {
+			t.Fatalf(
+				"expected the retry pass to notify reservation [%v] as stranded, got %v",
+				resKey,
+				notifiedKeys,
+			)
+		}
+	})
+
+	t.Run("still-unresolved wallet is skipped without error", func(t *testing.T) {
+		spvChain := newLocalChain()
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+		retryReservationStrandingStartupScan(
+			context.Background(),
+			spvChain,
+			strandingWatcher,
+			[][20]byte{walletPKHAt(0x51)},
+			0,
+		)
+
+		if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 0 {
+			t.Fatalf("expected no notifications for a still-unresolved wallet, got %v", notified)
+		}
+	})
+
+	t.Run("context cancellation before the delay elapses aborts without processing", func(t *testing.T) {
+		spvChain := newLocalChain()
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+		wallet := walletPKHAt(0x52)
+		resKey := reservationKey(0xFF02)
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{resKey})
+		spvChain.setReservation(resKey, &tbtc.Reservation{State: tbtc.ReservationStateActive})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		retryReservationStrandingStartupScan(
+			ctx,
+			spvChain,
+			strandingWatcher,
+			[][20]byte{wallet},
+			time.Hour,
+		)
+
+		if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 0 {
+			t.Fatalf("expected a canceled context to abort before any notification, got %v", notified)
+		}
+	})
+}
+
+// TestRunStaleDepositPollTick_SnapshotsRefundDeadlineFromRevealEvent is a
+// regression test for I-2/D-2: a reserved deposit discovered by the poll
+// tick has its refund deadline snapshotted from the reveal event's
+// RefundLocktime at discovery time, and - since the deadline is still
+// ahead - is tracked without any stale notification.
+func TestRunStaleDepositPollTick_SnapshotsRefundDeadlineFromRevealEvent(t *testing.T) {
+	spvChain := newLocalChain()
+
+	const currentBlock = uint64(300000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	startBlock := currentBlock - reservationDefaultLookBackBlocks
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	fundingTxHash := bitcoin.Hash{0x01}
+	fundingOutputIndex := uint32(0)
+
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(5_000),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	wallet := walletPKHAt(0x21)
+	spvChain.setReservedDeposit(depositKey, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+	spvChain.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStatePending,
+		TimeoutAt: 5000,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	trackedCount, ok := watcher.pollTick(1_000)
+	if !ok {
+		t.Fatal("expected pollTick to report a definitively successful scan")
+	}
+	if trackedCount != 1 {
+		t.Fatalf("expected 1 tracked deposit after the first tick, got %d", trackedCount)
+	}
+	tracked, ok := watcher.pending[depositKey.String()]
+	if !ok {
+		t.Fatalf("expected the deposit to be tracked, got %v", watcher.pending)
+	}
+	if tracked.refundDeadline != 5_000 {
+		t.Fatalf("expected the refund deadline decoded from the reveal event (5000), got %d", tracked.refundDeadline)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
+		t.Fatalf("deposit is before its deadline; expected zero notifications, got %d", len(calls))
+	}
+}
+
+// TestRunStaleDepositPollTick_EvictsOnClearedWallet verifies that a
+// tracked deposit whose reserved-deposit record has cleared (wallet
+// field zero) is evicted from the tracked set on the next tick, past its
+// deadline, without any further notification.
+func TestRunStaleDepositPollTick_EvictsOnClearedWallet(t *testing.T) {
+	spvChain := newLocalChain()
+
+	const currentBlock = uint64(300000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	startBlock := currentBlock - reservationDefaultLookBackBlocks
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	fundingTxHash := bitcoin.Hash{0x03}
+	fundingOutputIndex := uint32(0)
+
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(100),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	// The record's wallet field is already zero (released) by the time
+	// this tick checks it, past the deadline.
+	spvChain.setReservedDeposit(depositKey, [20]byte{}, true)
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+	// The refund-deadline gate now runs on the chain head's block
+	// time; drive it to the tick's now so the post-deadline check reads
+	// the record and evicts the cleared deposit.
+	spvChain.setLatestBlockTimestamp(time.Unix(1_000, 0))
+
+	trackedCount, ok := watcher.pollTick(1_000)
+	if !ok {
+		t.Fatal("expected pollTick to report a definitively successful scan")
+	}
+	if trackedCount != 0 {
+		t.Fatalf("expected the cleared deposit to be evicted, got %d tracked: %v", trackedCount, watcher.pending)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 0 {
+		t.Fatalf("expected zero notifications for an already-cleared record, got %d", len(calls))
+	}
+}
+
+// TestRunStaleDepositPollTick_NotifiesAfterDeadline verifies that a
+// tracked deposit whose action generation has already timed out is
+// notified once its snapshotted refund deadline passes, and remains
+// tracked awaiting the record to clear (C-3).
+func TestRunStaleDepositPollTick_NotifiesAfterDeadline(t *testing.T) {
+	spvChain := newLocalChain()
+
+	const currentBlock = uint64(300000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+	// The refund-deadline gate is judged on the chain head's block time:
+	// 5_000 is past deadline (100) plus any stagger offset.
+	spvChain.setLatestBlockTimestamp(time.Unix(5_000, 0))
+
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault:         vault,
+		ReservationActionTimeout: reservationActionTimeout,
+	})
+
+	startBlock := currentBlock - reservationDefaultLookBackBlocks
+	endBlock := currentBlock - reservationEventScanConfirmationBlocks
+	fundingTxHash := bitcoin.Hash{0x04}
+	fundingOutputIndex := uint32(0)
+
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: startBlock + 1, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(100),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	wallet := walletPKHAt(0x24)
+	spvChain.setReservedDeposit(depositKey, wallet, true)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+	spvChain.setReservation(depositKey, &tbtc.Reservation{RequestNonce: 1})
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		State:     tbtc.ReservationActionStateTimedOut,
+		TimeoutAt: 100,
+	})
+
+	watcher := NewReservationStaleDepositWatcher(spvChain, common.Address{}, 0)
+
+	// now is comfortably past deadline (100) plus any first-attempt
+	// stagger offset (bounded by actionTimeoutRenotifyInterval, 600s).
+	trackedCount, ok := watcher.pollTick(5_000)
+	if !ok {
+		t.Fatal("expected pollTick to report a definitively successful scan")
+	}
+	if trackedCount != 1 {
+		t.Fatalf("expected the deposit to stay tracked awaiting the record to clear, got %d: %v", trackedCount, watcher.pending)
+	}
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != 1 {
+		t.Fatalf("expected one stale notification, got %d", len(calls))
+	}
+}
+
+// awaitReservationWatcherPanicRecoveries installs
+// reservationWatcherPanicRecovered for the duration of the test and
+// returns a function that waits, bounded, until count watcher goroutines
+// have finished their recovered-panic path. Waiting before the test ends
+// also keeps those goroutines from reading the hook while the next test
+// replaces it.
+func awaitReservationWatcherPanicRecoveries(t *testing.T, count int) func() {
+	recovered := make(chan struct{}, count)
+	previous := getReservationWatcherPanicRecovered()
+	setReservationWatcherPanicRecovered(func() { recovered <- struct{}{} })
+	t.Cleanup(func() { setReservationWatcherPanicRecovered(previous) })
+
+	return func() {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for range count {
+			select {
+			case <-recovered:
+			case <-deadline:
+				t.Fatal("a watcher goroutine never completed its recovered-panic path")
+			}
+		}
+	}
+}
+
+// TestWireReservationWatchers_WatcherDeathIncrementsMetric verifies that
+// when a watcher goroutine dies (here: a panic during its initial poll
+// pass, recovered by the goroutine's panic-recover), the watcher-death
+// counter is incremented on the supplied MetricsRecorder - not just a
+// log line - so a dead watcher is observable in metrics. All three
+// watcher goroutines (stale-deposit, action-timeout and the keeper
+// observer) are forced through the death path, and the test asserts
+// exactly three increments (one per goroutine) once all three goroutines
+// have finished their recover path.
+func TestWireReservationWatchers_WatcherDeathIncrementsMetric(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 3)
+
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+	panickingChain := &watcherDeathPanickingChain{localChain: spvChain}
+
+	recorder := &recordingMetricsRecorder{counters: make(map[string]float64)}
+
+	if err := WireReservationWatchers(ctx, &mockWalletClosedChain{}, panickingChain, true, recorder, ethereum.Developer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	awaitRecoveries()
+
+	if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 3 {
+		t.Fatalf("expected exactly three watcher-death increments (one per watcher goroutine), got %v", got)
+	}
+}
+
+// watcherDeathPanickingChain wraps a *localChain and panics on the first
+// chain read each watcher's initial poll pass performs, so the
+// goroutine's panic-recover (and thus the watcher-death counter) fires
+// deterministically. The keeper observer reads both event kinds, so it
+// dies on whichever it reads first.
+type watcherDeathPanickingChain struct {
+	*localChain
+}
+
+func (c *watcherDeathPanickingChain) PastDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.DepositRevealedEvent, error) {
+	panic("stale-deposit watcher boom")
+}
+
+func (c *watcherDeathPanickingChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	panic("action-timeout watcher boom")
+}
+
+// TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics guards
+// recordReservationWatcherDeath against the shape a direct caller can
+// hand in: a *clientinfo.PerformanceMetrics pointer boxed into the
+// MetricsRecorder interface. That interface value is NOT nil
+// (recorder == nil is false) while the underlying pointer is nil, and
+// without the guard the IncrementCounter call would dereference the nil
+// pointer and panic - inside the watcher goroutine's deferred recover,
+// where a second panic is not caught and crashes the process. With the
+// guard, the typed-nil recorder is treated as a disabled metrics
+// pipeline: a safe no-op.
+func TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics(t *testing.T) {
+	t.Run("typed nil *clientinfo.PerformanceMetrics does not panic", func(t *testing.T) {
+		var typedNilMetrics *clientinfo.PerformanceMetrics
+		var recorder MetricsRecorder = typedNilMetrics // the shape a direct caller can pass
+		recordReservationWatcherDeath(recorder)        // must not panic
+	})
+
+	t.Run("untyped nil recorder does not panic", func(t *testing.T) {
+		recordReservationWatcherDeath(nil)
+	})
+
+	t.Run("a live recorder still increments the death counter", func(t *testing.T) {
+		recorder := &recordingMetricsRecorder{counters: make(map[string]float64)}
+		recordReservationWatcherDeath(recorder)
+		if got := recorder.Counter(clientinfo.MetricSpvReservationWatcherDeathsTotal); got != 1 {
+			t.Fatalf(
+				"expected the death counter to increment by 1 for a live "+
+					"recorder, got %v",
+				got,
+			)
+		}
+	})
+}
+
+// TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath
+// is the end-to-end counterpart of
+// TestRecordReservationWatcherDeath_TypedNilPerformanceMetrics: it wires
+// the reservation watchers with a typed-nil *clientinfo.PerformanceMetrics
+// recorder - the shape a direct caller (package wiring or a test) produces
+// when it boxes the concrete pointer, which recordReservationWatcherDeath
+// must tolerate - against a chain that panics on the first chain read,
+// forcing all three watcher goroutines through the recovered-panic death path
+// that calls recordReservationWatcherDeath. Without the guard the
+// death-handler's counter increment panics inside the deferred recover,
+// crashing the whole test process; this test's completion (rather than a
+// process crash) is the proof the guard holds end-to-end, not just at the
+// unit level above.
+//
+// The test waits - with a bounded timeout - until all three goroutines have
+// finished their recover path (reservationWatcherPanicRecovered runs
+// right after recordReservationWatcherDeath), so it cannot pass before
+// the guarded call has actually run.
+func TestWireReservationWatchers_TypedNilPerformanceMetricsSurvivesWatcherDeath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	awaitRecoveries := awaitReservationWatcherPanicRecoveries(t, 3)
+
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+	panickingChain := &watcherDeathPanickingChain{localChain: spvChain}
+
+	var typedNilMetrics *clientinfo.PerformanceMetrics
+
+	if err := WireReservationWatchers(
+		ctx,
+		&mockWalletClosedChain{},
+		panickingChain,
+		true,
+		typedNilMetrics,
+		ethereum.Developer,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// One signal per watcher goroutine once its recover path, including
+	// recordReservationWatcherDeath against the typed-nil recorder, has
+	// completed. A crash there would take the whole test process down,
+	// so receiving all three signals is the assertion.
+	awaitRecoveries()
+}
+
+// TestScanReservationStrandingStartupRegistrations verifies that the
+// stranding startup scan walks the last reservationDefaultLookBackBlocks
+// blocks in chunks and returns every registration inside that window
+// exactly once, and none before it.
+func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
+	const windowStart = uint64(50_000)
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(windowStart + reservationDefaultLookBackBlocks)
+	spvChain.setBlockCounter(blockCounter)
+
+	blocks := []uint64{
+		windowStart - 1,   // before the window
+		windowStart + 100, // first chunk
+		windowStart + reservationEventScanChunkSize + 100, // second chunk
+	}
+	for i, blockNumber := range blocks {
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			WalletPublicKeyHash: walletPKHAt(byte(i + 1)),
+			BlockNumber:         blockNumber,
+		})
+	}
+
+	events, err := scanReservationStrandingStartupRegistrations(spvChain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expected the 2 registrations inside the window, got %d", len(events))
+	}
+	if events[0].BlockNumber != blocks[1] || events[1].BlockNumber != blocks[2] {
+		t.Errorf(
+			"expected registrations at blocks %d and %d, got %d and %d",
+			blocks[1],
+			blocks[2],
+			events[0].BlockNumber,
+			events[1].BlockNumber,
+		)
+	}
+}
+
+// TestStartupStrandingScanChecksDissolutionEligibleClosingWallet pins
+// that the startup stranding scan's retry pass forwards Closing, Closed,
+// Terminated and Live wallets: a wallet whose reservation term had passed
+// its DissolutionEligibleAt is checked. Eligibility is judged against the
+// chain head time, not the wall clock.
+//
+// The Closing cases also carry the wallet's closing-period term, which the
+// Bridge requires on top of the dissolution-eligible time: a Closing
+// wallet whose closing period has not elapsed must not be notified. The
+// Live cases carry the same dissolution-eligible term the Bridge applies
+// to a Live wallet.
+func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
+	t *testing.T,
+) {
+	headTime := time.Unix(2_000_000, 0)
+
+	// The wallet's closing period. A Closing wallet that started closing
+	// at closingStartedAt may only be notified once closingStartedAt plus
+	// this period has passed.
+	const closingPeriod uint32 = 3600
+	// closingStartedAt is far enough in the past that the closing period
+	// has elapsed by the head time, so the Closing cases below are gated
+	// on the dissolution-eligible time alone.
+	closingStartedAt := time.Unix(int64(headTime.Unix())-int64(closingPeriod)-1, 0)
+
+	tests := map[string]struct {
+		walletState           tbtc.WalletState
+		dissolutionEligibleAt uint32
+		closingStartedAt      time.Time
+		expectNotified        bool
+	}{
+		"Closed wallet": {
+			walletState:    tbtc.StateClosed,
+			expectNotified: true,
+		},
+		"Terminated wallet": {
+			walletState:    tbtc.StateTerminated,
+			expectNotified: true,
+		},
+		"Closing wallet past the reservation's dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			closingStartedAt:      closingStartedAt,
+			expectNotified:        true,
+		},
+		"Closing wallet exactly at the dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()),
+			closingStartedAt:      closingStartedAt,
+			expectNotified:        true,
+		},
+		"Closing wallet before the dissolution-eligible time": {
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) + 1,
+			closingStartedAt:      closingStartedAt,
+		},
+		"Closing wallet with an unset dissolution-eligible time": {
+			walletState:      tbtc.StateClosing,
+			closingStartedAt: closingStartedAt,
+		},
+		"Closing wallet inside its closing period": {
+			// The reservation's term has passed, but the wallet's closing
+			// period has not: the Bridge would revert the notification.
+			walletState:           tbtc.StateClosing,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			closingStartedAt:      headTime,
+		},
+		"Live wallet past the reservation's dissolution-eligible time": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()) - 1,
+			expectNotified:        true,
+		},
+		"Live wallet exactly at the dissolution-eligible time": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()),
+			expectNotified:        true,
+		},
+		"Live wallet before the dissolution-eligible time": {
+			walletState:           tbtc.StateLive,
+			dissolutionEligibleAt: uint32(headTime.Unix()) + 1,
+		},
+		"Live wallet with an unset dissolution-eligible time": {
+			walletState: tbtc.StateLive,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			spvChain := newLocalChain()
+			// The wall clock is far past the head time: a check against it
+			// would treat every Closing wallet as eligible.
+			spvChain.setLatestBlockTimestamp(headTime)
+			spvChain.setWalletParameters(tbtc.WalletParameters{
+				ClosingPeriod: closingPeriod,
+			})
+			strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+			wallet := walletPKHAt(0x4C)
+			key := reservationKey(0x4C00)
+
+			spvChain.setWallet(wallet, &tbtc.WalletChainData{
+				State:            test.walletState,
+				ClosingStartedAt: test.closingStartedAt,
+			})
+			spvChain.setWalletReservations(wallet, []*big.Int{key})
+			spvChain.setReservation(key, &tbtc.Reservation{
+				State:                 tbtc.ReservationStateActive,
+				DissolutionEligibleAt: test.dissolutionEligibleAt,
+			})
+
+			retryReservationStrandingStartupScan(
+				context.Background(),
+				spvChain,
+				strandingWatcher,
+				[][20]byte{wallet},
+				0,
+			)
+
+			calls := spvChain.getSubmittedReservationStrandedKeys()
+			if test.expectNotified && len(calls) != 1 {
+				t.Fatalf("expected 1 stranding notification, got %d", len(calls))
+			}
+			if !test.expectNotified && len(calls) != 0 {
+				t.Fatalf("expected no stranding notification, got %d", len(calls))
+			}
+		})
+	}
+}
+
+// TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck
+// verifies that when the live OnWalletClosed event handler encounters a
+// transient failure during its stranding check (e.g. an RPC error reading the
+// closed wallet's reservations), the closed wallet is requeued into the
+// stranding recheck queue and retried by the action-timeout watcher's poll
+// tick rather than dropped permanently.
+func TestWireReservationWatchers_WalletClosedHandlerRequeuesFailedStrandingCheck(t *testing.T) {
+	originalInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalInterval) }()
+
+	originalRetryDelay := getReservationStrandingRetryDelay()
+	setReservationStrandingRetryDelay(5 * time.Millisecond)
+	defer func() { setReservationStrandingRetryDelay(originalRetryDelay) }()
+
+	t.Run("requeues on transient check error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x88)
+		key := reservationKey(0xCC01)
+		walletID := [32]byte{0x88, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// Inject a transient failure on WalletReservations so the initial
+		// check in OnWalletClosed fails.
+		spvChain.setWalletReservationsErr(fmt.Errorf("rpc unavailable"))
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run and fail the initial check.
+		time.Sleep(50 * time.Millisecond)
+
+		// Clear the transient error so the subsequent recheck can succeed.
+		spvChain.setWalletReservationsErr(nil)
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+
+	t.Run("requeues when stranding check requests a recheck", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		walletClosedChain := &mockWalletClosedChain{}
+		spvChain := newLocalChain()
+		blockCounter := newMockBlockCounter()
+		blockCounter.SetCurrentBlock(1000)
+		spvChain.setBlockCounter(blockCounter)
+
+		wallet := walletPKHAt(0x89)
+		key := reservationKey(0xCC02)
+		walletID := [32]byte{0x89, 0x01}
+
+		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: wallet,
+			BlockNumber:         500,
+		})
+
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		// Initially the reservation is ActionPending, so checkReservationStrandingForWallet
+		// defers it and returns recheck=true.
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActionPending,
+		})
+
+		if err := WireReservationWatchers(ctx, walletClosedChain, spvChain, true, nil, ethereum.Developer); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// Allow the handler goroutine to run, skip the ActionPending reservation,
+		// and requeue the wallet.
+		time.Sleep(50 * time.Millisecond)
+
+		// Transition the reservation to Active (e.g. after action timeout).
+		spvChain.setReservation(key, &tbtc.Reservation{
+			WalletPublicKeyHash: wallet,
+			State:               tbtc.ReservationStateActive,
+		})
+
+		// The action-timeout watcher's periodic poll tick should drain the
+		// requeued wallet and notify the stranded reservation.
+		waitForReservationWiringCondition(
+			t,
+			1*time.Second,
+			func() bool {
+				return len(spvChain.getSubmittedReservationStrandedKeys()) == 1
+			},
+		)
+
+		stranded := spvChain.getSubmittedReservationStrandedKeys()
+		if len(stranded) != 1 || stranded[0].Cmp(key) != 0 {
+			t.Fatalf("expected stranded reservation [%v], got %v", key, stranded)
+		}
+	})
+}
+
+// panicOnceAcceptanceScanChain wraps a *localChain and panics on its first
+// PastReservationAcceptanceRequestedEvents call, then succeeds on subsequent
+// calls, simulating a transient panic during an action-timeout watcher scan.
+type panicOnceAcceptanceScanChain struct {
+	*localChain
+	hasPanicked bool
+	mutex       sync.Mutex
+}
+
+func (c *panicOnceAcceptanceScanChain) PastReservationAcceptanceRequestedEvents(
+	filter *tbtc.ReservationAcceptanceRequestedEventFilter,
+) ([]*tbtc.ReservationAcceptanceRequestedEvent, error) {
+	c.mutex.Lock()
+	if !c.hasPanicked {
+		c.hasPanicked = true
+		c.mutex.Unlock()
+		panic("action-timeout watcher transient panic")
+	}
+	c.mutex.Unlock()
+	return c.localChain.PastReservationAcceptanceRequestedEvents(filter)
+}
+
+// TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRelease
+// verifies that if the action-timeout watcher encounters a recovered panic in
+// WireReservationWatchers, it restarts with backoff so that a pending
+// acceptance action is eventually timed out, unblocking the stale-deposit
+// watcher to notify and release the associated stale reserved deposit.
+func TestWireReservationWatchers_ActionTimeoutWatcherRestartAllowsStaleDepositRelease(t *testing.T) {
+	originalTimeoutInterval := getReservationActionTimeoutPollInterval()
+	setReservationActionTimeoutPollInterval(50 * time.Millisecond)
+	defer func() { setReservationActionTimeoutPollInterval(originalTimeoutInterval) }()
+
+	originalStaleInterval := getReservationStaleDepositPollInterval()
+	setReservationStaleDepositPollInterval(50 * time.Millisecond)
+	defer func() { setReservationStaleDepositPollInterval(originalStaleInterval) }()
+
+	originalBackoff := getReservationWatcherRestartBackoff()
+	setReservationWatcherRestartBackoff(20 * time.Millisecond)
+	defer func() { setReservationWatcherRestartBackoff(originalBackoff) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	// Chain head time is past both the deposit refund deadline and the action timeout.
+	headTime := time.Unix(5000, 0)
+	spvChain.setLatestBlockTimestamp(headTime)
+
+	wallet := walletPKHAt(0x91)
+	vault := chain.Address("0xVault")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{
+		ReservationVault: vault,
+	})
+	fundingTxHash := bitcoin.Hash{0x99}
+	fundingOutputIndex := uint32(0)
+	endBlock := uint64(1000)
+
+	// Seed deposit revealed with refund deadline 1000 (< headTime 2000).
+	if err := spvChain.addPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{StartBlock: 0, EndBlock: &endBlock},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:        500,
+			FundingTxHash:      fundingTxHash,
+			FundingOutputIndex: fundingOutputIndex,
+			Vault:              &vault,
+			RefundLocktime:     locktimeForDeadline(1000),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	depositKey := spvChain.BuildDepositKey(fundingTxHash, fundingOutputIndex)
+	spvChain.setReservedDeposit(depositKey, wallet, true)
+	spvChain.setReservation(depositKey, &tbtc.Reservation{
+		WalletPublicKeyHash: wallet,
+		RequestNonce:        1,
+	})
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeAcceptance,
+		State:      tbtc.ReservationActionStatePending,
+		TimeoutAt:  1500,
+	})
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      depositKey,
+		RequestNonce:        1,
+		WalletPublicKeyHash: wallet,
+		BlockNumber:         500,
+	})
+
+	panickingChain := &panicOnceAcceptanceScanChain{localChain: spvChain}
+
+	if err := WireReservationWatchers(ctx, &mockWalletClosedChain{}, panickingChain, true, nil, ethereum.Developer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Under the old behavior, the action-timeout watcher dies on the first panic
+	// and never restarts; the acceptance action remains Pending forever and the
+	// timeout notification is never submitted.
+	// Under the new behavior, the action-timeout watcher restarts with backoff,
+	// discovers the overdue pending acceptance, and calls NotifyReservationAcceptanceTimedOut.
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedAcceptanceTimeouts()) == 1
+		},
+	)
+
+	timeouts := spvChain.getSubmittedAcceptanceTimeouts()
+	if len(timeouts) != 1 || timeouts[0].Cmp(depositKey) != 0 {
+		t.Fatalf("expected acceptance timeout notification for [%v], got %v", depositKey, timeouts)
+	}
+
+	// Simulate the acceptance timeout transaction mining on-chain.
+	spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+		ActionType: tbtc.ReservationActionTypeAcceptance,
+		State:      tbtc.ReservationActionStateTimedOut,
+		TimeoutAt:  1500,
+	})
+
+	// The stale-deposit watcher can now observe that the action is no longer
+	// Pending, allowing it to notify and release the stale reserved deposit.
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool {
+			return len(spvChain.getSubmittedStaleReservedDeposits()) == 1
+		},
+	)
+
+	submitted := spvChain.getSubmittedStaleReservedDeposits()
+	if len(submitted) != 1 || submitted[0].Cmp(depositKey) != 0 {
+		t.Fatalf("expected stale deposit notification for [%v], got %v", depositKey, submitted)
+	}
+}

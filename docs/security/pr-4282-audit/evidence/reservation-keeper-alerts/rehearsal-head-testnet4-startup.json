@@ -1,0 +1,10 @@
+{
+  "mode": "private",
+  "setupCompleted": true,
+  "managerSuccess": true,
+  "code": 0,
+  "signal": null,
+  "receiversConfigured": false,
+  "chainAccess": "Sepolia read-only",
+  "bitcoinNetwork": "Testnet4"
+}

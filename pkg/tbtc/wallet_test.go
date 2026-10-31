@@ -53,9 +53,13 @@ func TestParseWalletActionType(t *testing.T) {
 			value:          5,
 			expectedAction: ActionMovedFundsSweep,
 		},
+		"reservation anchor": {
+			value:          6,
+			expectedAction: ActionReservationAnchor,
+		},
 		"unknown": {
-			value:       6,
-			expectedErr: fmt.Errorf("unknown wallet action type [6]"),
+			value:       10,
+			expectedErr: fmt.Errorf("unknown wallet action type [10]"),
 		},
 	}
 
@@ -79,6 +83,29 @@ func TestParseWalletActionType(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestWalletActionType_MetricName(t *testing.T) {
+	tests := map[WalletActionType]string{
+		ActionNoop:              "noop",
+		ActionHeartbeat:         "heartbeat",
+		ActionDepositSweep:      "deposit_sweep",
+		ActionRedemption:        "redemption",
+		ActionMovingFunds:       "moving_funds",
+		ActionMovedFundsSweep:   "moved_funds_sweep",
+		ActionReservationAnchor: "reservation_anchor",
+	}
+
+	for actionType, expected := range tests {
+		if actual := actionType.MetricName(); actual != expected {
+			t.Errorf(
+				"unexpected metric name for action type [%v]\nexpected: [%v]\nactual:   [%v]",
+				actionType,
+				expected,
+				actual,
+			)
+		}
 	}
 }
 

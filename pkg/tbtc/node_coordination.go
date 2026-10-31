@@ -280,6 +280,7 @@ func processCoordinationResult(node *node, result *coordinationResult) {
 				proposal,
 				startBlock,
 				expiryBlock,
+				result.window.coordinationBlock,
 			)
 		}
 	case ActionRedemption:
@@ -303,6 +304,24 @@ func processCoordinationResult(node *node, result *coordinationResult) {
 	case ActionMovedFundsSweep:
 		if proposal, ok := result.proposal.(*MovedFundsSweepProposal); ok {
 			node.handleMovedFundsSweepProposal(
+				result.wallet,
+				proposal,
+				startBlock,
+				expiryBlock,
+			)
+		}
+	case ActionReservationAnchor:
+		if proposal, ok := result.proposal.(*ReservationAnchorProposal); ok {
+			node.handleReservationAnchorProposal(
+				result.wallet,
+				proposal,
+				startBlock,
+				expiryBlock,
+			)
+		}
+	case ActionReservationReanchor:
+		if proposal, ok := result.proposal.(*ReservationReanchorProposal); ok {
+			node.handleReservationReanchorProposal(
 				result.wallet,
 				proposal,
 				startBlock,

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -29,6 +31,7 @@ func TestNode_RestoresTransactionMonitor(t *testing.T) {
 	saveTransactionMonitorFixture(t, handle, hash, broadcastAt, false)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		&GroupParameters{GroupSize: 5, GroupQuorum: 4, HonestThreshold: 3},
 		Connect(),
 		newLocalBitcoinChain(),
@@ -84,6 +87,7 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 	}
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -219,6 +223,7 @@ func TestNode_GetCoordinationExecutor(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	node, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -356,6 +361,7 @@ func TestNode_RunCoordinationLayer(t *testing.T) {
 	keyStorePersistence := createMockKeyStorePersistence(t, signer)
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		localChain,
 		newLocalBitcoinChain(),
@@ -625,7 +631,7 @@ func TestNode_HandleDepositSweepProposal_WalletNotControlled(t *testing.T) {
 	uncontrolledWallet := uncontrolledWalletFor(signer)
 	proposal := &DepositSweepProposal{}
 
-	n.handleDepositSweepProposal(uncontrolledWallet, proposal, 10, 100)
+	n.handleDepositSweepProposal(uncontrolledWallet, proposal, 10, 100, 0)
 
 	if count := dispatchedActionsCount(n); count != 0 {
 		t.Errorf("expected no dispatched actions for uncontrolled wallet, got %d", count)
@@ -644,7 +650,7 @@ func TestNode_HandleDepositSweepProposal_WalletBusy(t *testing.T) {
 		n.walletDispatcher.actions[walletKey] = ActionDepositSweep
 	}()
 
-	n.handleDepositSweepProposal(signer.wallet, &DepositSweepProposal{}, 10, 100)
+	n.handleDepositSweepProposal(signer.wallet, &DepositSweepProposal{}, 10, 100, 0)
 
 	actionType, ok := func() (WalletActionType, bool) {
 		n.walletDispatcher.actionsMutex.Lock()
@@ -672,6 +678,7 @@ func TestNode_HandleDepositSweepProposal_DispatchesAction(t *testing.T) {
 		&DepositSweepProposal{SweepTxFee: big.NewInt(0)},
 		10,
 		100,
+		0,
 	)
 
 	waitForDispatcherIdle(t, n)
@@ -1064,6 +1071,71 @@ func TestProcessCoordinationResult_MovedFundsSweepRoutesToHandler(t *testing.T) 
 	}
 }
 
+// TestProcessCoordinationResult_ReservationAnchorRoutesToHandler verifies that
+func TestProcessCoordinationResult_ReservationAnchorRoutesToHandler(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	walletKey := walletKeyFor(t, signer)
+
+	// Mark the wallet busy so dispatch is rejected before execute() runs.
+	func() {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		n.walletDispatcher.actions[walletKey] = ActionNoop
+	}()
+
+	result := &coordinationResult{
+		wallet:   signer.wallet,
+		proposal: &ReservationAnchorProposal{},
+		window:   &coordinationWindow{coordinationBlock: 1},
+	}
+
+	processCoordinationResult(n, result)
+
+	// Busy sentinel must still be there: dispatch was attempted (routing worked)
+	// but returned errWalletBusy without touching the map entry.
+	_, ok := func() (WalletActionType, bool) {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		v, exists := n.walletDispatcher.actions[walletKey]
+		return v, exists
+	}()
+	if !ok {
+		t.Error("expected walletDispatcher to retain the busy sentinel after ReservationAnchor routing")
+	}
+}
+
+func TestProcessCoordinationResult_ReservationReanchorRoutesToHandler(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	walletKey := walletKeyFor(t, signer)
+
+	// Mark the wallet busy so dispatch is rejected before execute() runs.
+	func() {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		n.walletDispatcher.actions[walletKey] = ActionNoop
+	}()
+
+	result := &coordinationResult{
+		wallet:   signer.wallet,
+		proposal: &ReservationReanchorProposal{},
+		window:   &coordinationWindow{coordinationBlock: 1},
+	}
+
+	processCoordinationResult(n, result)
+
+	// Busy sentinel must still be there: dispatch was attempted (routing worked)
+	// but returned errWalletBusy without touching the map entry.
+	_, ok := func() (WalletActionType, bool) {
+		n.walletDispatcher.actionsMutex.Lock()
+		defer n.walletDispatcher.actionsMutex.Unlock()
+		v, exists := n.walletDispatcher.actions[walletKey]
+		return v, exists
+	}()
+	if !ok {
+		t.Error("expected walletDispatcher to retain the busy sentinel after ReservationReanchor routing")
+	}
+}
+
 // setupNodeForClosureTests creates a node backed by a fast-block localChain
 // (1 ms per block) so that WaitForBlockConfirmations (32 blocks) completes in
 // ~32 ms instead of seconds.
@@ -1092,6 +1164,7 @@ func setupNodeForClosureTests(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),
@@ -1271,6 +1344,7 @@ func setupNodeWithChain(t *testing.T) (*node, *signer, *localChain) {
 	})
 
 	n, err := newNode(
+		ethereum.Unknown,
 		groupParameters,
 		lc,
 		newLocalBitcoinChain(),

@@ -349,23 +349,20 @@ func ValidateRedemptionProposal(
 		"redemption proposal is valid",
 	)
 
-	// Follower-side soft check on the proposed fee. The on-chain
+	// Follower-side fee check on the proposed fee. The on-chain
 	// WalletProposalValidator only bounds the redemption fee from above, not
 	// below, so a misbehaving or unpatched leader can propose a fee at the
-	// ~1 sat/vByte relay floor that this node would otherwise sign - the same
-	// underpricing that jams the wallet (see
-	// threshold-network/keep-core#4171). We recompute the safe minimum
-	// (applying the 25% safety buffer that tbtcpg.applyWalletTxFeeFloor would
-	// also enforce on the leader side) and warn if the proposal is below it.
+	// ~1 sat/vByte relay floor that would jam the wallet (see
+	// threshold-network/keep-core#4171).
 	//
-	// This is intentionally log-only, not a rejection: rejecting a below-floor
-	// proposal here would, during a mixed-version rollout, split signers
-	// (patched nodes reject, unpatched nodes sign) and could stall signing.
-	// Hard enforcement belongs on-chain in the WalletProposalValidator, or
-	// behind a coordinated all-nodes upgrade. The threshold is recomputed in
-	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go);
-	// keep the size estimator below in sync with the leader-side estimator
-	// in tbtcpg/redemptions.go.
+	// The hard-reject gate uses the fixed protocol minimum
+	// (ProtocolMinWalletTxSatPerVByteFee = 5); see
+	// rejectIfProposedWalletTxFeeBelowProtocolMin for the rationale. The
+	// soft warning uses the operator's bare floor
+	// (MinWalletTxSatPerVByteFee * vsize): honest leaders never emit below
+	// it, so it fires only on genuinely degraded fees. Keep the size
+	// estimator below in sync with the leader-side estimator in
+	// tbtcpg/redemptions.go.
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
 		AddPublicKeyHashOutputs(1, true)
@@ -394,12 +391,20 @@ func ValidateRedemptionProposal(
 	if canEstimate {
 		if redemptionTxSize, sizeErr := sizeEstimator.VirtualSize(); sizeErr != nil {
 			validateProposalLogger.Warnf(
-				"cannot estimate redemption tx size for the fee sanity "+
-					"check: [%v]",
+				"cannot estimate redemption tx size for the fee check: [%v]",
 				sizeErr,
 			)
 		} else {
-			warnIfProposedWalletTxFeeBelowBufferedFloor(
+			// Hard reject: follower refuses to co-sign a below-protocol fee.
+			if err := rejectIfProposedWalletTxFeeBelowProtocolMin(
+				proposal.RedemptionTxFee,
+				redemptionTxSize,
+				"redemption",
+			); err != nil {
+				return nil, err
+			}
+			// Soft warning: below the operator's bare floor.
+			warnIfProposedWalletTxFeeBelowBareFloor(
 				validateProposalLogger,
 				MinWalletTxSatPerVByteFee,
 				redemptionTxSize,

@@ -1,0 +1,83 @@
+// G4-F6 evidence check: a split deployment (start process with
+// Tbtc.ReservationsEnabled=true, run without, or with a differently
+// configured, Maintainer.Spv.ReservationProofsEnabled) must not be
+// blocked or failed by WireReservationWatchers's misconfiguration
+// self-check. This test drives the real, exported entry point
+// (WireReservationWatchers) with pairedFlagEnabled=false against an
+// empty chain double (zero wallet registrations, zero reserved
+// deposits, zero pending actions - the exact "quiet network" shape the
+// self-check treats as a possible misconfiguration signal) and asserts:
+//
+//  1. WireReservationWatchers still returns nil (not fatal; the client
+//     watchers are wired and the process proceeds either way), and
+//  2. the pure decision function it defers to, reservationSelfCheckMisconfigured,
+//     does flag this exact shape as misconfigured when pairedFlagEnabled
+//     is false - proving the self-check fires only a log line, never an
+//     error returned to the caller or a process exit.
+//
+// Together with the code-read fact that the proof-submission loop
+// (runReservationProofLoop, started only from spv.Initialize, gated on
+// its own ReservationProofsEnabled flag - see spv.go) is never reached
+// from this call path, this proves the F6 asymmetry end to end: the
+// start process can propose reservation anchors and run client-side
+// watchers while the paired maintainer process never settles them, and
+// the only operator signal is a non-fatal log line.
+package spv
+
+import (
+	"context"
+	"testing"
+
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+)
+
+func TestF6_WireReservationWatchers_PairedFlagOff_IsNonFatal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	walletClosedChain := &mockWalletClosedChain{}
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	// pairedFlagEnabled=false mirrors a start-process config file that has
+	// no [maintainer.spv] section at all (the normal shape for a split
+	// deployment) against a freshly launched / quiet network: zero wallet
+	// registrations, zero reserved deposits, zero pending reservation
+	// actions - exactly the shape reservationSelfCheckMisconfigured uses
+	// to flag a probable misconfiguration.
+	err := WireReservationWatchers(ctx, walletClosedChain, spvChain, false, nil, ethereum.Unknown)
+	if err != nil {
+		t.Fatalf(
+			"WireReservationWatchers returned an error for a paired-flag-off, "+
+				"quiet-network deployment; expected nil (non-fatal, log-only): %v",
+			err,
+		)
+	}
+
+	// The pure decision function WireReservationWatchers's self-check
+	// goroutine defers to: confirm that this exact input shape IS flagged
+	// as misconfigured (so the only signal is the Errorf log line inside
+	// that goroutine, never a returned error or process exit).
+	zero := scanResult{count: 0, scanOK: true}
+	if !reservationSelfCheckMisconfigured(false, zero, zero, zero) {
+		t.Fatal(
+			"expected reservationSelfCheckMisconfigured(false, zero, zero, zero) " +
+				"to report misconfigured=true for this input shape",
+		)
+	}
+
+	// And with the paired flag confirmed enabled, the identical zero-activity
+	// shape is NOT flagged - proving pairedFlagEnabled is the only gate
+	// standing between "fresh quiet network" and "probable misconfiguration",
+	// and that WireReservationWatchers has no independent check of its own
+	// that the paired maintainer process (and its own ReservationProofsEnabled
+	// flag) is actually running.
+	if reservationSelfCheckMisconfigured(true, zero, zero, zero) {
+		t.Fatal(
+			"expected reservationSelfCheckMisconfigured(true, zero, zero, zero) " +
+				"to report misconfigured=false",
+		)
+	}
+}

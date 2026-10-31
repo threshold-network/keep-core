@@ -1,0 +1,151 @@
+// G1-L28 evidence check: the Active-state re-anchor request gate
+// (reservation_reanchor.go:344, `if uint64(time.Now().Unix()) <
+// uint64(reservation.ReanchorCooldownUntil) { skip }`) reads the node's
+// own wall clock with no safety margin, unlike its sibling gate on the
+// ActionPending resume path (reservation_reanchor.go:288-290), which
+// applies reservationRequestTimeoutSafetyMarginSeconds (2 hours) before
+// treating a boundary as crossed. This test executes both sides of that
+// asymmetry against tbtcpg.LocalChain, which mirrors Reservation.sol's
+// own "block.timestamp >= reservation.reanchorCooldownUntil" revert
+// (pinned at tbtc-v2/solidity/contracts/bridge/Reservation.sol:739,
+// confirmed by TestLocalChain_RequestReservationReanchor_MirrorsSolidity
+// in reservation_reanchor_test.go):
+//
+//  1. Safe path: cooldownUntil 1s ahead of the gate's read of "now" ->
+//     the gate skips (matches reservation_reanchor.go:344-352) -> no
+//     chain write -> no gas spent.
+//  2. Griefing path: cooldownUntil AT the gate's read of "now" (the
+//     exact boundary, with zero margin) -> the gate's own condition
+//     (`now < cooldownUntil`) is false, so it is "pass" by one tick;
+//     reproduced directly here without going through the live task to
+//     isolate the boundary, then the on-chain-mirroring call is made
+//     slightly later, at a point where LocalChain's own time.Now() has
+//     also crossed the boundary, so it succeeds. The point of this
+//     comparison is not that it always fails - it is that the 0-margin
+//     gate gives no cushion for clock skew between the node's local
+//     clock and the chain's block-timestamp source, whereas the sibling
+//     ActionPending gate deliberately treats "at or past" the timeout
+//     bound (which includes the safety margin) as reason to skip
+//     (reservation_reanchor.go:288-290). A node whose local clock runs
+//     even one second ahead of the chain's effective block-timestamp
+//     clock passes the Active-path gate and sends a write that the
+//     chain then rejects, burning gas - exactly the scenario the
+//     sibling gate's margin exists to prevent.
+package tbtcpg_test
+
+import (
+	"math/big"
+	"testing"
+	"time"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/tbtc"
+	"github.com/keep-network/keep-core/pkg/tbtcpg"
+)
+
+func TestL28_ReanchorCooldownGate_HasNoSafetyMargin(t *testing.T) {
+	sourceWallet := hexToByte20("5555555555555555555555555555555555555555")
+	targetWallet := hexToByte20("6666666666666666666666666666666666666666")
+	reservationKey := big.NewInt(2828)
+
+	newFixture := func(cooldownUntil uint32) *tbtcpg.LocalChain {
+		lc := tbtcpg.NewLocalChain()
+		lc.SetReservationParameters(tbtc.ReservationParameters{
+			ReservationTxMaxFee:      10000,
+			ReservationMinAmount:     1000,
+			MaxReservationsPerWallet: 2,
+			ReservationActionTimeout: 86400,
+		})
+		lc.SetWallet(sourceWallet, &tbtc.WalletChainData{State: tbtc.StateMovingFunds})
+		lc.SetWallet(targetWallet, &tbtc.WalletChainData{State: tbtc.StateLive})
+		lc.SetReservation(reservationKey, &tbtc.Reservation{
+			WalletPublicKeyHash: sourceWallet,
+			AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x28},
+					OutputIndex:     1,
+				},
+				Value: 100000,
+			},
+			State:                 tbtc.ReservationStateActive,
+			ReanchorCooldownUntil: cooldownUntil,
+		})
+		lc.SetWalletReservations(sourceWallet, []*big.Int{reservationKey})
+		return lc
+	}
+
+	// --- Safe path: cooldownUntil 1s ahead of the gate's own clock read.
+	t.Run("gate skips with no chain write when cooldownUntil is ahead", func(t *testing.T) {
+		cooldownUntil := uint32(time.Now().Unix()) + 1
+		lc := newFixture(cooldownUntil)
+
+		reservation, err := lc.GetReservation(reservationKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Exact gate expression from reservation_reanchor.go:344, with NO
+		// margin applied (matching production).
+		gateSkips := uint64(time.Now().Unix()) < uint64(reservation.ReanchorCooldownUntil)
+		if !gateSkips {
+			t.Fatalf(
+				"expected the gate to skip (cooldownUntil=%d is 1s ahead of now)",
+				cooldownUntil,
+			)
+		}
+		// Production code takes `continue reservationLoop` here: no call is
+		// ever made to RequestReservationReanchor on this reservation.
+	})
+
+	// --- Griefing path: cooldownUntil AT the boundary, zero margin.
+	t.Run("gate passes at the exact boundary with zero margin, unlike the sibling timeout gate", func(t *testing.T) {
+		cooldownUntil := uint32(time.Now().Unix())
+		lc := newFixture(cooldownUntil)
+
+		reservation, err := lc.GetReservation(reservationKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Exact gate expression, evaluated at the boundary with zero
+		// margin: once the node's local clock reads a value >=
+		// cooldownUntil, production proceeds to call
+		// RequestReservationReanchor with no cushion whatsoever.
+		gateSkips := uint64(time.Now().Unix()) < uint64(reservation.ReanchorCooldownUntil)
+		if gateSkips {
+			t.Fatalf(
+				"gate skipped even though time.Now() has reached cooldownUntil=%d; "+
+					"re-run, this indicates clock resolution noise, not a defect",
+				cooldownUntil,
+			)
+		}
+
+		// Production proceeds to the on-chain write here. LocalChain
+		// mirrors Reservation.sol's own `block.timestamp >=
+		// reanchorCooldownUntil` check with its own time.Now() read, a
+		// few microseconds later, so it also sees "at or past" and
+		// accepts in this run. The point is structural, not a flaky
+		// race: the Active-path gate has NO margin (unlike the sibling
+		// ActionPending gate's reservationRequestTimeoutSafetyMarginSeconds
+		// = 7200s at reservation_reanchor.go:38,288-290), so a node whose
+		// local clock runs even slightly ahead of the chain's effective
+		// time source has zero cushion before it sends a write the chain
+		// may still reject with "Reanchor cooldown in effect" (observed
+		// directly by TestLocalChain_RequestReservationReanchor_MirrorsSolidity's
+		// "cooldown in effect" case), burning gas on every such send.
+		if err := lc.RequestReservationReanchor(reservationKey, targetWallet); err != nil {
+			t.Logf(
+				"on-chain-mirroring call reverted even though the gate passed: %v "+
+					"(the exact griefing shape: a boundary-equal local clock read "+
+					"that a slightly-behind chain clock still rejects)",
+				err,
+			)
+		} else {
+			t.Logf(
+				"on-chain-mirroring call accepted at the exact boundary " +
+					"(zero margin: any node clock running even slightly ahead " +
+					"of the chain's effective clock would instead see this revert)",
+			)
+		}
+	})
+}

@@ -1,0 +1,18 @@
+{
+  "Title": "no-op: wallet has no reservations to re-anchor",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "MovingFunds",
+  "SourceWalletMainUtxoHash": "4444444444444444444444444444444444444444444444444444444444444444",
+  "SourceWalletMainUtxoValue": 500000,
+  "SourceWalletMainUtxoTxHash": "5555555555555555555555555555555555555555555555555555555555555555",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [],
+  "ExpectedProposal": null,
+  "ExpectedErr": ""
+}

@@ -37,6 +37,16 @@ type PerformanceMetrics struct {
 	registry *Registry
 	cancel   context.CancelFunc
 
+	// reservationsEnabled mirrors tbtc.Config.ReservationsEnabled. Gates
+	// registration of the reservation-specific gauge metrics (active_
+	// reservations_count, max_active_reservations, live_wallets_count,
+	// wallet_reservations_count) so a non-reservation deployment's metric
+	// surface does not change. The reservation wallet action counters
+	// (reservation_anchor, reservation_reanchor) are registered
+	// unconditionally regardless of this flag, because reservation action
+	// execution itself is not gated on it - see registerAllMetrics.
+	reservationsEnabled bool
+
 	countersMutex sync.RWMutex
 	counters      map[string]*counter
 
@@ -72,14 +82,22 @@ const (
 )
 
 // NewPerformanceMetrics creates a new performance metrics instance.
-func NewPerformanceMetrics(ctx context.Context, registry *Registry) *PerformanceMetrics {
+// reservationsEnabled gates registration of the reservation-specific gauge
+// metrics only (see registerAllMetrics); the reservation wallet action
+// counters are registered unconditionally.
+func NewPerformanceMetrics(
+	ctx context.Context,
+	registry *Registry,
+	reservationsEnabled bool,
+) *PerformanceMetrics {
 	ctx, cancel := context.WithCancel(ctx)
 	pm := &PerformanceMetrics{
-		registry:   registry,
-		cancel:     cancel,
-		counters:   make(map[string]*counter),
-		histograms: make(map[string]*histogram),
-		gauges:     make(map[string]*gauge),
+		registry:            registry,
+		cancel:              cancel,
+		reservationsEnabled: reservationsEnabled,
+		counters:            make(map[string]*counter),
+		histograms:          make(map[string]*histogram),
+		gauges:              make(map[string]*gauge),
 	}
 
 	// Register all metrics upfront with 0 values so they appear in /metrics endpoint
@@ -131,6 +149,16 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
 		MetricSpvProofTaskFailuresTotal,
 		MetricRedemptionProofTaskFailuresTotal,
+
+		// ----- SPV reservation watcher health counters -----
+		MetricSpvReservationWatcherDeathsTotal,
+		MetricSpvReservationActionOverdueTotal,
+
+		// ----- SPV reservation proof counters -----
+		MetricSpvReservationProofsSubmittedTotal,
+		MetricSpvReservationProofsSucceededTotal,
+		MetricSpvReservationProofsFailedTotal,
+		MetricSpvReservationProofsRetriedTotal,
 
 		// ----- on-chain action counters -----
 		MetricSigningOperationsTotal,
@@ -214,7 +242,18 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 // duration histograms with 0 initial values.
 func (pm *PerformanceMetrics) registerWalletActionMetrics() {
 	// For each action type, register: total, success_total, failed_total, duration_seconds
-	for _, actionType := range GetAllWalletActionTypes() {
+	// Reservation action types are registered unconditionally: reservation
+	// action execution in node_proposals.go is not itself gated on
+	// Tbtc.ReservationsEnabled, so an operator running with the flag
+	// disabled can still execute anchor/re-anchor actions post-activation.
+	// Gating registration here would leave increments to those
+	// wallet_action_reservation_* counters silently dropped
+	// (IncrementCounter no-ops on an unregistered name), losing
+	// observability without any signal.
+	actionTypes := append(GetAllWalletActionTypes(), GetReservationWalletActionTypes()...)
+
+	for _, actionType := range actionTypes {
+
 		actionCounters := []string{
 			WalletActionMetricName(actionType, "total"),
 			WalletActionMetricName(actionType, "success_total"),
@@ -356,6 +395,23 @@ func (pm *PerformanceMetrics) registerGaugeMetrics() {
 		MetricRAMUtilizationPercent,
 		MetricSwapUtilizationPercent,
 	}
+	if pm.reservationsEnabled {
+		gauges = append(
+			gauges,
+			MetricReservationActiveReservationsCount,
+			MetricReservationMaxActiveReservations,
+			MetricReservationLiveWalletsCount,
+			MetricReservationWalletReservationsCount,
+			MetricReservationVaultFeeDebtSat,
+			MetricReservationVaultFeeReserveTbtcBaseUnits,
+			MetricReservationParamsInfeasible,
+			MetricReservationAcceptanceLateProofAtRiskCount,
+			MetricReservationReanchorNoEligibleTargetCount,
+			MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+			MetricReservationKeeperObservationTimestamp,
+			MetricSpvReservationProofLastSuccessTimestamp,
+		)
+	}
 
 	pm.gaugesMutex.Lock()
 	for _, name := range gauges {
@@ -395,11 +451,8 @@ func (pm *PerformanceMetrics) IncrementCounter(name string, value float64) {
 	if !ok {
 		// Counter not pre-registered. Pre-registration is enforced by
 		// registerAllMetrics() and tested by the *_CountersRegistered
-		// tests. The original slow path lazily added the counter to
-		// pm.counters on first increment but never called
-		// ObserveApplicationSource, so the value lived in memory but
-		// never reached /metrics; the current code silently ignores
-		// the increment. Review the registration list if a counter
+		// tests; an unregistered name is silently dropped here rather
+		// than created. Review the registration list if a counter
 		// appears here unexpectedly.
 		return
 	}
@@ -619,8 +672,50 @@ const (
 	// lifecycle gauges)
 	// MetricSpvProofTaskFailuresTotal and MetricRedemptionProofTaskFailuresTotal
 	// cover discovery and proof-info errors, not just submission failures.
-	MetricSpvProofTaskFailuresTotal          = "spv_proof_task_failures_total"
-	MetricRedemptionProofTaskFailuresTotal   = "redemption_proof_task_failures_total"
+	MetricSpvProofTaskFailuresTotal        = "spv_proof_task_failures_total"
+	MetricRedemptionProofTaskFailuresTotal = "redemption_proof_task_failures_total"
+
+	// MetricSpvReservationWatcherDeathsTotal counts reservation watcher
+	// goroutine deaths (recovered panic or Run error return) in the
+	// watcher wiring started by pkg/maintainer/spv.WireReservationWatchers
+	// in the client and maintainer processes.
+	MetricSpvReservationWatcherDeathsTotal = "spv_reservation_watcher_deaths_total"
+
+	// MetricSpvReservationActionOverdueTotal counts the notify decisions
+	// the reservation action-timeout watcher made for a tracked action
+	// generation that was still Pending past its timeoutAt in chain time
+	// with no proof submitted. A steadily increasing value means actions
+	// are not being proved or timed out in time.
+	MetricSpvReservationActionOverdueTotal = "spv_reservation_action_overdue_total"
+
+	// SPV reservation proof counters. They describe the reservation proof
+	// round (the dedicated acceptance/re-anchor proof loop in
+	// pkg/maintainer/spv), not the individual proof submissions the round
+	// performs:
+	//
+	//   - MetricSpvReservationProofsSubmittedTotal counts the proof
+	//     submissions the round attempted, across both acceptance and
+	//     re-anchor actions.
+	//   - MetricSpvReservationProofsSucceededTotal counts the submissions
+	//     the Bridge accepted.
+	//   - MetricSpvReservationProofsFailedTotal counts the submissions the
+	//     Bridge rejected or that failed to assemble.
+	//   - MetricSpvReservationProofsRetriedTotal counts the proof rounds
+	//     that failed for an item and were left for a later round, so the
+	//     same generation is tried again.
+	MetricSpvReservationProofsSubmittedTotal = "spv_reservation_proofs_submitted_total"
+	MetricSpvReservationProofsSucceededTotal = "spv_reservation_proofs_succeeded_total"
+	MetricSpvReservationProofsFailedTotal    = "spv_reservation_proofs_failed_total"
+	MetricSpvReservationProofsRetriedTotal   = "spv_reservation_proofs_retried_total"
+
+	// MetricSpvReservationProofLastSuccessTimestamp is the unix time of
+	// the last reservation proof round that completed without an error. It
+	// is the liveness signal for the reservation proof loop: a value that
+	// stops advancing while reservations are live means the loop is
+	// stalled and the on-chain actions it proves are not being settled.
+	// It is 0 until the first successful round.
+	MetricSpvReservationProofLastSuccessTimestamp = "spv_reservation_proof_last_success_timestamp_seconds"
+
 	MetricSpvMaintainerLastFailureTimestamp  = "spv_maintainer_last_failure_timestamp_seconds"
 	MetricSpvMaintainerActive                = "spv_maintainer_active"
 	MetricSpvMaintainerLastActivityTimestamp = "spv_maintainer_last_activity_timestamp_seconds"
@@ -702,6 +797,66 @@ const (
 	MetricCPULoadPercent         = "cpu_load_percent"
 	MetricRAMUtilizationPercent  = "ram_utilization_percent"
 	MetricSwapUtilizationPercent = "swap_utilization_percent"
+
+	// Reservation Metrics (m1 reservations feature; only registered when
+	// reservationsEnabled - see NewPerformanceMetrics). These are leading
+	// indicators of reservation capacity approaching its cap: without
+	// them, an operator cannot see acceptances approaching the cap before
+	// they silently stop.
+	MetricReservationActiveReservationsCount = "active_reservations_count"
+	MetricReservationMaxActiveReservations   = "max_active_reservations"
+	MetricReservationLiveWalletsCount        = "live_wallets_count"
+	MetricReservationWalletReservationsCount = "wallet_reservations_count"
+
+	// The reservation vault fee observability gauges track the
+	// ReservationVault's outstanding in-kind fee debt and fee-reserve
+	// TBTC balance, published by the reservation acceptance task:
+	//
+	//   - MetricReservationVaultFeeDebtSat is in satoshi, matching the
+	//     on-chain inKindFeeDebtSat view.
+	//   - MetricReservationVaultFeeReserveTbtcBaseUnits is in TBTC base units
+	//     (1e18 per whole TBTC): a gauge value of N means N / 1e18
+	//     whole TBTC held in reserve. The balance is a big.Int while
+	//     the gauge API takes a float64, so the base-unit figure is
+	//     published directly; float64 represents base units
+	//     approximately above 2^53 base units, so consumers must
+	//     treat the gauge as an indicator, not for exact accounting.
+	MetricReservationVaultFeeDebtSat              = "reservation_vault_fee_debt_sat"
+	MetricReservationVaultFeeReserveTbtcBaseUnits = "reservation_vault_fee_reserve_tbtc_base_units"
+
+	// MetricReservationParamsInfeasible is a 0/1 alarm set by the SPV
+	// maintainer's stale-deposit watcher pass when the Bridge's on-chain
+	// parameters make reserved deposits impossible: either the deposit
+	// reveal-ahead period exceeds the reservation term plus the 24h
+	// refund safety margin, or a non-zero reservation amount cap
+	// (per-wallet, single-amount, or max-total) sits below the deposit
+	// dust threshold. 1 means at least one of those infeasibilities is
+	// currently live on-chain, 0 means reserved deposits are feasible.
+	// It is an alarm only: the node keeps running while it is 1.
+	MetricReservationParamsInfeasible = "reservation_params_infeasible"
+
+	// Reservation keeper watchdog gauges, set by the SPV maintainer's
+	// reservation keeper observer after each fully successful
+	// observation pass. A failed pass leaves every value, including
+	// the observation timestamp, unchanged, so a stale timestamp is
+	// the signal that the values below can no longer be trusted.
+	//
+	//   - MetricReservationAcceptanceLateProofAtRiskCount counts
+	//     acceptance generations (Pending or TimedOut, not Settled)
+	//     whose late-settlement edge timeoutAt + termSeconds is within
+	//     7 days of the chain head.
+	//   - MetricReservationReanchorNoEligibleTargetCount counts Active
+	//     reservations on MovingFunds or Closing wallets that no
+	//     source-wallet member re-anchor can move.
+	//   - MetricReservationUnrequestedDepositDeadlineAtRiskCount counts
+	//     pending reserved deposits with no acceptance request whose
+	//     last possible request time is within 1 day of the chain head.
+	//   - MetricReservationKeeperObservationTimestamp is the chain head
+	//     unix time of the last fully successful pass.
+	MetricReservationAcceptanceLateProofAtRiskCount        = "reservation_acceptance_late_proof_at_risk_count"
+	MetricReservationReanchorNoEligibleTargetCount         = "reservation_reanchor_no_eligible_target_count"
+	MetricReservationUnrequestedDepositDeadlineAtRiskCount = "reservation_unrequested_deposit_deadline_at_risk_count"
+	MetricReservationKeeperObservationTimestamp            = "reservation_keeper_observation_timestamp"
 )
 
 // Network join request failure reasons. These are the low-cardinality
@@ -752,8 +907,8 @@ func GetAllNetworkJoinFailureReasons() []string {
 	}
 }
 
-// GetAllWalletActionTypes returns all wallet action types that should be tracked.
-// ActionNoop is excluded as it's a no-op action.
+// GetAllWalletActionTypes returns all non-reservation wallet action types that
+// should be tracked. ActionNoop is excluded as it's a no-op action.
 func GetAllWalletActionTypes() []string {
 	return []string{
 		"heartbeat",
@@ -761,5 +916,14 @@ func GetAllWalletActionTypes() []string {
 		"redemption",
 		"moving_funds",
 		"moved_funds_sweep",
+	}
+}
+
+// GetReservationWalletActionTypes returns all reservation-specific wallet
+// action types that should be tracked.
+func GetReservationWalletActionTypes() []string {
+	return []string{
+		"reservation_anchor",
+		"reservation_reanchor",
 	}
 }

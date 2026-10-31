@@ -61,6 +61,7 @@ func init() {
 		rwManagerCommand(),
 		rwObjectionsCommand(),
 		rwOwnerCommand(),
+		rwREQUIREDOBJECTIONSCOUNTCommand(),
 		rwVetoFreezePeriodCommand(),
 		rwVetoPenaltyFeeDivisorCommand(),
 		rwVetoProposalsCommand(),
@@ -550,6 +551,40 @@ func rwOwner(c *cobra.Command, args []string) error {
 	}
 
 	result, err := contract.OwnerAtBlock(
+		cmd.BlockFlagValue.Int,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.PrintOutput(result)
+
+	return nil
+}
+
+func rwREQUIREDOBJECTIONSCOUNTCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:                   "r-e-q-u-i-r-e-d-o-b-j-e-c-t-i-o-n-s-c-o-u-n-t",
+		Short:                 "Calls the view method rEQUIREDOBJECTIONSCOUNT on the RedemptionWatchtower contract.",
+		Args:                  cmd.ArgCountChecker(0),
+		RunE:                  rwREQUIREDOBJECTIONSCOUNT,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
+	}
+
+	cmd.InitConstFlags(c)
+
+	return c
+}
+
+func rwREQUIREDOBJECTIONSCOUNT(c *cobra.Command, args []string) error {
+	contract, err := initializeRedemptionWatchtower(c)
+	if err != nil {
+		return err
+	}
+
+	result, err := contract.REQUIREDOBJECTIONSCOUNTAtBlock(
 		cmd.BlockFlagValue.Int,
 	)
 

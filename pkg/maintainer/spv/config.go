@@ -3,6 +3,8 @@ package spv
 import (
 	"fmt"
 	"time"
+
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 )
 
 const (
@@ -81,6 +83,31 @@ type Config struct {
 	// BIP94 minimum-difficulty runs) where the default 144 headers is
 	// insufficient.
 	MaxProofHeaders uint
+	// ReservationProofsEnabled controls SPV proof submission for
+	// reservation acceptance and re-anchor action generations, and gates
+	// reservation watcher wiring (stranding / stale-deposit /
+	// action-timeout) in this maintainer process.
+	//
+	// OPERATOR NOTE: The client process ALSO independently wires the same
+	// watchers and generates reservation proposals, gated by the separate
+	// Tbtc.ReservationsEnabled flag. An operator MUST enable BOTH flags
+	// ([Tbtc] in the client and [Maintainer.Spv] in the maintainer) for
+	// the reservation feature to work end-to-end.
+	ReservationProofsEnabled bool
+
+	// EthereumNetwork is the Ethereum network this SPV maintainer
+	// process runs against, set by the process command (the maintainer
+	// command copies it from its own [ethereum] config section) rather
+	// than read from a config file or CLI flag. It feeds the
+	// reservation activation-block lookup (see
+	// tbtc.ReservationsActivationBlock): the reservation proof loop and
+	// the stale-deposit and action-timeout watchers start their first
+	// event scan at the activation block and walk to the tip in chunks.
+	// A network without an activation entry is treated as
+	// reservations-inactive: those first scans are skipped and later
+	// scans cover only new blocks. The zero value (an unknown network)
+	// behaves exactly like a missing activation entry.
+	EthereumNetwork ethereum.Network
 }
 
 // Validate checks that the configuration is usable, returning an error

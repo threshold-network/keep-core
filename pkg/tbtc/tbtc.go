@@ -91,6 +91,17 @@ const (
 	// DefaultWalletTxFeeBufferPercent is the default safety-buffer
 	// percentage applied over the per-vByte fee rate.
 	DefaultWalletTxFeeBufferPercent = 25
+	// ProtocolMinWalletTxSatPerVByteFee is the fixed minimum fee rate, in
+	// sat/vByte, that every wallet Bitcoin transaction must meet. It equals
+	// the pre-PR hard-coded leader floor (minWalletTxSatPerVByteFee = 5 in
+	// pkg/tbtcpg/fee.go) and the DefaultWalletTxSatPerVByteFloor default
+	// above. Both pre-PR and PR honest leaders emit at least this rate, so a
+	// follower hard-rejecting below it is safe in mixed-version traffic: a
+	// proposal that lands under it only comes from a misbehaving or unpatched
+	// leader underpricing the tx. The reject sites allow one vByte
+	// (ProtocolMin * (vsize - 1)) to cover size-estimate differences between
+	// leader and follower versions.
+	ProtocolMinWalletTxSatPerVByteFee int64 = 5
 )
 
 var DefaultKeyGenerationConcurrency = runtime.GOMAXPROCS(0)
@@ -156,12 +167,31 @@ type Config struct {
 	// TransactionMonitor controls confirmation polling and stuck-transaction
 	// alerts. Omitted settings retain the default monitoring policy.
 	TransactionMonitor TransactionMonitorConfig
+	// ReservationsEnabled toggles reservation acceptance / re-anchor
+	// proposal generation, reservation watcher wiring, and reservation
+	// metrics registration in the start process only. It does NOT gate
+	// reservation action execution: once a network's reservation
+	// activation block is reached, every wallet signer validates,
+	// co-signs, and broadcasts reservation proposals regardless of this
+	// flag - execution dispatch gates only on wallet-signer membership,
+	// by design. Defaults to false so existing deployments opt in
+	// explicitly. Operators running both the start and maintainer
+	// commands must also enable [Maintainer.Spv.ReservationProofsEnabled]
+	// for end-to-end reservation operation (SPV proof submission is a
+	// separate concern, gated by its own flag on the maintainer's config).
+	ReservationsEnabled bool
 }
 
 // applyWalletTxFeePolicy applies the operator-tunable wallet-tx fee-floor
 // policy from Config to the package-level policy vars. Zero-valued Config
 // fields are skipped so a direct Config{} in tests retains the
-// DefaultWalletTx* constants. Negative settings return an error.
+// DefaultWalletTx* constants. A non-zero WalletTxSatPerVByteFloor below
+// ProtocolMinWalletTxSatPerVByteFee is rejected with an error: an
+// operator-tuned floor under the fixed protocol minimum would let every
+// follower co-sign underpriced wallet transactions on all five wallet-tx
+// paths, which the protocol minimum exists to prevent. Negative settings
+// also return an error. The caller (Initialize) must propagate the error
+// so startup fails.
 func applyWalletTxFeePolicy(config Config) error {
 	if config.WalletTxSatPerVByteFloor < 0 {
 		return fmt.Errorf(
@@ -177,7 +207,18 @@ func applyWalletTxFeePolicy(config Config) error {
 	}
 
 	if config.WalletTxSatPerVByteFloor > 0 {
-		MinWalletTxSatPerVByteFee = int64(config.WalletTxSatPerVByteFloor)
+		floor := int64(config.WalletTxSatPerVByteFloor)
+		if floor < ProtocolMinWalletTxSatPerVByteFee {
+			return fmt.Errorf(
+				"tbtc.walletTxSatPerVByteFloor [%d] is below the protocol "+
+					"minimum [%d]; refusing to start: a floor under the "+
+					"protocol minimum would let followers co-sign underpriced "+
+					"wallet transactions",
+				floor,
+				ProtocolMinWalletTxSatPerVByteFee,
+			)
+		}
+		MinWalletTxSatPerVByteFee = floor
 	}
 	if config.WalletTxFeeBufferPercent > 0 {
 		WalletTxFeeBufferPercent = int64(config.WalletTxFeeBufferPercent)
@@ -189,6 +230,16 @@ func applyWalletTxFeePolicy(config Config) error {
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
+//
+// Reservation watcher wiring (stranding / stale-deposit / action-timeout,
+// see pkg/maintainer/spv.WireReservationWatchers) is not performed here:
+// it lives in cmd/start.go, called directly against the same tbtc.Chain
+// handle once Initialize returns successfully and gated on the same
+// config.ReservationsEnabled flag. Threading it through
+// Initialize via a callback type would only exist to dodge a tbtc -> spv
+// import cycle that cmd/start.go (which already imports both packages)
+// does not have.
+
 func Initialize(
 	ctx context.Context,
 	chain Chain,
@@ -233,6 +284,7 @@ func Initialize(
 	}
 
 	node, err := newNode(
+		ethereumNetwork,
 		groupParameters,
 		chain,
 		btcChain,
@@ -266,7 +318,11 @@ func Initialize(
 		)
 
 		if perfMetrics == nil {
-			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
+			perfMetrics = clientinfo.NewPerformanceMetrics(
+				ctx,
+				clientInfo,
+				config.ReservationsEnabled,
+			)
 		}
 		node.setPerformanceMetrics(perfMetrics)
 

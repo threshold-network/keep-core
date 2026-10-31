@@ -36,9 +36,9 @@ type GroupSelectionChain interface {
 }
 
 // GroupSelectionResult represents a group selection result, i.e. operators
-// selected to perform the DKG protocol. The result consists of two slices
-// of equal length holding the chain.OperatorID and chain.Address for each
-// selected operator.
+// selected to perform the group key generation protocol. The result consists of
+// two slices of equal length holding the chain.OperatorID and chain.Address for
+// each selected operator.
 type GroupSelectionResult struct {
 	OperatorsIDs       chain.OperatorIDs
 	OperatorsAddresses chain.Addresses
@@ -294,6 +294,13 @@ type BridgeChain interface {
 		fundingOutputIndex uint32,
 	) (*DepositChainRequest, bool, error)
 
+	// BuildDepositKey calculates a deposit key for the given funding
+	// transaction hash and output index. Mirrors tbtcpg.Chain's identical
+	// method - the reservation anchor wallet action needs it to derive the
+	// m1 reservation key (reservationKey == depositKey) without depending
+	// on the tbtcpg package.
+	BuildDepositKey(fundingTxHash bitcoin.Hash, fundingOutputIndex uint32) *big.Int
+
 	// GetMovedFundsSweepRequest gets the on-chain moved funds sweep request for
 	// the given moving funds transaction hash and output index.
 	// The returned bool value indicates whether the request was found or not.
@@ -314,6 +321,15 @@ type BridgeChain interface {
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *MovingFundsCommitmentSubmittedEventFilter,
 	) ([]*MovingFundsCommitmentSubmittedEvent, error)
+
+	// GetWalletParameters gets the current value of parameters relevant
+	// to the wallet.
+	GetWalletParameters() (WalletParameters, error)
+
+	// GetLatestBlockTimestamp gets the latest Ethereum block header time,
+	// read with a bounded timeout. Callers use it instead of time.Now()
+	// for comparisons against on-chain deadlines.
+	GetLatestBlockTimestamp() (time.Time, error)
 }
 
 // NewWalletRegisteredEvent represents a new wallet registered event.
@@ -430,6 +446,26 @@ type WalletProposalValidatorChain interface {
 			*Deposit
 			FundingTx *bitcoin.Transaction
 		},
+	) error
+
+	// ValidateReservationAnchorProposal validates the given reservation
+	// anchor proposal against the chain. Returns an error if the proposal
+	// is not valid or nil otherwise.
+	ValidateReservationAnchorProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *ReservationAnchorProposal,
+		depositExtraInfo struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateReservationReanchorProposal validates the given reservation
+	// re-anchor proposal against the chain. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateReservationReanchorProposal(
+		sourceWalletPublicKeyHash [20]byte,
+		proposal *ReservationReanchorProposal,
 	) error
 
 	// ValidateRedemptionProposal validates the given redemption proposal
@@ -550,4 +586,353 @@ type Chain interface {
 	InactivityClaimChain
 	BridgeChain
 	WalletProposalValidatorChain
+	ReservationChain
+}
+
+// ReservationChain defines the subset of the TBTC chain interface that pertains
+// specifically to UTXO reservation Bridge operations. The reservation state
+// machine is implemented behind Bridge.fallback's delegatecall to the
+// ReservationRouter contract; the binding is constructed against the Bridge
+// address, so every read, write, and log subscription on this interface
+// routes through the Bridge's storage rather than the router's empty
+// standalone storage.
+type ReservationChain interface {
+	// RequestReservationReanchor requests a reservation re-anchor action
+	// generation for the given reservation, targeting the given wallet.
+	//
+	// walletMembersIDs and walletMemberIndex carry the caller's source-wallet
+	// member proof: the source wallet signing group's member IDs and this
+	// operator's 1-based position within them. A non-empty proof that
+	// validates exempts the request from the target's third-party re-anchor
+	// hold cap; an empty proof is a plain third-party request subject to it.
+	RequestReservationReanchor(
+		reservationKey *big.Int,
+		targetWalletPublicKeyHash [20]byte,
+		walletMembersIDs []uint32,
+		walletMemberIndex uint32,
+	) error
+
+	// SubmitReservationAcceptanceProof submits an SPV proof for the given
+	// reservation acceptance action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationAcceptanceProof(
+		txInfo *BitcoinTxInfo,
+		proof *BitcoinTxProof,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+
+	// SubmitReservationReanchorProof submits an SPV proof for the given
+	// reservation re-anchor action generation. The call is restricted to
+	// the SPV maintainer registered against the Bridge.
+	SubmitReservationReanchorProof(
+		txInfo *BitcoinTxInfo,
+		proof *BitcoinTxProof,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error
+
+	// NotifyReservationActionTimeout notifies the Bridge that the timeout
+	// for the given Reanchor-type reservation action generation has
+	// elapsed without the SPV proof being submitted.
+	NotifyReservationActionTimeout(reservationKey *big.Int) error
+
+	// NotifyReservationAcceptanceTimedOut notifies the Bridge that the
+	// acceptance-type action timeout has elapsed for the given reservation
+	// without the SPV proof being submitted. Unlike
+	// NotifyReservationActionTimeout (Reanchor-only on-chain), this entry
+	// point is hard-gated to Acceptance-type actions by the Bridge.
+	NotifyReservationAcceptanceTimedOut(reservationKey *big.Int) error
+
+	// NotifyStaleReservedDeposit notifies the Bridge that the given reserved
+	// deposit's wallet did not anchor it within the reservation-action
+	// timeout and should be released back to the default sweeping path.
+	NotifyStaleReservedDeposit(depositKey *big.Int) error
+
+	// NotifyReservationStranded notifies the Bridge that the wallet
+	// custodying the given reservation has been closed or terminated and
+	// the anchor is therefore stranded. This is the m1 path that closes
+	// reservations whose wallet is no longer live.
+	NotifyReservationStranded(reservationKey *big.Int) error
+
+	// WalletTerminationCause returns the on-chain reason the given wallet
+	// was most recently terminated, inferred from the most recent of the
+	// three pre-termination timeout events (MovingFundsTimedOut,
+	// MovedFundsSweepTimedOut, FraudChallengeDefeatTimedOut) found for it.
+	// Returns WalletTerminationCauseUnknown (with a nil error) if none of
+	// the three events can be found for the wallet.
+	WalletTerminationCause(walletPublicKeyHash [20]byte) (WalletTerminationCause, error)
+
+	// GetReservation returns the on-chain reservation record. An absent key is represented by ReservationStateUnknown; errors report chain-call or conversion failures.
+	GetReservation(reservationKey *big.Int) (*Reservation, error)
+
+	// GetReservationAction returns the nonce-bound on-chain action record. An absent generation is represented by ReservationActionStateUnknown; errors report chain-call or conversion failures.
+	GetReservationAction(
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) (*ReservationAction, error)
+
+	// ReservationParameters gets the current on-chain values of the Bridge
+	// reservation parameters.
+	ReservationParameters() (*ReservationParameters, error)
+
+	// ReservationCaps returns the cap parameters that gate reservation
+	// acceptance: the maximum aggregate satoshi amount a single wallet may
+	// custody across all of its reservations, and the maximum satoshi
+	// amount any single reservation may anchor.
+	ReservationCaps() (maxReservationsAmountPerWallet uint64, reservationMaxSingleAmount uint64, err error)
+
+	// WalletReservationsAmount returns the aggregate satoshi amount
+	// currently anchored by the given wallet across all of its
+	// reservations.
+	WalletReservationsAmount(walletPublicKeyHash [20]byte) (uint64, error)
+
+	// WalletReservationsCount returns the number of reservations currently
+	// custodied by the given wallet.
+	WalletReservationsCount(walletPublicKeyHash [20]byte) (uint32, error)
+
+	// WalletReservations returns the reservation keys for all reservations
+	// currently custodied by the given wallet.
+	WalletReservations(walletPublicKeyHash [20]byte) ([]*big.Int, error)
+
+	// ReservedDepositWallet returns the wallet public key hash to which
+	// the given reserved deposit was revealed. Returns the zero hash if the
+	// deposit is not a reserved deposit.
+	ReservedDepositWallet(depositKey *big.Int) ([20]byte, error)
+
+	// ActiveReservationsCount returns the current count of active
+	// reservations across all wallets and the cap on that count.
+	ActiveReservationsCount() (count uint32, maxActive uint32, err error)
+
+	// ReservationVaultFeeDebtSat returns the given ReservationVault's
+	// outstanding in-kind fee debt in satoshi, read from the vault's
+	// inKindFeeDebtSat view. The caller passes the vault address it
+	// already read from ReservationParameters. If the address is
+	// zero (vault not configured), it returns zero with a nil
+	// error: the skip sentinel the metric side consumes, not an
+	// error.
+	ReservationVaultFeeDebtSat(reservationVault chain.Address) (uint64, error)
+
+	// ReservationVaultFeeReserveTbtcBaseUnits returns the given
+	// ReservationVault's TBTC fee-reserve balance in TBTC base
+	// units: TBTC is a 1e18 base-unit token, so the returned value
+	// is whole TBTC x 1e18. The value can exceed uint64 range, so
+	// it is returned as *big.Int. The caller passes the vault
+	// address it already read from ReservationParameters. If the
+	// address is zero (vault not configured), it returns zero with
+	// a nil error: the skip sentinel the metric side consumes, not
+	// an error.
+	ReservationVaultFeeReserveTbtcBaseUnits(
+		reservationVault chain.Address,
+	) (*big.Int, error)
+
+	// IsReservedDeposit returns true if the given deposit was revealed
+	// with the reservation vault address and is therefore a reservation
+	// rather than a default deposit.
+	IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+	// OnReservationAcceptanceRequested registers a callback that is invoked
+	// when an on-chain ReservationAcceptanceRequested event is seen.
+	OnReservationAcceptanceRequested(
+		handler func(event *ReservationAcceptanceRequestedEvent),
+	) subscription.EventSubscription
+
+	// PastReservationAcceptanceRequestedEvents fetches past
+	// ReservationAcceptanceRequested events according to the provided
+	// filter or unfiltered if the filter is nil. Returned events are sorted
+	// by the block number in the ascending order, i.e. the latest event is
+	// at the end of the slice.
+	PastReservationAcceptanceRequestedEvents(
+		filter *ReservationAcceptanceRequestedEventFilter,
+	) ([]*ReservationAcceptanceRequestedEvent, error)
+
+	// OnReservationReanchorRequested registers a callback that is invoked
+	// when an on-chain ReservationReanchorRequested event is seen.
+	OnReservationReanchorRequested(
+		handler func(event *ReservationReanchorRequestedEvent),
+	) subscription.EventSubscription
+
+	// PastReservationReanchorRequestedEvents fetches past
+	// ReservationReanchorRequested events according to the provided filter
+	// or unfiltered if the filter is nil.
+	PastReservationReanchorRequestedEvents(
+		filter *ReservationReanchorRequestedEventFilter,
+	) ([]*ReservationReanchorRequestedEvent, error)
+}
+
+// BitcoinTxInfo represents the on-chain BitcoinTx.Info struct used by
+// reservation proof submissions.
+type BitcoinTxInfo struct {
+	Version      [4]byte
+	InputVector  []byte
+	OutputVector []byte
+	Locktime     [4]byte
+}
+
+// BitcoinTxProof represents the on-chain BitcoinTx.Proof struct used by
+// reservation proof submissions.
+type BitcoinTxProof struct {
+	MerkleProof      []byte
+	TxIndexInBlock   *big.Int
+	BitcoinHeaders   []byte
+	CoinbasePreimage [32]byte
+	CoinbaseProof    []byte
+}
+
+// BitcoinTxUTXO represents the on-chain BitcoinTx.UTXO struct used by
+// reservation proof submissions.
+type BitcoinTxUTXO struct {
+	TxHash        [32]byte
+	TxOutputIndex uint32
+	TxOutputValue uint64
+}
+
+// ReservationAcceptanceRequestedEvent represents a reservation acceptance
+// requested event.
+type ReservationAcceptanceRequestedEvent struct {
+	ReservationKey      *big.Int
+	RequestNonce        uint64
+	WalletPublicKeyHash [20]byte
+	DepositAmount       uint64
+	TxMaxFee            uint64
+	TimeoutAt           uint32
+	BlockNumber         uint64
+}
+
+// ReservationAcceptanceRequestedEventFilter is a component allowing to filter
+// ReservationAcceptanceRequestedEvent.
+type ReservationAcceptanceRequestedEventFilter struct {
+	StartBlock          uint64
+	EndBlock            *uint64
+	ReservationKey      []*big.Int
+	WalletPublicKeyHash [][20]byte
+}
+
+// ReservationAcceptedEvent represents a reservation accepted event.
+type ReservationAcceptedEvent struct {
+	ReservationKey      *big.Int
+	RequestNonce        uint64
+	WalletPublicKeyHash [20]byte
+	Owner               chain.Address
+	AnchorTxHash        [32]byte
+	AnchorAmount        uint64
+	ExpiresAt           uint32
+	BlockNumber         uint64
+}
+
+// ReservationAcceptedEventFilter is a component allowing to filter
+// ReservationAcceptedEvent.
+type ReservationAcceptedEventFilter struct {
+	StartBlock          uint64
+	EndBlock            *uint64
+	ReservationKey      []*big.Int
+	WalletPublicKeyHash [][20]byte
+	Owner               []chain.Address
+}
+
+// ReservationReanchorRequestedEvent represents a reservation re-anchor
+// requested event.
+type ReservationReanchorRequestedEvent struct {
+	ReservationKey            *big.Int
+	RequestNonce              uint64
+	SourceWalletPublicKeyHash [20]byte
+	TargetWalletPublicKeyHash [20]byte
+	TxMaxFee                  uint64
+	BlockNumber               uint64
+}
+
+// ReservationReanchorRequestedEventFilter is a component allowing to filter
+// ReservationReanchorRequestedEvent.
+type ReservationReanchorRequestedEventFilter struct {
+	StartBlock                uint64
+	EndBlock                  *uint64
+	ReservationKey            []*big.Int
+	SourceWalletPublicKeyHash [][20]byte
+	TargetWalletPublicKeyHash [][20]byte
+}
+
+// ReservationReanchoredEvent represents a reservation re-anchored event.
+type ReservationReanchoredEvent struct {
+	ReservationKey         *big.Int
+	RequestNonce           uint64
+	NewWalletPublicKeyHash [20]byte
+	NewAnchorTxHash        [32]byte
+	NewAnchorAmount        uint64
+	BlockNumber            uint64
+}
+
+// ReservationReanchoredEventFilter is a component allowing to filter
+// ReservationReanchoredEvent.
+type ReservationReanchoredEventFilter struct {
+	StartBlock             uint64
+	EndBlock               *uint64
+	ReservationKey         []*big.Int
+	NewWalletPublicKeyHash [][20]byte
+}
+
+// ReservationActionSupersededEvent represents a reservation action superseded
+// event.
+type ReservationActionSupersededEvent struct {
+	ReservationKey *big.Int
+	RequestNonce   uint64
+	BlockNumber    uint64
+}
+
+// ReservationLateSettledEvent represents a reservation late-settled event.
+type ReservationLateSettledEvent struct {
+	ReservationKey *big.Int
+	RequestNonce   uint64
+	ActionType     ReservationActionType
+	BlockNumber    uint64
+}
+
+// ReservationRetryCreditMintedEvent represents a reservation retry credit
+// minted event.
+type ReservationRetryCreditMintedEvent struct {
+	ReservationKey *big.Int
+	BlockNumber    uint64
+}
+
+// ReservedDepositMarkedStaleEvent represents a reserved deposit marked stale
+// event.
+type ReservedDepositMarkedStaleEvent struct {
+	DepositKey  *big.Int
+	BlockNumber uint64
+}
+
+// ReservationStrandedEvent represents a reservation stranded event.
+type ReservationStrandedEvent struct {
+	ReservationKey      *big.Int
+	WalletPublicKeyHash [20]byte
+	Owner               chain.Address
+	AnchorAmount        uint64
+	BlockNumber         uint64
+}
+
+// ReservationParametersUpdatedEvent represents a reservation parameters
+// updated event.
+type ReservationParametersUpdatedEvent struct {
+	ReservationMinAmount            uint64
+	ReservationTxMaxFee             uint64
+	ReservationTermSeconds          uint32
+	ReservationDissolutionDelay     uint32
+	ReservationMaxTotalAmount       uint64
+	MaxReservationsPerWallet        uint32
+	ReservationActionTimeout        uint32
+	ReservationRenewalWindowSeconds uint32
+	BlockNumber                     uint64
+}
+
+// ReservationVaultUpdatedEvent represents a reservation vault updated event.
+type ReservationVaultUpdatedEvent struct {
+	ReservationVault chain.Address
+	BlockNumber      uint64
+}
+
+// ReservationCapsUpdatedEvent represents a reservation caps updated event.
+type ReservationCapsUpdatedEvent struct {
+	MaxReservationsAmountPerWallet uint64
+	ReservationMaxSingleAmount     uint64
+	MaxActiveReservations          uint32
+	BlockNumber                    uint64
 }

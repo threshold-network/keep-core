@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
@@ -145,7 +146,7 @@ func TestTransactionMonitor_CustomCheckInterval(t *testing.T) {
 
 func TestNewNode_RejectsInvalidTransactionMonitorConfig(t *testing.T) {
 	// Validation must precede persistence, chain access, and scheduler setup.
-	_, err := newNode(nil, nil, nil, nil, nil, nil, nil, nil, Config{
+	_, err := newNode(ethereum.Unknown, nil, nil, nil, nil, nil, nil, nil, nil, Config{
 		TransactionMonitor: TransactionMonitorConfig{CheckInterval: -time.Second},
 	})
 	if err == nil || !strings.Contains(err.Error(), "checkInterval") {

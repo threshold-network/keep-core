@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -331,6 +332,7 @@ func TestGetProofInfo(t *testing.T) {
 					localChain,
 					localChain,
 					DefaultMaxProofHeaders,
+					newProofInfoCache(),
 				)
 			if err != nil {
 				t.Fatal(err)
@@ -434,6 +436,7 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 		localChain,
 		localChain,
 		DefaultMaxProofHeaders,
+		newProofInfoCache(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -447,23 +450,104 @@ func TestGetProofInfo_MinDifficultyDetectedByExactTarget(t *testing.T) {
 	)
 }
 
+// TestGetProofInfo_NormalizesZeroMaxProofHeaders pins the maxProofHeaders==0
+// normalization to its single central location inside getProofInfo. Any
+// Config built programmatically without going through flag registration
+// (which applies the 144 default; see cmd/flags.go) would otherwise pass a
+// zero maxProofHeaders straight through and skip every proof as
+// proofSkipExceededMaxHeaders after zero headers - this is the regression
+// this test would catch. Both getProofInfo callers (the generic SPV loop
+// and the reservation proof loop) rely on this same normalization.
+func TestGetProofInfo_NormalizesZeroMaxProofHeaders(t *testing.T) {
+	const proofStart = 790270
+
+	transactionHash, err := bitcoin.NewHashFromString(
+		"44c568bc0eac07a2a9c2b46829be5b5d46e7d00e17bfb613f506a75ccf86a473",
+		bitcoin.InternalByteOrder,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localChain := newLocalChain()
+	btcChain := newLocalBitcoinChain()
+	if err := populateBlockHeaders(
+		btcChain,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return big.NewInt(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	btcChain.addTransactionConfirmations(transactionHash, 20)
+
+	localChain.setTxProofDifficultyFactor(big.NewInt(6))
+	localChain.setCurrentEpoch(392)
+	localChain.setCurrentAndPrevEpochDifficulty(big.NewInt(16), big.NewInt(32))
+
+	_, _, skipReason, err := getProofInfo(
+		transactionHash,
+		btcChain,
+		localChain,
+		localChain,
+		0,
+		newProofInfoCache(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"skip reason",
+		int(proofSkipNone),
+		int(skipReason),
+	)
+}
+
 // recordingMetricsRecorder captures IncrementCounter and SetGauge calls for
-// assertions. proveTransactions and the maintainer control loop invoke it
-// synchronously, so no locking is needed.
+// assertions. Most tests invoke it synchronously from a single goroutine, but
+// the reservation watcher-death path increments it from the watcher's
+// goroutines while the test polls it, so every read and write goes through a
+// mutex and the accessors below.
 type recordingMetricsRecorder struct {
+	mu       sync.Mutex
 	counters map[string]float64
 	gauges   map[string]float64
 }
 
 func (r *recordingMetricsRecorder) IncrementCounter(name string, value float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.counters == nil {
+		r.counters = make(map[string]float64)
+	}
 	r.counters[name] += value
 }
 
 func (r *recordingMetricsRecorder) SetGauge(name string, value float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.gauges == nil {
 		r.gauges = make(map[string]float64)
 	}
 	r.gauges[name] = value
+}
+
+// Counter returns the accumulated value of the named counter (0 when unset);
+// mutex-safe for readers racing the watcher goroutines.
+func (r *recordingMetricsRecorder) Counter(name string) float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counters[name]
+}
+
+// Gauge returns the last value set for the named gauge (0 when unset);
+// mutex-safe.
+func (r *recordingMetricsRecorder) Gauge(name string) float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gauges[name]
 }
 
 // TestProveTransactions covers the caller-side handling of each proofSkipReason
@@ -605,7 +689,7 @@ func TestProveTransactions(t *testing.T) {
 				wantFailures = 1
 			}
 			for _, name := range []string{"spv_proof_task_failures_total", "redemption_proof_task_failures_total"} {
-				if got := recorder.counters[name]; got != wantFailures {
+				if got := recorder.Counter(name); got != wantFailures {
 					t.Errorf("%s: want %v, got %v", name, wantFailures, got)
 				}
 			}
@@ -626,7 +710,7 @@ func TestProveTransactions(t *testing.T) {
 			}
 
 			if test.expectedCounter != "" {
-				if got := recorder.counters[test.expectedCounter]; got != 1 {
+				if got := recorder.Counter(test.expectedCounter); got != 1 {
 					t.Errorf(
 						"expected counter [%s] to be 1, got [%v]",
 						test.expectedCounter,
@@ -655,32 +739,32 @@ func TestUniqueWalletPublicKeyHashes(t *testing.T) {
 	}
 
 	events := []*tbtc.DepositRevealedEvent{
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"4cc32253cc0bcd0cf9cfc79ed7b21d10df207f0d",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"ddbd706d13dbd06038519c7621ac5de167bd3fd6",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"4cc32253cc0bcd0cf9cfc79ed7b21d10df207f0d",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"1016a8ff380e8907c82a88158019917e65c16ac4",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"1016a8ff380e8907c82a88158019917e65c16ac4",
 			),
 		},
-		&tbtc.DepositRevealedEvent{
+		{
 			WalletPublicKeyHash: bytes20FromHex(
 				"2c35ed9921fa35482c3cb3ae1190d87ede65dfd8",
 			),

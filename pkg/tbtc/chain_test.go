@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"golang.org/x/crypto/sha3"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -24,7 +26,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/inactivity"
 	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg"
-	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -73,6 +74,12 @@ type localChain struct {
 	depositSweepProposalValidationsMutex sync.Mutex
 	depositSweepProposalValidations      map[[32]byte]bool
 
+	reservedDepositsMutex sync.Mutex
+	reservedDeposits      map[string]bool
+
+	reservationParamsMutex sync.Mutex
+	reservationParams      *ReservationParameters
+
 	pendingRedemptionRequestsMutex sync.Mutex
 	pendingRedemptionRequests      map[[32]byte]*RedemptionRequest
 
@@ -100,8 +107,19 @@ type localChain struct {
 	eligibleStakesMutex sync.Mutex
 	eligibleStakes      map[chain.Address]*big.Int
 
+	walletParametersMutex sync.Mutex
+	walletParameters      WalletParameters
+
+	latestBlockTimestampMutex sync.Mutex
+	latestBlockTimestamp      time.Time
+
 	blockCounter       chain.BlockCounter
 	operatorPrivateKey *operator.PrivateKey
+
+	reservation                            *Reservation
+	reservationAction                      *ReservationAction
+	validateReservationAnchorProposalErr   error
+	validateReservationReanchorProposalErr error
 }
 
 func (lc *localChain) BlockCounter() (chain.BlockCounter, error) {
@@ -802,6 +820,15 @@ func (lc *localChain) GetDepositRequest(
 	return request, true, nil
 }
 
+func (lc *localChain) BuildDepositKey(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) *big.Int {
+	depositKeyBytes := buildDepositRequestKey(fundingTxHash, fundingOutputIndex)
+
+	return new(big.Int).SetBytes(depositKeyBytes[:])
+}
+
 func (lc *localChain) setDepositRequest(
 	fundingTxHash bitcoin.Hash,
 	fundingOutputIndex uint32,
@@ -950,17 +977,32 @@ func (lc *localChain) operatorAddress() (chain.Address, error) {
 	return lc.Signing().PublicKeyToAddress(operatorPublicKey)
 }
 
-func (lc *localChain) GetWalletParameters() (
-	creationPeriod uint32,
-	creationMinBtcBalance uint64,
-	creationMaxBtcBalance uint64,
-	closureMinBtcBalance uint64,
-	maxAge uint32,
-	maxBtcTransfer uint64,
-	closingPeriod uint32,
-	err error,
-) {
-	panic("unsupported")
+func (lc *localChain) GetWalletParameters() (WalletParameters, error) {
+	lc.walletParametersMutex.Lock()
+	defer lc.walletParametersMutex.Unlock()
+
+	return lc.walletParameters, nil
+}
+
+func (lc *localChain) SetWalletParameters(parameters WalletParameters) {
+	lc.walletParametersMutex.Lock()
+	defer lc.walletParametersMutex.Unlock()
+
+	lc.walletParameters = parameters
+}
+
+func (lc *localChain) GetLatestBlockTimestamp() (time.Time, error) {
+	lc.latestBlockTimestampMutex.Lock()
+	defer lc.latestBlockTimestampMutex.Unlock()
+
+	return lc.latestBlockTimestamp, nil
+}
+
+func (lc *localChain) SetLatestBlockTimestamp(timestamp time.Time) {
+	lc.latestBlockTimestampMutex.Lock()
+	defer lc.latestBlockTimestampMutex.Unlock()
+
+	lc.latestBlockTimestamp = timestamp
 }
 
 func (lc *localChain) ValidateDepositSweepProposal(
@@ -1436,6 +1478,7 @@ func ConnectWithKey(
 		eligibleStakes:                           make(map[chain.Address]*big.Int),
 		blockCounter:                             blockCounter,
 		operatorPrivateKey:                       operatorPrivateKey,
+		latestBlockTimestamp:                     time.Now(),
 	}
 
 	return localChain
@@ -1449,4 +1492,258 @@ func generateHandlerID() int {
 	// #nosec G404 (insecure random number source (rand))
 	// Local chain implementation doesn't require secure randomness.
 	return rand.Int()
+}
+
+// GetReservation returns the reservation previously installed via
+// setReservation. Panics if never set, matching this fake chain's
+// convention for exercising an unconfigured dependency.
+func (lc *localChain) GetReservation(
+	reservationKey *big.Int,
+) (*Reservation, error) {
+	if lc.reservation != nil {
+		return lc.reservation, nil
+	}
+	panic("unsupported")
+}
+
+// setReservation installs the reservation GetReservation returns.
+func (lc *localChain) setReservation(reservation *Reservation) {
+	lc.reservation = reservation
+}
+
+// GetReservationAction returns the reservation action previously installed
+// via setReservationAction. Panics if never set, matching this fake
+// chain's convention for exercising an unconfigured dependency.
+func (lc *localChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*ReservationAction, error) {
+	if lc.reservationAction != nil {
+		return lc.reservationAction, nil
+	}
+	panic("unsupported")
+}
+
+// setReservationAction installs the action GetReservationAction returns.
+func (lc *localChain) setReservationAction(action *ReservationAction) {
+	lc.reservationAction = action
+}
+
+// ReservationParameters returns the value installed via
+// setReservationParameters, or an error by default (mirroring a
+// pre-upgrade Bridge that doesn't yet expose reservation parameters at
+// all) so tests that never touch reservations - e.g. the full deposit
+// sweep scenario suite - degrade to the normal-sweep path unaffected.
+func (lc *localChain) ReservationParameters() (*ReservationParameters, error) {
+	lc.reservationParamsMutex.Lock()
+	defer lc.reservationParamsMutex.Unlock()
+
+	if lc.reservationParams == nil {
+		return nil, fmt.Errorf("reservation parameters not set")
+	}
+	return lc.reservationParams, nil
+}
+
+// setReservationParameters installs the value ReservationParameters
+// returns.
+func (lc *localChain) setReservationParameters(params *ReservationParameters) {
+	lc.reservationParamsMutex.Lock()
+	defer lc.reservationParamsMutex.Unlock()
+
+	lc.reservationParams = params
+}
+
+// ValidateReservationAnchorProposal returns the error previously installed
+// via setValidateReservationAnchorProposalErr, or nil (accept) by default.
+func (lc *localChain) ValidateReservationAnchorProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *ReservationAnchorProposal,
+	depositExtraInfo struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.validateReservationAnchorProposalErr
+}
+
+// setValidateReservationAnchorProposalErr installs the error
+// ValidateReservationAnchorProposal returns.
+func (lc *localChain) setValidateReservationAnchorProposalErr(err error) {
+	lc.validateReservationAnchorProposalErr = err
+}
+
+// ValidateReservationReanchorProposal returns the error previously
+// installed via setValidateReservationReanchorProposalErr, or nil (accept)
+// by default.
+func (lc *localChain) ValidateReservationReanchorProposal(
+	sourceWalletPublicKeyHash [20]byte,
+	proposal *ReservationReanchorProposal,
+) error {
+	return lc.validateReservationReanchorProposalErr
+}
+
+// setValidateReservationReanchorProposalErr installs the error
+// ValidateReservationReanchorProposal returns.
+func (lc *localChain) setValidateReservationReanchorProposalErr(err error) {
+	lc.validateReservationReanchorProposalErr = err
+}
+
+func (lc *localChain) RequestReservationReanchor(
+	reservationKey *big.Int,
+	targetWalletPublicKeyHash [20]byte,
+	walletMembersIDs []uint32,
+	walletMemberIndex uint32,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) SubmitReservationAcceptanceProof(
+	txInfo *BitcoinTxInfo,
+	proof *BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) SubmitReservationReanchorProof(
+	txInfo *BitcoinTxInfo,
+	proof *BitcoinTxProof,
+	reservationKey *big.Int,
+	requestNonce uint64,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationActionTimeout(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
+func (lc *localChain) NotifyReservationAcceptanceTimedOut(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyStaleReservedDeposit(
+	depositKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) NotifyReservationStranded(
+	reservationKey *big.Int,
+) error {
+	panic("unsupported")
+}
+
+func (lc *localChain) WalletTerminationCause(
+	walletPublicKeyHash [20]byte,
+) (WalletTerminationCause, error) {
+	panic("unsupported")
+}
+
+func (lc *localChain) ReservationCaps() (
+	uint64,
+	uint64,
+	error,
+) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsAmount(
+	walletPublicKeyHash [20]byte,
+) (uint64, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservationsCount(
+	walletPublicKeyHash [20]byte,
+) (uint32, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) WalletReservations(
+	walletPublicKeyHash [20]byte,
+) ([]*big.Int, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ReservedDepositWallet(
+	depositKey *big.Int,
+) ([20]byte, error) {
+	return [20]byte{}, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) ActiveReservationsCount() (uint32, uint32, error) {
+	return 0, 0, fmt.Errorf("unsupported")
+}
+
+// ReservationVaultFeeDebtSat is not exercised by this fake's tests; it
+// reports an unsupported error mirroring the sibling reservation view
+// methods on this fake.
+func (lc *localChain) ReservationVaultFeeDebtSat(
+	reservationVault chain.Address,
+) (uint64, error) {
+	return 0, fmt.Errorf("unsupported")
+}
+
+// ReservationVaultFeeReserveTbtcBaseUnits is not exercised by this
+// fake's tests; it reports an unsupported error mirroring the sibling
+// reservation view methods on this fake.
+func (lc *localChain) ReservationVaultFeeReserveTbtcBaseUnits(
+	reservationVault chain.Address,
+) (*big.Int, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+// IsReservedDeposit reports whether depositKey was previously marked
+// reserved via setReservedDeposit. Defaults to false (not reserved) for
+// any key that was never marked, matching production's "unmatched vault
+// address means not reserved" semantics and letting the many existing
+// deposit-sweep tests that never touch reservations proceed unaffected.
+func (lc *localChain) IsReservedDeposit(
+	depositKey *big.Int,
+) (bool, error) {
+	lc.reservedDepositsMutex.Lock()
+	defer lc.reservedDepositsMutex.Unlock()
+
+	return lc.reservedDeposits[depositKey.String()], nil
+}
+
+// setReservedDeposit marks depositKey as reserved (or not) for
+// IsReservedDeposit to report.
+func (lc *localChain) setReservedDeposit(depositKey *big.Int, reserved bool) {
+	lc.reservedDepositsMutex.Lock()
+	defer lc.reservedDepositsMutex.Unlock()
+
+	if lc.reservedDeposits == nil {
+		lc.reservedDeposits = make(map[string]bool)
+	}
+	lc.reservedDeposits[depositKey.String()] = reserved
+}
+
+func (lc *localChain) OnReservationAcceptanceRequested(
+	handler func(event *ReservationAcceptanceRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationAcceptanceRequestedEvents(
+	filter *ReservationAcceptanceRequestedEventFilter,
+) ([]*ReservationAcceptanceRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+func (lc *localChain) OnReservationReanchorRequested(
+	handler func(event *ReservationReanchorRequestedEvent),
+) subscription.EventSubscription {
+	return subscription.NewEventSubscription(func() {})
+}
+
+func (lc *localChain) PastReservationReanchorRequestedEvents(
+	filter *ReservationReanchorRequestedEventFilter,
+) ([]*ReservationReanchorRequestedEvent, error) {
+	return nil, fmt.Errorf("unsupported")
 }

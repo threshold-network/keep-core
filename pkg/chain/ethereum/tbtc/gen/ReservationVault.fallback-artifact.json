@@ -1,0 +1,31 @@
+{
+  "address": "0x0000000000000000000000000000000000000000",
+  "abi": [
+    {
+      "inputs": [],
+      "name": "inKindFeeDebtSat",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "tbtcToken",
+      "outputs": [
+        {
+          "internalType": "contract TBTC",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

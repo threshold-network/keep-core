@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg/gen/pb"
 )
@@ -192,8 +193,10 @@ func marshalPublicKeyMap(
 }
 
 // unmarshalPublicKeyMap converts the wire-format map to an internal byte map,
-// validating member indices but deferring EC point parsing to use-time so that
-// only the one key per message actually needed for ECDH is ever parsed.
+// validating member indices and each ephemeral public key value's shape as a
+// 33-byte compressed secp256k1 point, parsed with the same curve the
+// protocol uses for ECDH. A single malformed entry fails the whole map so
+// that the message is dropped uniformly by every receiver.
 func unmarshalPublicKeyMap(
 	publicKeys map[uint32][]byte,
 ) (map[group.MemberIndex][]byte, error) {
@@ -203,6 +206,24 @@ func unmarshalPublicKeyMap(
 		if err != nil {
 			return nil, err
 		}
+
+		if len(publicKeyBytes) != 33 {
+			return nil, fmt.Errorf(
+				"ephemeral public key for member [%v] is not a 33-byte "+
+					"compressed point: got %v bytes",
+				memberID,
+				len(publicKeyBytes),
+			)
+		}
+
+		if _, err := ephemeral.UnmarshalPublicKey(publicKeyBytes); err != nil {
+			return nil, fmt.Errorf(
+				"could not unmarshal ephemeral public key for member [%v]: %v",
+				memberID,
+				err,
+			)
+		}
+
 		unmarshalled[memberIndex] = publicKeyBytes
 	}
 	return unmarshalled, nil

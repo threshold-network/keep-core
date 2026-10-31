@@ -1,0 +1,186 @@
+// G5-F1 second check: prove (or refute) that with EnablePprof=false the
+// /debug/pprof/* endpoints are live on the clientinfo port, and measure what
+// a remote caller can actually pull off them while secret key material is
+// held in memory.
+//
+// This test lives in the clientinfo package so that the package's named
+// `net/http/pprof` import (clientinfo.go line 6) is in effect exactly as it
+// is in production. The pprof package's init() registers /debug/pprof/* on
+// http.DefaultServeMux unconditionally; keep-common's EnableServer serves
+// that mux with a nil Handler. Initialize(cfg) with EnablePprof=false makes
+// NO application-side registration, yet the endpoints are still reachable
+// because init() already ran. The test starts the real EnableServer on a
+// fixed port, then fetches each endpoint and searches the responses for the
+// secret bytes (hex and raw).
+//
+// PPROF_DUMP=<dir> writes each raw response body to <dir> for inspection.
+package clientinfo
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/btcsuite/btcd/btcec"
+)
+
+// pprofSecondCheckSecrets holds live key material for the duration of the
+// second-check test so the heap profile has real secrets to look for.
+var pprofSecondCheckSecrets []byte
+
+// TestPprofSecondCheck verifies the G5-F1 exposure end to end.
+func TestPprofSecondCheck(t *testing.T) {
+	// Hold secret material in memory for the duration of the test so any
+	// heap/goroutine dump is checked against bytes that actually exist in
+	// this process (an ephemeral private key, a TSS key share, and a
+	// symmetric session key), mirroring what a node mid-DKG/signing holds.
+	priv, err := btcec.NewPrivateKey(btcec.S256())
+	if err != nil {
+		t.Fatalf("new ephemeral private key: %v", err)
+	}
+	ephHex := hex.EncodeToString(priv.Serialize())
+	// A stand-in TSS key share: 32 bytes.
+	tssShare := make([]byte, 32)
+	for i := range tssShare {
+		tssShare[i] = byte(i * 7)
+	}
+	tssShareHex := hex.EncodeToString(tssShare)
+	symKey := []byte("reserve-anchor-symkey-0000000000000000")
+	// Keep all three reachable process-wide so a live heap profile can see
+	// the allocation sites (mirror of what a node mid-DKG/signing holds).
+	pprofSecondCheckSecrets = bytes.Join(
+		[][]byte{[]byte(ephHex), []byte(tssShareHex), symKey},
+		[]byte("|"),
+	)
+
+	// Use a fixed high port to avoid clashing with a running node.
+	port := 39117
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Port:        port,
+		EnablePprof: false, // the "off" path: no application-side registration
+	}
+	if _, ok := Initialize(ctx, cfg); !ok {
+		t.Fatalf("Initialize did not report the clientinfo server enabled")
+	}
+
+	// Give EnableServer's ListenAndServe goroutine a beat.
+	deadline := time.Now().Add(5 * time.Second)
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	var probe *http.Response
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(base + "/metrics")
+		if err == nil {
+			probe = resp
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if probe == nil {
+		t.Fatalf("clientinfo /metrics never came up on %s", base)
+	}
+	defer probe.Body.Close()
+
+	// Endpoints a remote caller can reach with EnablePprof=false.
+	// Long endpoints (profile/trace) use short seconds so the test is fast.
+	paths := []string{
+		"/debug/pprof/",
+		"/debug/pprof/cmdline",
+		"/debug/pprof/symbol?lookup=main",
+		"/debug/pprof/goroutine?debug=1",
+		"/debug/pprof/goroutine?debug=2",
+		"/debug/pprof/heap",
+		"/debug/pprof/heap?debug=1",
+		"/debug/pprof/allocs",
+		"/debug/pprof/block",
+		"/debug/pprof/mutex",
+		"/debug/pprof/profile?seconds=1",
+		"/debug/pprof/trace?seconds=1",
+	}
+
+	secretBlobs := map[string]string{
+		"ephemeralPrivKey(hex)": ephHex,
+		"tssShare(hex)":         tssShareHex,
+		"symKey(raw)":           string(symKey),
+	}
+
+	dumpDir := os.Getenv("PPROF_DUMP")
+
+	for _, p := range paths {
+		resp, err := http.Get(base + p)
+		if err != nil {
+			t.Errorf("GET %s: %v", p, err)
+			continue
+		}
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		resp.Body.Close()
+		body := buf.Bytes()
+		leaks := ""
+		for name, blob := range secretBlobs {
+			if len(blob) == 0 {
+				continue
+			}
+			if bytes.Contains(body, []byte(blob)) {
+				leaks += fmt.Sprintf(" [LEAK:%s]", name)
+			}
+		}
+		t.Logf("GET %-40s -> %d, body=%d bytes, secrets-exposed=%s",
+			p, resp.StatusCode, len(body), maybeStr(leaks))
+		if dumpDir != "" {
+			_ = os.MkdirAll(dumpDir, 0o755)
+			safe := bytes.ReplaceAll([]byte(p), []byte("?"), []byte("_"))
+			safe = bytes.ReplaceAll(safe, []byte("&"), []byte("_"))
+			safe = bytes.ReplaceAll(safe, []byte("/"), []byte("_"))
+			_ = os.WriteFile(
+				filepath.Join(dumpDir, "resp_"+string(safe)+".bin"),
+				body, 0o644,
+			)
+			_ = os.WriteFile(
+				filepath.Join(dumpDir, "resp_"+string(safe)+".status"),
+				[]byte(strconv.Itoa(resp.StatusCode)), 0o644,
+			)
+		}
+	}
+
+	// Cost measurement: a remote caller supplies ?seconds=N and nothing in
+	// Initialize/EnableServer rate-limits, deduplicates, or caps concurrent
+	// calls to these two handlers, each of which blocks a server goroutine
+	// for the full requested duration.
+	for _, cost := range []string{
+		"/debug/pprof/profile?seconds=5",
+		"/debug/pprof/trace?seconds=2",
+	} {
+		start := time.Now()
+		resp, err := http.Get(base + cost)
+		if err != nil {
+			t.Errorf("GET %s: %v", cost, err)
+			continue
+		}
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		resp.Body.Close()
+		t.Logf(
+			"GET %-40s -> %d, body=%d bytes, elapsed=%v (caller-chosen "+
+				"duration; no rate limit, dedup, or concurrency cap)",
+			cost, resp.StatusCode, buf.Len(), time.Since(start),
+		)
+	}
+}
+
+func maybeStr(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
+}

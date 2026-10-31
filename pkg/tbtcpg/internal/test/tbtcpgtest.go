@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,6 +22,7 @@ const (
 	findDepositsToSweepTestDataFilePrefix    = "find_deposits"
 	proposeDepositsSweepTestDataFilePrefix   = "propose_sweep"
 	findPendingRedemptionsTestDataFilePrefix = "find_pending_redemptions"
+	reservationReanchorTestDataFilePrefix    = "reservation_reanchor"
 )
 
 // Deposit holds the deposit data in the given test scenario.
@@ -141,6 +143,70 @@ func LoadFindPendingRedemptionsTestScenario() (
 ) {
 	return loadTestScenarios[*FindPendingRedemptionsTestScenario](
 		findPendingRedemptionsTestDataFilePrefix,
+	)
+}
+
+// ReservationReanchorData holds the per-reservation data in a reservation
+// re-anchor test scenario.
+type ReservationReanchorData struct {
+	ReservationKey      *big.Int
+	WalletPublicKeyHash [20]byte
+	AnchorTxHash        string
+	AnchorTxOutputIndex uint32
+	AnchorValue         int64
+	State               tbtc.ReservationState
+	RequestNonce        uint64
+	HasPendingAction    bool
+	PendingActionState  tbtc.ReservationActionState
+	// TimeoutAt, when non-zero, sets the seeded pending action's
+	// TimeoutAt (used by the safety-margin gate). When zero the driver
+	// defaults to a far-future value so scenarios not exercising the
+	// gate do not have to pin a concrete epoch.
+	TimeoutAt uint32
+}
+
+// ReservationReanchorTestScenario represents a test scenario of preparing a
+// reservation re-anchor proposal.
+type ReservationReanchorTestScenario struct {
+	Title string
+
+	SourceWalletPublicKeyHash     [20]byte
+	SourceWalletState             tbtc.WalletState
+	SourceWalletMainUtxoHashBytes [32]byte
+	SourceWalletMainUtxoValue     int64
+	SourceWalletMainUtxoTxHash    string
+	SourceWalletMainUtxoTxIndex   uint32
+
+	TargetWalletPublicKeyHash [20]byte
+
+	LiveWalletsCount uint32
+
+	MovingFundsDustThreshold uint64
+	ReservationTxMaxFee      uint64
+	// MaxReservationsPerWallet governs the count headroom
+	// Reservation.sol's requestReservationReanchor reserves for the
+	// re-anchor target. The driver falls back to a sensible default (5)
+	// when this is zero so existing scenarios that do not pin it still
+	// describe a target wallet with room for one re-anchor; scenarios
+	// that test the cap itself can set this explicitly.
+	MaxReservationsPerWallet uint32
+	EstimateSatPerVByteFee   int64
+	ReanchorTxFee            int64
+
+	Reservations []*ReservationReanchorData
+
+	ExpectedProposal *tbtc.ReservationReanchorProposal
+	ExpectedErr      error
+}
+
+// LoadReservationReanchorTestScenario loads all scenarios related to
+// reservation re-anchor proposals.
+func LoadReservationReanchorTestScenario() (
+	[]*ReservationReanchorTestScenario,
+	error,
+) {
+	return loadTestScenarios[*ReservationReanchorTestScenario](
+		reservationReanchorTestDataFilePrefix,
 	)
 }
 

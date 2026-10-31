@@ -1,0 +1,122 @@
+{
+ "R01": {
+  "name": "R01 floor: 2*txMaxFee -> 1*txMaxFee",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 122
+ },
+ "R03": {
+  "name": "R03 reanchor floor: > -> >=",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 137
+ },
+ "R05": {
+  "name": "R05 skip: isPrivileged only (Live source also skips)",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 140
+ },
+ "R07": {
+  "name": "R07 skip: || instead of &&",
+  "verdict": "KILLED",
+  "note": "5 failing",
+  "seconds": 141
+ },
+ "R09": {
+  "name": "R09 skip: amount cap never skipped",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 159
+ },
+ "R11": {
+  "name": "R11 amount cap: <= -> <",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 173
+ },
+ "R13": {
+  "name": "R13 privilege: owner not privileged",
+  "verdict": "KILLED",
+  "note": "4 failing",
+  "seconds": 160
+ },
+ "R15": {
+  "name": "R15 privilege: member not privileged",
+  "verdict": "KILLED",
+  "note": "3 failing",
+  "seconds": 161
+ },
+ "R17": {
+  "name": "R17 Live source: any caller may rotate",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 210
+ },
+ "R19": {
+  "name": "R19 source state: Closing refused",
+  "verdict": "KILLED",
+  "note": "3 failing",
+  "seconds": 325
+ },
+ "R21": {
+  "name": "R21 reserve: ignores per-wallet cap",
+  "verdict": "KILLED",
+  "note": "5 failing",
+  "seconds": 293
+ },
+ "R23": {
+  "name": "R23 reserve: does not subtract the reserve",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 278
+ },
+ "R25": {
+  "name": "R25 caps: reserve not stored",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 296
+ },
+ "R27": {
+  "name": "R27 custody add: amount not added",
+  "verdict": "KILLED",
+  "note": "7 failing",
+  "seconds": 309
+ },
+ "R29": {
+  "name": "R29 custody remove: amount not reduced",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 448
+ },
+ "P02": {
+  "name": "P02 late/first settle: target custody not added",
+  "verdict": "KILLED",
+  "note": "6 failing",
+  "seconds": 335
+ },
+ "P04": {
+  "name": "P04 reanchor settle: new custody not added",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 279
+ },
+ "P06": {
+  "name": "P06 settle: Terminated wallet not stranded",
+  "verdict": "KILLED",
+  "note": "3 failing",
+  "seconds": 219
+ },
+ "W01": {
+  "name": "W01 wrapper: no proof validation",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 246
+ },
+ "W03": {
+  "name": "W03 wrapper: key is the bare hash",
+  "verdict": "KILLED",
+  "note": "16 failing",
+  "seconds": 147
+ }
+}

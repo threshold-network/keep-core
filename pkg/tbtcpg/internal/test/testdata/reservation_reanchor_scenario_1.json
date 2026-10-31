@@ -1,0 +1,29 @@
+{
+  "Title": "M-27: Live wallet without main UTXO is not eligible for re-anchor (privileged-caller gate removed)",
+  "SourceWalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+  "SourceWalletState": "Live",
+  "SourceWalletMainUtxoHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "SourceWalletMainUtxoValue": 0,
+  "SourceWalletMainUtxoTxHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "SourceWalletMainUtxoTxIndex": 0,
+  "TargetWalletPublicKeyHash": "0x92a6ec889a8fa34f731e639edede4c75e184307c",
+  "LiveWalletsCount": 4,
+  "MovingFundsDustThreshold": 1000000,
+  "ReservationTxMaxFee": 100000,
+  "EstimateSatPerVByteFee": 1,
+  "ReanchorTxFee": 0,
+  "Reservations": [
+    {
+      "ReservationKey": "0000000000000000000000000000000000000000000000000000000000bbbb02",
+      "WalletPublicKeyHash": "0xffb3f7538bfa98a511495dd96027cfbd57baf2fa",
+      "AnchorTxHash": "6666666666666666666666666666666666666666666666666666666666666666",
+      "AnchorTxOutputIndex": 1,
+      "AnchorValue": 200000,
+      "State": "Active",
+      "RequestNonce": 5,
+      "HasPendingAction": false,
+      "PendingActionState": "Unknown"
+    }
+  ],
+  "ExpectedProposal": null
+}

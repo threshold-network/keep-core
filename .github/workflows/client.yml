@@ -130,6 +130,185 @@ jobs:
         run: |
           cd third_party/btcsuite/btcec && go test ./...
 
+  reservation-router-vendored-fallback-verify:
+    # Companion gate to btcec-vendor-byte-identity above: the tbtc module's
+    # ReservationRouter ABI generation falls back to a vendored, committed
+    # copy of the ABI (pkg/chain/ethereum/tbtc/gen/ReservationRouter.fallback-artifact.json,
+    # plus the Bridge/WalletProposalValidator reservation-methods patch
+    # fragments) whenever @keep-network/tbtc-v2 hasn't yet published the
+    # real reservation contracts under the `development` npm tag (see
+    # threshold-network/keep-core#4281). Those vendored copies can silently
+    # drift from the ABI compiled from the pinned upstream tbtc-v2 commit
+    # (TBTC_V2_REF below) with no build failure, and the same drift can
+    # accumulate in the committed Go bindings themselves. This job
+    # compiles the real tbtc-v2 Solidity contracts at that commit and
+    # compares both the vendored copies and the ABI embedded in the
+    # committed generated Go bindings against the compiled artifacts,
+    # failing loudly on any divergence. The comparisons are whole-function/
+    # whole-event entries (name, inputs including struct components,
+    # outputs, stateMutability) canonicalized with jq -S, so they catch
+    # missing/renamed functions, added/removed/reordered parameters, and
+    # type changes alike, on each side:
+    #   - the full canonicalized .abi array of
+    #     ReservationRouter.fallback-artifact.json against the compiled
+    #     ReservationRouter artifact,
+    #   - the isReservedDeposit entry of
+    #     Bridge.reservation-methods-fallback.json against the compiled
+    #     Bridge artifact,
+    #   - the validateReservationAnchorProposal /
+    #     validateReservationReanchorProposal entries of
+    #     WalletProposalValidator.reservation-methods-fallback.json
+    #     against the compiled WalletProposalValidator artifact,
+    #   - the inKindFeeDebtSat and tbtcToken entries of
+    #     ReservationVault.fallback-artifact.json against the compiled
+    #     ReservationVault artifact,
+    # and, extracted from the <Name>MetaData.ABI string in
+    # pkg/chain/ethereum/tbtc/gen/abi/<Name>.go with
+    # `go run ./checkabi`,
+    #   - the full canonicalized ABI of the committed ReservationRouter
+    #     binding against the compiled ReservationRouter artifact,
+    #   - the isReservedDeposit entry of the committed Bridge binding
+    #     against the compiled Bridge artifact,
+    #   - the validateReservationAnchorProposal /
+    #     validateReservationReanchorProposal entries of the committed
+    #     WalletProposalValidator binding against the compiled
+    #     WalletProposalValidator artifact,
+    #   - the inKindFeeDebtSat and tbtcToken entries of the committed
+    #     ReservationVault binding against the compiled ReservationVault
+    #     artifact.
+    # It also checks the real validator that the in-memory EVM harness
+    # (pkg/chain/ethereum/tbtc_validator_harness_test.go) deploys:
+    # pkg/chain/ethereum/testdata/walletproposalvalidator/verify.sh
+    # compares the vendored WalletProposalValidator.json against the
+    # compiled artifact - the ABI exactly, and the creation and deployed
+    # bytecode with solc's trailing CBOR metadata removed (the metadata
+    # hashes the compiler input, which the unfrozen yarn install below
+    # can change without changing the code). An ABI-only diff cannot
+    # catch a validator whose logic changed under an identical ABI.
+    # Cheap (checkout + yarn install + hardhat compile + a go-run ABI
+    # extraction + jq diffs) and
+    # runs whenever the Client workflow runs, without an additional
+    # job-level path gate, mirroring btcec-vendor-byte-identity's
+    # rationale for not gating by path.
+    #
+    # tbtc-v2 ref: pinned to commit d1bf5bc281 on the `reservations-upgrade`
+    # integration branch, where the reservation contracts live (they are
+    # not on tbtc-v2's `main`). A full commit hash is pinned rather than
+    # a branch name because a branch can move after this repo's bindings,
+    # vendored fragments, and harness validator are produced, and the
+    # checks would then fail without any visible cause. The vendored
+    # harness validator is built from this same commit (see the
+    # provenance note in testdata/walletproposalvalidator/regenerate.sh),
+    # so bump both together.
+    #
+    # The delta from the previous pin (4c98e6b82) is one contract change:
+    # a hard upper bound on the reservation dissolution delay, enforced in
+    # `Reservation.updateReservationParameters`. That check lives in the
+    # `Reservation` library, which `Bridge`, `WalletProposalValidator` and
+    # `ReservationRouter` all import, so it does not change any of the
+    # four artifacts this job stages - their ABIs are byte-identical to
+    # the ones at 4c98e6b82. `BridgeGovernance` gains two functions at
+    # this commit, but it is not one of the artifacts this job stages and
+    # not one of the module's `required_contracts`, so the gate never
+    # reads it.
+    runs-on: ubuntu-latest
+    env:
+      TBTC_V2_REF: d1bf5bc281992885970f7c232cd9a66b7a6b5127
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout tbtc-v2 (${{ env.TBTC_V2_REF }})
+        uses: actions/checkout@v4
+        with:
+          repository: threshold-network/tbtc-v2
+          ref: ${{ env.TBTC_V2_REF }}
+          path: tbtc-v2-upstream
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+
+      - name: Compile tbtc-v2 Solidity contracts
+        working-directory: tbtc-v2-upstream/solidity
+        run: |
+          # Some transitive dependencies (e.g. umpirsky/country-list, pulled
+          # in via @celo/contractkit) are pinned to git:// GitHub URLs. The
+          # unencrypted git:// protocol (port 9418) is unreliable/blocked on
+          # GitHub Actions runners' network egress and reliably times out,
+          # failing yarn install outright. Rewrite git:// to https:// for
+          # any github.com dependency resolution so yarn falls back to the
+          # protocol every other step in this job already uses successfully.
+          #
+          # Not --frozen-lockfile: the https rewrite above changes how yarn
+          # resolves that git dependency vs. the exact hash pinned in
+          # tbtc-v2's own yarn.lock, which --frozen-lockfile then rejects
+          # as drift even though no real dependency version changed. This
+          # checkout is a scratch clone of the upstream repo used only to
+          # compile and diff the real ABI below - never committed back -
+          # so an unpinned, job-local lockfile resolution is safe here.
+          #
+          # tbtc-v2 has migrated solidity/ to yarn 4 (berry):
+          # solidity/package.json declares
+          # "packageManager": "yarn@4.12.0". The runner image ships the
+          # classic global yarn 1.22.22, which refuses to run against a
+          # project naming a different packageManager ("This project's
+          # package.json defines "packageManager": "yarn@4.12.0". However
+          # the current global version of Yarn is 1.22.22.") - so a bare
+          # `yarn install` fails before touching a single dependency.
+          # corepack ships with Node and dispatches to the version named
+          # in packageManager; enabling it and pinning it to that declared
+          # version (as tbtc-v2's own .github/workflows/contracts.yml
+          # does) makes `yarn` below resolve to yarn 4.12.0.
+          # COREPACK_ENABLE_DOWNLOAD_PROMPT=0 keeps the first-run download
+          # of that version non-interactive.
+          git config --global url."https://github.com/".insteadOf "git://github.com/"
+          export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+          corepack enable
+          corepack prepare yarn@4.12.0 --activate
+          yarn install
+          yarn build
+
+      - name: Verify vendored reservation fallbacks and committed Go bindings match the real compiled ABIs
+        run: |
+          set -e
+          BASE_BRIDGE="tbtc-v2-upstream/solidity/build/contracts/bridge"
+          BASE_VAULT="tbtc-v2-upstream/solidity/build/contracts/vault"
+          for artifact in \
+            "ReservationRouter.sol/ReservationRouter.json" \
+            "Bridge.sol/Bridge.json" \
+            "WalletProposalValidator.sol/WalletProposalValidator.json" \
+          ; do
+            if [ ! -f "$BASE_BRIDGE/$artifact" ]; then
+              echo "::error::$BASE_BRIDGE/$artifact was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries it (or its build path moved). Update TBTC_V2_REF above to the commit that does."
+              exit 1
+            fi
+          done
+          if [ ! -f "$BASE_VAULT/ReservationVault.sol/ReservationVault.json" ]; then
+            echo "::error::$BASE_VAULT/ReservationVault.sol/ReservationVault.json was not produced by the tbtc-v2 build - TBTC_V2_REF=${TBTC_V2_REF} likely no longer carries it (or its build path moved). Update TBTC_V2_REF above to the commit that does."
+            exit 1
+          fi
+          mkdir -p "tmp/contracts/development/@keep-network/tbtc-v2/artifacts"
+          cp "$BASE_BRIDGE/ReservationRouter.sol/ReservationRouter.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationRouter.json"
+          cp "$BASE_BRIDGE/Bridge.sol/Bridge.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/Bridge.json"
+          cp "$BASE_BRIDGE/WalletProposalValidator.sol/WalletProposalValidator.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/WalletProposalValidator.json"
+          cp "$BASE_VAULT/ReservationVault.sol/ReservationVault.json" "tmp/contracts/development/@keep-network/tbtc-v2/artifacts/ReservationVault.json"
+          make -C pkg/chain/ethereum/tbtc/gen verify-vendored-fallback
+
+      - name: Verify the harness's vendored WalletProposalValidator matches the compiled validator
+        run: |
+          pkg/chain/ethereum/testdata/walletproposalvalidator/verify.sh \
+            tbtc-v2-upstream/solidity/build/contracts/bridge/WalletProposalValidator.sol/WalletProposalValidator.json \
+            || {
+              echo "::error::pkg/chain/ethereum/testdata/walletproposalvalidator/WalletProposalValidator.json does not match WalletProposalValidator compiled from tbtc-v2 ${TBTC_V2_REF} (see the output above). Regenerate it with regenerate.sh from that build, or align TBTC_V2_REF with its provenance note."
+              exit 1
+            }
+
   electrum-vendor-byte-identity:
     # Enforces the VENDOR.md byte-identity recipe for go-electrum and
     # runs the vendored upstream test suite. Mirrors the btcec-vendor-byte-identity
@@ -428,6 +607,55 @@ jobs:
           path: coverage/coverage.out
           if-no-files-found: error
 
+  # The reservation packages under the race detector. The sharded suite
+  # above runs `go test` without `-race`, so nothing in the public tree
+  # ever measured the reservation concurrency; the coverage file's
+  # `keep-core.go.race` freeze bar (zero data races in these three
+  # packages) therefore had no job behind it and could only borrow a
+  # measurement from an out-of-band assessment.
+  #
+  # Scoped to the three packages the bar names rather than a `-race` flag
+  # on the whole sharded suite: the race detector multiplies the suite's
+  # runtime, the bar's scope is these three packages, and the rest of the
+  # module is not covered by the bar.
+  #
+  # The same `go-build-env` image the sharded suite uses, so the toolchain
+  # and the module cache are identical to what the coverage run measured.
+  client-go-race:
+    needs: [client-detect-changes, client-build-image]
+    if: |
+      github.event_name != 'pull_request'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download Docker Build Image
+        uses: actions/download-artifact@v4
+        with:
+          name: go-build-env-image
+          path: ${{ runner.temp }}
+
+      - name: Load Docker Build Image
+        run: |
+          docker load --input ${{ runner.temp }}/go-build-env-image.tar
+
+      # `-count=1` defeats the test cache: the race detector's result
+      # must come from a run at this commit, not from a cached one.
+      # `-timeout 30m` covers the slowest of the three packages
+      # (pkg/tbtc takes about 5 minutes under `-race`).
+      - name: Run the reservation packages with the race detector
+        run: |
+          set -euo pipefail
+          docker run \
+            --workdir /go/src/github.com/keep-network/keep-core \
+            go-build-env \
+            sh -c 'go test -race -count=1 -timeout 30m \
+              ./pkg/tbtcpg/... \
+              ./pkg/maintainer/spv/... \
+              ./pkg/tbtc/...'
+
   # R2: aggregator behind the required `client-build-test-publish`
   # check context. Fails whenever either test shard fails (via
   # `needs`), or when the merged coverage gate below fails - the 14%
@@ -683,12 +911,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: securego/gosec@master
         with:
+          # third_party/ holds vendored upstream modules (btcsuite/btcec,
+          # go-electrum) whose provenance and every local patch are recorded
+          # in their own VENDOR.md and enforced by btcec-vendor-byte-identity
+          # and electrum-vendor-byte-identity. They are local `replace`
+          # targets, so newer gosec images analyse them as part of ./... and
+          # report upstream's own conversions as if they were this repo's;
+          # scanning them here adds nothing the byte-identity jobs do not
+          # already guarantee.
           args: |
             -exclude=G118
             -exclude-dir=pkg/chain/ethereum/beacon/gen
             -exclude-dir=pkg/chain/ethereum/ecdsa/gen
             -exclude-dir=pkg/chain/ethereum/threshold/gen
             -exclude-dir=pkg/chain/ethereum/tbtc/gen
+            -exclude-dir=third_party
             ./...
 
   client-format:

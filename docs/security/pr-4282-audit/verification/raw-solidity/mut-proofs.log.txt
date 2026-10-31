@@ -1,0 +1,207 @@
+INFO:Slither-Mutate:Starting mutation campaign in contracts/bridge/ReservationProofs.sol
+INFO:Slither-Mutate:Preparing to mutate contracts:
+- ReservationProofs
+INFO:Slither-Mutate:Timing tests..
+INFO:Slither-Mutate:Test suite passes in 42 seconds, commencing mutation campaign with a timeout of 240 seconds
+
+INFO:Slither-Mutate:Mutating contract ReservationProofs
+INFO:Slither-Mutate:Targeting functions: ['parseSingleOutput']
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 983.39ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/bridge/ReservationProofs.sol:888:13:
+stderr:     |
+stderr: 888 |             outputsCount == 1,
+stderr:     |             ^^^^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 886: '(, uint256 outputsCount) = outputVector.parseVarInt()' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.05s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/bridge/ReservationProofs.sol:888:13:
+stderr:     |
+stderr: 888 |             outputsCount == 1,
+stderr:     |             ^^^^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 886: 'uint256 outputsCount' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 892: 'output = outputVector.extractOutputAtIndex(0)' ==> 'revert()' --> CAUGHT
+INFO:Slither-Mutate:Mutator RR found 2 caught revert mutants (out of 2 that compile)
+INFO:Slither-Mutate:Mutator AOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Mutator LOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 217.50ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/bridge/ReservationProofs.sol:887:9:
+stderr:     |
+stderr: 887 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'require(
+            outputsCount < 1,
+            "Reservation transaction must have a single output"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 206.59ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/bridge/ReservationProofs.sol:887:9:
+stderr:     |
+stderr: 887 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'require(
+            outputsCount > 1,
+            "Reservation transaction must have a single output"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 197.69ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/bridge/ReservationProofs.sol:887:9:
+stderr:     |
+stderr: 887 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'require(
+            outputsCount <= 1,
+            "Reservation transaction must have a single output"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 304.37ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/bridge/ReservationProofs.sol:887:9:
+stderr:     |
+stderr: 887 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'require(
+            outputsCount >= 1,
+            "Reservation transaction must have a single output"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 62 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 214.44ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/bridge/ReservationProofs.sol:887:9:
+stderr:     |
+stderr: 887 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 887: 'require(
+            outputsCount == 1,
+            "Reservation transaction must have a single output"
+        )' ==> 'require(
+            outputsCount != 1,
+            "Reservation transaction must have a single output"
+        )' --> COMPILATION FAILURE
+INFO:Slither-Mutate:Mutator ROR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Done mutating ReservationProofs.
+INFO:Slither-Mutate:Revert mutants: 2 caught of 2 (100.0% caught)
+INFO:Slither-Mutate:Zero Comment mutants analyzed
+INFO:Slither-Mutate:Zero Tweak mutants analyzed
+
+INFO:Slither-Mutate:Finished mutation testing assessment of 'contracts/bridge/ReservationProofs.sol' in 2 minutes
+
+PROOFS_EXIT=0

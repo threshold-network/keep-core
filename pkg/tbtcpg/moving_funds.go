@@ -121,6 +121,13 @@ func (mft *MovingFundsTask) Run(request *tbtc.CoordinationProposalRequest) (
 		1,
 		true,
 		true,
+		// Reserved deposits are excluded from sweeping (see
+		// findDeposits' reservationsActive doc comment), so once
+		// reservations are active they must also be excluded here:
+		// otherwise a reserved-but-unswept deposit would permanently
+		// block moving-funds proposal generation for this wallet even
+		// though the deposit-sweep path itself will never sweep it.
+		request.ReservationsActive,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -186,7 +193,8 @@ func (mft *MovingFundsTask) Run(request *tbtc.CoordinationProposalRequest) (
 	}
 
 	if !commitmentExists {
-		walletMemberIDs, walletMemberIndex, err := mft.GetWalletMembersInfo(
+		walletMemberIDs, walletMemberIndex, err := GetWalletMembersInfo(
+			mft.chain,
 			request.WalletOperators,
 			request.ExecutingOperator,
 		)
@@ -435,9 +443,14 @@ func (mft *MovingFundsTask) retrieveCommittedTargetWallets(
 }
 
 // GetWalletMembersInfo returns the wallet member IDs based on the provided
-// wallet operator addresses. Additionally, it returns the position of the
-// moving funds task execution operator on the list.
-func (mft *MovingFundsTask) GetWalletMembersInfo(
+// wallet operator addresses, and the position of the task execution operator
+// on that list. The caller must be the operator that will run the chain
+// write: every task that submits a source-wallet member proof
+// (moving funds commitment, reservation re-anchor request) reuses this so
+// the proof is always built from the same operator-address list the
+// coordination request carries.
+func GetWalletMembersInfo(
+	chainAdapter Chain,
 	walletOperators []chain.Address,
 	executingOperator chain.Address,
 ) ([]uint32, uint32, error) {
@@ -466,7 +479,7 @@ func (mft *MovingFundsTask) GetWalletMembersInfo(
 		// Search for the operator address in the cache. Store the operator
 		// address in the cache if it's not there.
 		if operatorID, found := operatorIDCache[operatorAddress]; !found {
-			fetchedOperatorID, err := mft.chain.GetOperatorID(operatorAddress)
+			fetchedOperatorID, err := chainAdapter.GetOperatorID(operatorAddress)
 			if err != nil {
 				return nil, 0, fmt.Errorf("failed to get operator ID: [%w]", err)
 			}

@@ -14,8 +14,34 @@ import (
 // by the local broadcast channel implementation.
 const RetransmissionTick = 50 * time.Millisecond
 
-var broadcastChannelsMutex sync.Mutex
-var broadcastChannels map[string][]*localChannel
+var broadcastSessionsMutex sync.Mutex
+var broadcastSessions map[string]*broadcastSession
+
+// broadcastSession groups the channels and retransmission tickers created
+// under one name during a single use of that name, ending at
+// ReleaseBroadcastChannel. Retransmissions deliver through the session
+// they were scheduled in, so an in-flight retransmission of a released
+// session can never reach a later session's channels under the same
+// name, even when the release and the re-creation race a tick that is
+// already firing.
+type broadcastSession struct {
+	mu       sync.Mutex
+	channels []*localChannel
+	cancels  []context.CancelFunc
+}
+
+// broadcast delivers message to every channel currently registered in
+// this session.
+func (s *broadcastSession) broadcast(message net.Message) {
+	s.mu.Lock()
+	targetChannels := make([]*localChannel, len(s.channels))
+	copy(targetChannels, s.channels)
+	s.mu.Unlock()
+
+	for _, targetChannel := range targetChannels {
+		targetChannel.deliver(message)
+	}
+}
 
 // getBroadcastChannel returns a BroadcastChannel designed to mediate between local
 // participants. It delivers all messages sent to the channel through its
@@ -26,16 +52,23 @@ func getBroadcastChannel(
 	name string,
 	operatorPublicKey *operator.PublicKey,
 ) net.BroadcastChannel {
-	broadcastChannelsMutex.Lock()
-	defer broadcastChannelsMutex.Unlock()
-	if broadcastChannels == nil {
-		broadcastChannels = make(map[string][]*localChannel)
+	broadcastSessionsMutex.Lock()
+	defer broadcastSessionsMutex.Unlock()
+
+	if broadcastSessions == nil {
+		broadcastSessions = make(map[string]*broadcastSession)
 	}
 
-	_, exists := broadcastChannels[name]
-	if !exists {
-		broadcastChannels[name] = make([]*localChannel, 0)
+	session := broadcastSessions[name]
+	if session == nil {
+		session = &broadcastSession{
+			channels: make([]*localChannel, 0),
+			cancels:  make([]context.CancelFunc, 0),
+		}
+		broadcastSessions[name] = session
 	}
+
+	tickerCtx, cancelTicker := context.WithCancel(context.Background())
 
 	identifier := randomLocalIdentifier()
 	channel := &localChannel{
@@ -47,22 +80,45 @@ func getBroadcastChannel(
 		unmarshalersMutex:    sync.Mutex{},
 		unmarshalersByType:   make(map[string]func() net.TaggedUnmarshaler, 0),
 		retransmissionTicker: retransmission.NewTimeTicker(
-			context.Background(), RetransmissionTick,
+			tickerCtx, RetransmissionTick,
 		),
+		session: session,
 	}
-	broadcastChannels[name] = append(broadcastChannels[name], channel)
+
+	session.mu.Lock()
+	session.cancels = append(session.cancels, cancelTicker)
+	session.channels = append(session.channels, channel)
+	session.mu.Unlock()
 
 	return channel
 }
 
-func broadcastMessage(name string, message net.Message) error {
-	broadcastChannelsMutex.Lock()
-	targetChannels := broadcastChannels[name]
-	broadcastChannelsMutex.Unlock()
+// ReleaseBroadcastChannel stops every outstanding retransmission ticker
+// registered under name and closes name's session, so that retransmissions
+// already in flight when the release happens only ever reach this
+// session's own, already emptied channel list and can never reach a later
+// invocation reusing name, whose session starts from an empty channel
+// list. Callers that create broadcast channels in tests should call this
+// from t.Cleanup, passing the same name they created the channel(s) under.
+func ReleaseBroadcastChannel(name string) {
+	broadcastSessionsMutex.Lock()
+	session := broadcastSessions[name]
+	if session != nil {
+		delete(broadcastSessions, name)
+	}
+	broadcastSessionsMutex.Unlock()
 
-	for _, targetChannel := range targetChannels {
-		targetChannel.deliver(message)
+	if session == nil {
+		return
 	}
 
-	return nil
+	session.mu.Lock()
+	cancels := session.cancels
+	session.cancels = nil
+	session.channels = nil
+	session.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
