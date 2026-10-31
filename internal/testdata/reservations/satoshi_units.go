@@ -245,11 +245,11 @@ func MisScaledReadings(
 ) (debtReading uint64, reserveReading *big.Int) {
 	factor := new(big.Int)
 	if debtSat != 0 {
-		factor.Div(reserveUnits, big.NewInt(int64(debtSat)))
+		factor.Div(reserveUnits, new(big.Int).SetUint64(debtSat))
 	}
 
 	debtReading = new(big.Int).Mul(
-		big.NewInt(int64(debtSat)),
+		new(big.Int).SetUint64(debtSat),
 		factor,
 	).Uint64()
 
