@@ -222,6 +222,63 @@ func TestEvaluateReservationsActivation_Consistent(t *testing.T) {
 		})
 	}
 }
+// TestEvaluateReservationsActivation_HeadExactlyAtBlock verifies that
+// the evaluation is consistent when the chain head is exactly at the
+// activation block and the contract is already active. The inclusive
+// comparison ChainHead < ActivationBlock means head == block is not
+// an error; the pending-activation warning only applies when the
+// contract is inactive.
+func TestEvaluateReservationsActivation_HeadExactlyAtBlock(t *testing.T) {
+	tests := map[string]struct {
+		status       ReservationsActivationStatus
+		wantSeverity ReservationsActivationSeverity
+		wantMessage  string // empty means no warning
+	}{
+		"active and head exactly at the block": {
+			status: ReservationsActivationStatus{
+				Network:         ethereum.Sepolia,
+				ActivationBlock: 1000,
+				Configured:      true,
+				ChainHead:       1000,
+				ContractActive:  true,
+			},
+			wantSeverity: ReservationsActivationConsistent,
+			wantMessage:  "",
+		},
+		// Negative control: contract inactive at head == B produces the
+		// pending-activation warning (the inclusive comparison on the
+		// !ContractActive path applies, and head == block triggers it).
+		"inactive and head exactly at the block": {
+			status: ReservationsActivationStatus{
+				Network:         ethereum.Sepolia,
+				ActivationBlock: 1000,
+				Configured:      true,
+				ChainHead:       1000,
+				ContractActive:  false,
+			},
+			wantSeverity: ReservationsActivationWarning,
+			wantMessage:  "the chain head [1000] has reached this client's activation block [1000] for network [sepolia] but the Bridge does not trust the reservation vault, so reservations are not live on-chain yet; the on-chain activation is still pending",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			message, severity := EvaluateReservationsActivation(test.status)
+
+			if message != test.wantMessage {
+				t.Errorf("message = %q, want %q", message, test.wantMessage)
+			}
+
+			if severity != test.wantSeverity {
+				t.Errorf(
+					"severity = %v, want %v",
+					severity,
+					test.wantSeverity,
+				)
+			}
+		})
+	}
+}
 
 // TestReservationsActivationBlockAndState verifies the activation block and
 // the "will this network activate at all" flag for the networks that have

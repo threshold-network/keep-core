@@ -1373,6 +1373,25 @@ func (lc *localChain) addReservationAcceptanceRequestedEvent(
 		event,
 	)
 }
+func (lc *localChain) removeReservationAcceptanceRequestedEvent(
+	reservationKey *big.Int,
+	requestNonce uint64,
+	blockNumber uint64,
+) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	key := reservationEventKey(reservationKey, requestNonce)
+	newEvents := lc.reservationAcceptanceRequestedEvents[:0]
+	for _, event := range lc.reservationAcceptanceRequestedEvents {
+		eventKey := reservationEventKey(event.ReservationKey, event.RequestNonce)
+		if eventKey == key && event.BlockNumber == blockNumber {
+			continue
+		}
+		newEvents = append(newEvents, event)
+	}
+	lc.reservationAcceptanceRequestedEvents = newEvents
+}
 
 // PastReservationReanchorRequestedEvents returns the events previously
 // installed via addReservationReanchorRequestedEvent, applying the
