@@ -1,6 +1,7 @@
 package tbtcpg
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/big"
 	"os"
@@ -17,8 +18,15 @@ import (
 // The path is relative to this package's directory. The file lives in the
 // tbtc-v2 repository (solidity/test/data/reservations/satoshi-units.json);
 // this copy under pkg/tbtcpg/internal/test/testdata/ keeps the keep-core
-// test self-contained, and the two files are asserted to agree by the
-// cross-repo check below.
+// test self-contained.
+//
+// The two copies are kept in agreement BY HAND, not by a cross-repo check:
+// neither repository's CI can see the other repository's file, so there is
+// no automated comparison between them. What IS enforced here is that the
+// two sides agree on the FACTOR, and that this copy carries every key the
+// shared file carries: the parser rejects unknown keys, so a key added to
+// the shared file without being added to this copy fails this test rather
+// than being silently ignored.
 const satoshiUnitsVectorFile = "internal/test/testdata/satoshi-units.json"
 
 // satoshiToTbtcBaseUnits is the conversion factor the whole system
@@ -39,6 +47,13 @@ const satoshiUnitsVectorFile = "internal/test/testdata/satoshi-units.json"
 const satoshiToTbtcBaseUnits int64 = 10_000_000_000
 
 // satoshiUnitsVector is the parsed shared vector file.
+//
+// Every key the shared file carries is declared here, and the parser
+// rejects unknown keys, so the two copies cannot silently drift apart on
+// the key set. RoundingCases is the shared file's list of base-unit
+// amounts that are not multiples of 1e10, with the truncated satoshi value
+// and the remainder; keep-core does not compute a conversion of its own,
+// so it carries the key without asserting on it.
 type satoshiUnitsVector struct {
 	Vector  string `json:"vector"`
 	Version int    `json:"version"`
@@ -49,9 +64,22 @@ type satoshiUnitsVector struct {
 		Satoshis      int64  `json:"satoshis"`
 		TbtcBaseUnits string `json:"tbtcBaseUnits"`
 	} `json:"pairs"`
+	RoundingCases []struct {
+		TbtcBaseUnits string `json:"tbtcBaseUnits"`
+		Satoshis      int64  `json:"satoshis"`
+		Remainder     int64  `json:"remainder"`
+	} `json:"roundingCases"`
 }
 
 // loadSatoshiUnitsVector reads and parses the shared vector file.
+//
+// The decode rejects unknown keys. The shared file is the contract between
+// the repositories, so a key that this side does not know about is a
+// sign that the two copies have drifted, and it must fail the test rather
+// than be silently ignored.
+//
+// NEGATIVE CONTROL: add any unknown top-level key to the vector file and
+// this fails with a "json: unknown field" error.
 func loadSatoshiUnitsVector(t *testing.T) satoshiUnitsVector {
 	t.Helper()
 
@@ -64,8 +92,11 @@ func loadSatoshiUnitsVector(t *testing.T) satoshiUnitsVector {
 		)
 	}
 
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+
 	var vector satoshiUnitsVector
-	if err := json.Unmarshal(contents, &vector); err != nil {
+	if err := decoder.Decode(&vector); err != nil {
 		t.Fatalf("failed to parse the satoshi units vector file: %v", err)
 	}
 
@@ -170,6 +201,121 @@ func TestSatoshiToTbtcBaseUnits_Constant(t *testing.T) {
 			"expected the shared vector to contain the pair " +
 				"[1 satoshi -> 10000000000 base units]",
 		)
+	}
+}
+
+// TestSatoshiToTbtcBaseUnits_VectorContents pins the EXACT contents of
+// the vector's `pairs` and `roundingCases` arrays, so that a change to
+// either array is a test failure rather than a silent edit of a shared
+// file.
+//
+// The two repositories keep separate copies of the vector and neither
+// one's CI can see the other's file, so this list is the only thing that
+// holds the Go copy still. The copies are deliberately NOT byte-identical:
+// the tbtc-v2 copy formats the pair objects with spaces inside the braces
+// (`{ "satoshis": 1, ... }`) and this copy does not
+// (`{"satoshis": 1, ...}`). That formatting difference is intentional and
+// is NOT an assertion of equality; only the semantic content, which is
+// what this test pins, has to agree.
+//
+// NEGATIVE CONTROL: change any pair's satoshi count or base-unit amount
+// in the vector file, or change any rounding case, and this test fails.
+func TestSatoshiToTbtcBaseUnits_VectorContents(t *testing.T) {
+	vector := loadSatoshiUnitsVector(t)
+
+	expectedPairs := []struct {
+		Satoshis      int64
+		TbtcBaseUnits string
+	}{
+		{Satoshis: 1, TbtcBaseUnits: "10000000000"},
+		{Satoshis: 1500, TbtcBaseUnits: "15000000000000"},
+		{Satoshis: 50000, TbtcBaseUnits: "500000000000000"},
+		{Satoshis: 21000000, TbtcBaseUnits: "210000000000000000"},
+		{Satoshis: 3000000, TbtcBaseUnits: "30000000000000000"},
+	}
+
+	if len(vector.Pairs) != len(expectedPairs) {
+		t.Fatalf(
+			"expected the shared vector to carry %d pairs, got %d",
+			len(expectedPairs),
+			len(vector.Pairs),
+		)
+	}
+
+	for i, expected := range expectedPairs {
+		actual := vector.Pairs[i]
+
+		if actual.Satoshis != expected.Satoshis {
+			t.Errorf(
+				"pair %d: expected %d satoshis, got %d",
+				i,
+				expected.Satoshis,
+				actual.Satoshis,
+			)
+		}
+
+		if actual.TbtcBaseUnits != expected.TbtcBaseUnits {
+			t.Errorf(
+				"pair %d: expected %s TBTC base units, got %s",
+				i,
+				expected.TbtcBaseUnits,
+				actual.TbtcBaseUnits,
+			)
+		}
+	}
+
+	expectedRoundingCases := []struct {
+		TbtcBaseUnits string
+		Satoshis      int64
+		Remainder     int64
+	}{
+		{TbtcBaseUnits: "10000000000", Satoshis: 1, Remainder: 0},
+		{TbtcBaseUnits: "10000000001", Satoshis: 1, Remainder: 1},
+		{TbtcBaseUnits: "15000000001", Satoshis: 1, Remainder: 5000000001},
+		{
+			TbtcBaseUnits: "99999999999999999999",
+			Satoshis:      9999999999,
+			Remainder:     9999999999,
+		},
+	}
+
+	if len(vector.RoundingCases) != len(expectedRoundingCases) {
+		t.Fatalf(
+			"expected the shared vector to carry %d rounding cases, got %d",
+			len(expectedRoundingCases),
+			len(vector.RoundingCases),
+		)
+	}
+
+	for i, expected := range expectedRoundingCases {
+		actual := vector.RoundingCases[i]
+
+		if actual.TbtcBaseUnits != expected.TbtcBaseUnits {
+			t.Errorf(
+				"rounding case %d: expected %s TBTC base units, got %s",
+				i,
+				expected.TbtcBaseUnits,
+				actual.TbtcBaseUnits,
+			)
+		}
+
+		if actual.Satoshis != expected.Satoshis {
+			t.Errorf(
+				"rounding case %d: expected %d satoshis, got %d",
+				i,
+				expected.Satoshis,
+				actual.Satoshis,
+			)
+		}
+
+		if actual.Remainder != expected.Remainder {
+			t.Errorf(
+				"rounding case %d: expected a remainder of %d, got %d",
+				i,
+				expected.Remainder,
+				actual.Remainder,
+			)
+		}
 	}
 }
 

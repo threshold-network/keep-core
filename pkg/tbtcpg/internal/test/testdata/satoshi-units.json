@@ -8,5 +8,15 @@
     {"satoshis": 50000, "tbtcBaseUnits": "500000000000000"},
     {"satoshis": 21000000, "tbtcBaseUnits": "210000000000000000"},
     {"satoshis": 3000000, "tbtcBaseUnits": "30000000000000000"}
+  ],
+  "roundingCases": [
+    {"tbtcBaseUnits": "10000000000", "satoshis": 1, "remainder": 0},
+    {"tbtcBaseUnits": "10000000001", "satoshis": 1, "remainder": 1},
+    {"tbtcBaseUnits": "15000000001", "satoshis": 1, "remainder": 5000000001},
+    {
+      "tbtcBaseUnits": "99999999999999999999",
+      "satoshis": 9999999999,
+      "remainder": 9999999999
+    }
   ]
 }
