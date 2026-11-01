@@ -513,11 +513,6 @@ func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
 		)
 	}
 
-	if parameters.ReservationVault == "" {
-		// No vault configured: reservations are disabled on-chain.
-		return false, nil
-	}
-
 	vaultAddress, err := decodeReservationVaultAddress(parameters.ReservationVault)
 	if err != nil {
 		return false, fmt.Errorf(
@@ -526,7 +521,12 @@ func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
 		)
 	}
 	if vaultAddress == (common.Address{}) {
-		// No vault configured: reservations are disabled on-chain.
+		// No vault configured: the parameters carry the zero address and
+		// reservations are disabled on-chain. This is the only form the
+		// "unconfigured" state takes on the wire -
+		// convertReservationParametersFromAbiType formats the address as a
+		// full 20-byte hex string, so it is never empty - which is why no
+		// separate empty-string check is needed here.
 		return false, nil
 	}
 
@@ -1144,7 +1144,15 @@ func (tc *TbtcChain) NotifyReservationStranded(
 // (the same registration-block resolution WalletReservations uses,
 // memoized per wallet - see that method's doc comment) instead of
 // scanning from genesis: a wallet cannot have been terminated before it
-// registered. This is not a single cold-path call made once per wallet
+// registered. Each query then walks that range in
+// tbtc.ReservationEventScanChunkSpan() chunks, because the range runs
+// from the wallet's registration to the tip and providers cap the span of
+// a single eth_getLogs; one unbounded query would fail the whole call on
+// such a provider. The walk stops at the first chunk that yields an event
+// of the kind being counted: the caller only distinguishes zero from
+// non-zero, and the priority order decides which kind's answer wins.
+//
+// This is not a single cold-path call made once per wallet
 // close: pkg/maintainer/spv calls it from the stranding startup
 // catch-up scan (up to 3 attempts per Closed/Terminated wallet found
 // by that scan), that scan's second-chance retry pass for wallets it
@@ -1153,9 +1161,10 @@ func (tc *TbtcChain) NotifyReservationStranded(
 // as originally documented), and - conditionally - from the 1-minute
 // action-timeout poll loop's recheck path whenever a Reanchor-type
 // reservation action times out against a wallet that is already
-// Closed/Terminated. A failure to resolve the registration bound fails
-// the call instead of widening the scan to genesis (StartBlock 0): the
-// caller treats the cause as best-effort and the next pass retries.
+// Closed/Terminated. A failure to resolve the registration bound, or the
+// chain tip, fails the call instead of widening the scan to genesis
+// (StartBlock 0): the caller treats the cause as best-effort and the next
+// pass retries.
 func (tc *TbtcChain) WalletTerminationCause(
 	walletPublicKeyHash [20]byte,
 ) (tbtc.WalletTerminationCause, error) {
@@ -1167,9 +1176,29 @@ func (tc *TbtcChain) WalletTerminationCause(
 		return tbtc.WalletTerminationCauseUnknown, err
 	}
 
+	endBlock, err := tc.walletReservationScanEndBlock()
+	if err != nil {
+		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
+			"cannot get the chain tip for the wallet [0x%x] termination "+
+				"cause scan: [%w]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
 	filter := [][20]byte{walletPublicKeyHash}
 
-	movingFundsEvents, err := tc.bridge.PastMovingFundsTimedOutEvents(startBlock, nil, filter)
+	movingFundsCount, err := countEventRangeInChunks(
+		startBlock,
+		endBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]*tbtcabi.BridgeMovingFundsTimedOut, error) {
+			return tc.bridge.PastMovingFundsTimedOutEvents(
+				chunkStartBlock,
+				&chunkEndBlock,
+				filter,
+			)
+		},
+	)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past MovingFundsTimedOut events for wallet [0x%x]: [%v]",
@@ -1177,11 +1206,21 @@ func (tc *TbtcChain) WalletTerminationCause(
 			err,
 		)
 	}
-	if cause := resolveWalletTerminationCause(len(movingFundsEvents), 0, 0); cause != tbtc.WalletTerminationCauseUnknown {
+	if cause := resolveWalletTerminationCause(movingFundsCount, 0, 0); cause != tbtc.WalletTerminationCauseUnknown {
 		return cause, nil
 	}
 
-	movedFundsSweepEvents, err := tc.bridge.PastMovedFundsSweepTimedOutEvents(startBlock, nil, filter)
+	movedFundsSweepCount, err := countEventRangeInChunks(
+		startBlock,
+		endBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]*tbtcabi.BridgeMovedFundsSweepTimedOut, error) {
+			return tc.bridge.PastMovedFundsSweepTimedOutEvents(
+				chunkStartBlock,
+				&chunkEndBlock,
+				filter,
+			)
+		},
+	)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past MovedFundsSweepTimedOut events for wallet [0x%x]: [%v]",
@@ -1189,11 +1228,21 @@ func (tc *TbtcChain) WalletTerminationCause(
 			err,
 		)
 	}
-	if cause := resolveWalletTerminationCause(0, len(movedFundsSweepEvents), 0); cause != tbtc.WalletTerminationCauseUnknown {
+	if cause := resolveWalletTerminationCause(0, movedFundsSweepCount, 0); cause != tbtc.WalletTerminationCauseUnknown {
 		return cause, nil
 	}
 
-	fraudChallengeEvents, err := tc.bridge.PastFraudChallengeDefeatTimedOutEvents(startBlock, nil, filter)
+	fraudChallengeCount, err := countEventRangeInChunks(
+		startBlock,
+		endBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]*tbtcabi.BridgeFraudChallengeDefeatTimedOut, error) {
+			return tc.bridge.PastFraudChallengeDefeatTimedOutEvents(
+				chunkStartBlock,
+				&chunkEndBlock,
+				filter,
+			)
+		},
+	)
 	if err != nil {
 		return tbtc.WalletTerminationCauseUnknown, fmt.Errorf(
 			"cannot get past FraudChallengeDefeatTimedOut events for wallet [0x%x]: [%v]",
@@ -1201,7 +1250,7 @@ func (tc *TbtcChain) WalletTerminationCause(
 			err,
 		)
 	}
-	return resolveWalletTerminationCause(0, 0, len(fraudChallengeEvents)), nil
+	return resolveWalletTerminationCause(0, 0, fraudChallengeCount), nil
 }
 
 // resolveWalletTerminationCause is the pure-logic core of
@@ -1703,7 +1752,7 @@ func earliestRegistrationEventBlock(events []*tbtc.NewWalletRegisteredEvent) uin
 
 // fetchEventRangeInChunks walks the inclusive block range
 // [startBlock, endBlock] in chunks of at most
-// tbtc.DepositRevealLookupChunkBlocks blocks, in ascending order, and calls
+// tbtc.ReservationEventScanChunkSpan() blocks, in ascending order, and calls
 // onChunk with each chunk's events. onChunk reports whether the walk should
 // continue, so a caller interested only in the first chunk that yields
 // events can stop there. A fetch error stops the walk and is returned
@@ -1713,10 +1762,12 @@ func earliestRegistrationEventBlock(events []*tbtc.NewWalletRegisteredEvent) uin
 // (startBlock > endBlock) is a no-op that calls neither fetch nor onChunk.
 //
 // The caller builds a fetch closure for the event type it needs, so one
-// implementation serves the wallet reservation scans and the registration
-// walk. Both start from a wallet's own past and can therefore span millions
-// of blocks, which providers cap for a single eth_getLogs: chunking keeps
-// every request inside the cap while still covering the whole range.
+// implementation serves the wallet reservation scans, the wallet
+// termination-cause scan and the registration walk. All of them start from
+// a wallet's own past and can therefore span millions of blocks, which
+// providers cap for a single eth_getLogs: chunking keeps every request
+// inside the cap (see tbtc.ReservationEventScanMaxBlockSpan) while still
+// covering the whole range.
 func fetchEventRangeInChunks[T any](
 	startBlock uint64,
 	endBlock uint64,
@@ -1727,8 +1778,10 @@ func fetchEventRangeInChunks[T any](
 		return nil
 	}
 
+	chunkSpan := tbtc.ReservationEventScanChunkSpan()
+
 	for chunkStartBlock := startBlock; ; {
-		chunkEndBlock := chunkStartBlock + tbtc.DepositRevealLookupChunkBlocks - 1
+		chunkEndBlock := chunkStartBlock + chunkSpan - 1
 		if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {
 			chunkEndBlock = endBlock
 		}
@@ -1753,9 +1806,38 @@ func fetchEventRangeInChunks[T any](
 	}
 }
 
+// countEventRangeInChunks counts the events of one kind in the inclusive
+// block range [startBlock, endBlock] by walking the range in
+// tbtc.ReservationEventScanChunkSpan() chunks, so a range that would exceed
+// a provider's eth_getLogs cap is never issued as a single request. The walk
+// stops at the first chunk that yields an event, which is enough for the
+// callers here: they only distinguish "none" from "some", so the count is a
+// witness of at least one matching event rather than a total. A fetch error
+// is returned wrapped with the failing chunk's range.
+func countEventRangeInChunks[T any](
+	startBlock uint64,
+	endBlock uint64,
+	fetch func(chunkStartBlock, chunkEndBlock uint64) ([]T, error),
+) (int, error) {
+	count := 0
+	err := fetchEventRangeInChunks(
+		startBlock,
+		endBlock,
+		fetch,
+		func(chunkEvents []T) bool {
+			count += len(chunkEvents)
+			return len(chunkEvents) == 0
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // scanWalletReservationEventsInChunks walks the inclusive block range
 // [startBlock, endBlock] in chunks of at most
-// tbtc.DepositRevealLookupChunkBlocks blocks, in ascending order, and
+// tbtc.ReservationEventScanChunkSpan() blocks, in ascending order, and
 // returns the merged ReservationAcceptanceRequested and
 // ReservationReanchorRequested events for the given wallet. The range
 // starts at the wallet's earliest registration block, so for a wallet
@@ -1881,16 +1963,21 @@ func resolveCustodiedReservationKeys(
 	for _, key := range keys {
 		reservation, err := reservationLookup(key)
 		if err != nil {
-			// One unreadable reservation must not hide the wallet's other
-			// reservations: log it and keep resolving the remaining keys.
-			logger.Warnf(
-				"skipping reservation [%v] of wallet [0x%x]: cannot get "+
-					"reservation: [%v]",
+			// Fail the whole read instead of returning the keys that did
+			// resolve: every caller treats the returned key set as the
+			// wallet's complete custody (stranding notification, re-anchor
+			// source selection, the below-dust drained check), so a
+			// truncated set is read as "this wallet holds nothing there"
+			// and a stranded anchor goes unnotified, or a wallet that
+			// still holds one looks drained. A failed read is reported and
+			// retried on the caller's next pass; a short one cannot be
+			// detected downstream.
+			return nil, fmt.Errorf(
+				"cannot get reservation [%v] of wallet [0x%x]: [%w]",
 				key,
 				walletPublicKeyHash,
 				err,
 			)
-			continue
 		}
 
 		if reservation.WalletPublicKeyHash != walletPublicKeyHash {

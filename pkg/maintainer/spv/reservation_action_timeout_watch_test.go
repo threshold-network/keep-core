@@ -1236,7 +1236,7 @@ func TestReservationActionTimeoutWatcher_FirstScanStartsAtActivation(t *testing.
 // stranding watcher's only trigger, the wallet's one-shot OnWalletClosed
 // event, already fired before this timeout notification landed. With a
 // strandingWatcher wired in via the constructor, a successful Reanchor
-// timeout notification defers the wallet to strandingRecheckWallets, and
+// timeout notification defers the wallet to the stranding recheck queue, and
 // draining it (simulating the next pollPendingActions tick) notifies the
 // reservation stranded.
 func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NotifiesWhenWalletClosed(t *testing.T) {
@@ -1333,7 +1333,7 @@ func TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_Skip
 
 // TestReservationActionTimeoutWatcher_RecheckStrandingAfterActionTimeout_NilWatcherIsNoOp
 // verifies checkReservationActionTimeout never populates
-// strandingRecheckWallets when no strandingWatcher was passed to the
+// strandingRecheckQueue when no strandingWatcher was passed to the
 // constructor (nil, the default for every test watcher in this file
 // that does not explicitly pass one in), so drainStrandingRechecks has
 // nothing to do.
@@ -1610,7 +1610,7 @@ func TestReservationActionTimeoutWatcher_PollPendingActions_RenotifyBackoffSurvi
 
 // TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWalletError
 // verifies that a transient GetWallet failure during a deferred stranding
-// recheck re-queues the wallet on strandingRecheckWallets for the next
+// recheck re-queues the wallet on the stranding recheck queue for the next
 // tick's drain, instead of permanently losing the recheck the way a bare
 // continue would.
 func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWalletError(t *testing.T) {
@@ -1620,11 +1620,11 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnGetWal
 	// No spvChain.setWallet call for this wallet: GetWallet returns "no
 	// wallet for given PKH", simulating a transient RPC failure.
 	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil, 0, nil)
-	ratw.strandingRecheckWallets[wallet] = struct{}{}
+	ratw.ScheduleStrandingRecheck(wallet)
 
 	ratw.drainStrandingRechecks()
 
-	if _, ok := ratw.strandingRecheckWallets[wallet]; !ok {
+	if !strandingRecheckQueued(ratw, wallet) {
 		t.Fatalf(
 			"expected wallet to be re-queued for the next drain after a " +
 				"GetWallet error",
@@ -1647,11 +1647,11 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_RequeuesOnStrand
 	strandingWatcher.retryDelay = time.Millisecond
 
 	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, newReservationStrandingWatcher(spvChain), 0, nil)
-	ratw.strandingRecheckWallets[wallet] = struct{}{}
+	ratw.ScheduleStrandingRecheck(wallet)
 
 	ratw.drainStrandingRechecks()
 
-	if _, ok := ratw.strandingRecheckWallets[wallet]; !ok {
+	if !strandingRecheckQueued(ratw, wallet) {
 		t.Fatalf(
 			"expected wallet to be re-queued for the next drain after a " +
 				"stranding-check error",
@@ -1669,11 +1669,11 @@ func TestReservationActionTimeoutWatcher_DrainStrandingRechecks_SucceedsDoesNotR
 	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateLive})
 
 	ratw := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, nil, 0, nil)
-	ratw.strandingRecheckWallets[wallet] = struct{}{}
+	ratw.ScheduleStrandingRecheck(wallet)
 
 	ratw.drainStrandingRechecks()
 
-	if _, ok := ratw.strandingRecheckWallets[wallet]; ok {
+	if strandingRecheckQueued(ratw, wallet) {
 		t.Fatalf("expected a successfully-drained wallet not to be re-queued")
 	}
 }
@@ -1772,10 +1772,10 @@ func TestActionTimeoutFailedReanchorNotice_EnqueuesStrandingRecheck(t *testing.T
 	// The wallet must be enqueued for stranding recheck regardless of
 	// the notice outcome; a zero wallet is skipped since
 	// drainStrandingRechecks has no reservation key to re-resolve it.
-	if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+	if !strandingRecheckQueued(watcher, wallet) {
 		t.Fatalf(
 			"expected the failed notice to enqueue stranding recheck " +
-				"(strandingRecheckWallets[wallet] should be set), got 0 entries",
+				"(the wallet should be queued), got 0 entries",
 		)
 	}
 }
@@ -1808,13 +1808,13 @@ func TestDrainStrandingRechecksRequeuesNonTerminalWalletAndCleanPendingSkip(
 
 			strandingWatcher := newReservationStrandingWatcher(spvChain)
 			watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, strandingWatcher, 0, nil)
-			watcher.strandingRecheckWallets[wallet] = struct{}{}
+			watcher.ScheduleStrandingRecheck(wallet)
 
 			watcher.drainStrandingRechecks()
 
 			// The wallet is requeued because it is non-terminal;
 			// it will be checked again once it reaches Closed/Terminated.
-			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+			if !strandingRecheckQueued(watcher, wallet) {
 				t.Fatal(
 					"expected the non-terminal wallet to be requeued, " +
 						"not silently dropped",
@@ -1855,13 +1855,13 @@ func TestDrainStrandingRechecksRequeuesNonTerminalWalletAndCleanPendingSkip(
 
 			strandingWatcher := newReservationStrandingWatcher(spvChain)
 			watcher := NewReservationActionTimeoutWatcher(spvChain, 0, common.Address{}, strandingWatcher, 0, nil)
-			watcher.strandingRecheckWallets[wallet] = struct{}{}
+			watcher.ScheduleStrandingRecheck(wallet)
 
 			// First drain: the stranding check cleanly skips the
 			// ActionPending reservation and requeues the wallet.
 			watcher.drainStrandingRechecks()
 
-			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+			if !strandingRecheckQueued(watcher, wallet) {
 				t.Fatal(
 					"expected the wallet to be requeued after a clean " +
 						"skip of a non-Active reservation",
@@ -1872,7 +1872,7 @@ func TestDrainStrandingRechecksRequeuesNonTerminalWalletAndCleanPendingSkip(
 			// pending; the wallet is requeued again.
 			watcher.drainStrandingRechecks()
 
-			if _, ok := watcher.strandingRecheckWallets[wallet]; !ok {
+			if !strandingRecheckQueued(watcher, wallet) {
 				t.Fatal(
 					"expected the wallet to remain requeued on the " +
 						"second drain (reservation still pending)",

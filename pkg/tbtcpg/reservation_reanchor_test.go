@@ -730,7 +730,17 @@ type reservationReanchorLocalChain struct {
 }
 
 func newReservationReanchorLocalChain() *reservationReanchorLocalChain {
-	return &reservationReanchorLocalChain{LocalChain: tbtcpg.NewLocalChain()}
+	chain := &reservationReanchorLocalChain{LocalChain: tbtcpg.NewLocalChain()}
+
+	// The reservation history scan bounds its block range by the chain
+	// head, so every chain these fixtures hand to the task needs a block
+	// counter; without one the scan fails closed and no below-dust
+	// notification is ever attempted.
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(1_000_000)
+	chain.SetBlockCounter(blockCounter)
+
+	return chain
 }
 
 // RequestReservationReanchor simulates capacity-revert races: for the

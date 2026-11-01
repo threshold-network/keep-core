@@ -42,7 +42,7 @@ func (c *reanchorChunkFailingChain) PastReservationReanchorRequestedEvents(
 // as the first chunk arrives would therefore have gone unnoticed: the
 // failed chunk's events would be skipped for good.
 func TestProveReservationReanchorActions_ChunkedScanKeepsEarlierProgress(t *testing.T) {
-	const currentBlock = 2*reservationEventScanChunkSize + 500
+	currentBlock := uint64(2*reservationEventScanSpan() + 500)
 	confirmedTip := uint64(currentBlock) - reservationEventScanConfirmationBlocks
 
 	newFixture := func() (
@@ -104,7 +104,7 @@ func TestProveReservationReanchorActions_ChunkedScanKeepsEarlierProgress(t *test
 	t.Run("every chunk is scanned", func(t *testing.T) {
 		inner, chain, state, config := newFixture()
 		firstChunkKey := addEvent(inner, 1, 100)
-		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanSpan()+100)
 
 		if err := prove(chain, state, config); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -123,9 +123,9 @@ func TestProveReservationReanchorActions_ChunkedScanKeepsEarlierProgress(t *test
 	t.Run("a failing chunk keeps the earlier chunks' progress", func(t *testing.T) {
 		inner, chain, state, config := newFixture()
 		firstChunkKey := addEvent(inner, 1, 100)
-		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanSpan()+100)
 
-		failStart := reservationEventScanChunkSize
+		failStart := reservationEventScanSpan()
 		chain.failChunkStart = &failStart
 		if err := prove(chain, state, config); err == nil {
 			t.Fatal("expected the failing chunk to be reported")
@@ -141,10 +141,10 @@ func TestProveReservationReanchorActions_ChunkedScanKeepsEarlierProgress(t *test
 		// The cursor must sit at the end of the last good chunk, so the
 		// next pass resumes after it. A cursor that jumped to the end of
 		// the whole range would lose the failed chunk's events for good.
-		if state.reanchorLastScannedBlock != reservationEventScanChunkSize-1 {
+		if state.reanchorLastScannedBlock != reservationEventScanSpan()-1 {
 			t.Errorf(
 				"expected the cursor at the end of the first chunk %d, got %d",
-				reservationEventScanChunkSize-1,
+				reservationEventScanSpan()-1,
 				state.reanchorLastScannedBlock,
 			)
 		}
@@ -172,7 +172,7 @@ func TestProveReservationReanchorActions_ChunkedScanKeepsEarlierProgress(t *test
 // TestProveReservationAcceptanceActions_ChunkedScan and the per-item
 // aggregation tests; the re-anchor scan had no equivalent.
 func TestProveReservationReanchorActions_ScanErrorKeepsProvingTrackedGenerations(t *testing.T) {
-	const currentBlock = 2*reservationEventScanChunkSize + 500
+	currentBlock := uint64(2*reservationEventScanSpan() + 500)
 	confirmedTip := uint64(currentBlock) - reservationEventScanConfirmationBlocks
 
 	inner := newLocalChain()
@@ -230,7 +230,7 @@ func TestProveReservationReanchorActions_ScanErrorKeepsProvingTrackedGenerations
 	// The tip advances first, so the second pass has a fresh range to scan
 	// and the failing chunk is the first chunk of that range.
 	advancedCounter := newMockBlockCounter()
-	advancedCounter.SetCurrentBlock(currentBlock + 2*reservationEventScanChunkSize)
+	advancedCounter.SetCurrentBlock(currentBlock + 2*reservationEventScanSpan())
 	inner.setBlockCounter(advancedCounter)
 
 	failStart := confirmedTip + 1

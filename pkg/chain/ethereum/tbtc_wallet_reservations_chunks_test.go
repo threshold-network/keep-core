@@ -437,3 +437,99 @@ func TestWalletReservationScanEndBlock(t *testing.T) {
 		}
 	})
 }
+
+// TestFetchEventRangeInChunksHonoursConfiguredSpan pins that the chunk span
+// of a reservation event walk is taken from
+// tbtc.ReservationEventScanMaxBlockSpan rather than a fixed width: a walk
+// over a range wider than a provider's eth_getLogs cap has to be split into
+// requests the provider accepts, and the operator behind a tighter cap needs
+// to be able to lower the span without a code change. The failure this pins
+// is the caller's: one request per range, however wide the range is.
+func TestFetchEventRangeInChunksHonoursConfiguredSpan(t *testing.T) {
+	originalSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = 100
+	t.Cleanup(func() { tbtc.ReservationEventScanMaxBlockSpan = originalSpan })
+
+	const endBlock = 250
+
+	var ranges [][2]uint64
+	err := fetchEventRangeInChunks(
+		0,
+		endBlock,
+		func(startBlock, chunkEndBlock uint64) ([]struct{}, error) {
+			if span := chunkEndBlock - startBlock + 1; span > tbtc.ReservationEventScanMaxBlockSpan {
+				return nil, fmt.Errorf(
+					"provider cap exceeded: blocks [%d..%d] span %d",
+					startBlock,
+					chunkEndBlock,
+					span,
+				)
+			}
+			ranges = append(ranges, [2]uint64{startBlock, chunkEndBlock})
+			return nil, nil
+		},
+		func([]struct{}) bool { return true },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	expected := [][2]uint64{{0, 99}, {100, 199}, {200, 250}}
+	if len(ranges) != len(expected) {
+		t.Fatalf(
+			"expected %d chunked requests, got %d: %v",
+			len(expected),
+			len(ranges),
+			ranges,
+		)
+	}
+	for i, want := range expected {
+		if ranges[i] != want {
+			t.Errorf(
+				"chunk %d: expected blocks [%d..%d], got [%d..%d]",
+				i,
+				want[0],
+				want[1],
+				ranges[i][0],
+				ranges[i][1],
+			)
+		}
+	}
+}
+
+// TestCountEventRangeInChunksStopsAtFirstEvent pins that a caller that only
+// needs "some event in this range" stops walking once it has one, so a
+// wallet termination-cause lookup costs the chunks up to the first match
+// rather than the whole registration-to-tip range.
+func TestCountEventRangeInChunksStopsAtFirstEvent(t *testing.T) {
+	originalSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = 100
+	t.Cleanup(func() { tbtc.ReservationEventScanMaxBlockSpan = originalSpan })
+
+	var starts []uint64
+	count, err := countEventRangeInChunks(
+		0,
+		5000,
+		func(startBlock, _ uint64) ([]int, error) {
+			starts = append(starts, startBlock)
+			if startBlock == 200 {
+				return []int{1, 2}, nil
+			}
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if count == 0 {
+		t.Fatal("expected the chunk holding the event to be counted")
+	}
+	if len(starts) != 3 {
+		t.Fatalf(
+			"expected the walk to stop at the third chunk, got %d chunk "+
+				"reads starting at %v",
+			len(starts),
+			starts,
+		)
+	}
+}
