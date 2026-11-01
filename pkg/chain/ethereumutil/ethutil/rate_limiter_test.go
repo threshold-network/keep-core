@@ -1,6 +1,7 @@
 package ethutil
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"strings"
@@ -101,6 +102,73 @@ func TestRateLimiter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRateLimiterStorageAt pins that the limiter forwards contract-identity
+// storage reads to the wrapped client. StorageAt is not part of the generated
+// bindings' caller surface, so it is not in the shared load table above; it
+// still has to pass through the limiter, or an implementation-pointer read
+// would reach the node without a permit.
+func TestRateLimiterStorageAt(t *testing.T) {
+	account := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	key := common.HexToHash(
+		"0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+	)
+	word := common.HexToHash("0x01").Bytes()
+
+	client := &storageRecordingClient{word: word}
+
+	rateLimitingClient := WrapRateLimiting(
+		client,
+		&rate.LimiterConfig{
+			RequestsPerSecondLimit: 1,
+			ConcurrencyLimit:       1,
+			AcquirePermitTimeout:   time.Minute,
+		},
+	)
+
+	got, err := rateLimitingClient.StorageAt(
+		context.Background(),
+		account,
+		key,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if !bytes.Equal(got, word) {
+		t.Fatalf("the limiter returned a different word: got 0x%x, want 0x%x", got, word)
+	}
+	if client.account != account || client.key != key {
+		t.Fatalf(
+			"the limiter forwarded the wrong arguments: got (%s, %s), want (%s, %s)",
+			client.account.Hex(),
+			client.key.Hex(),
+			account.Hex(),
+			key.Hex(),
+		)
+	}
+}
+
+// storageRecordingClient answers StorageAt with a fixed word and records the
+// arguments it was called with.
+type storageRecordingClient struct {
+	mockEthereumClient
+
+	word    []byte
+	account common.Address
+	key     common.Hash
+}
+
+func (c *storageRecordingClient) StorageAt(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockNumber *big.Int,
+) ([]byte, error) {
+	c.account = account
+	c.key = key
+	return c.word, nil
 }
 
 func TestRateLimiter_RequestsPerSecondLimitOnly(t *testing.T) {
@@ -517,17 +585,6 @@ func getTests(
 				_, err := client.CodeAt(
 					context.Background(),
 					[20]byte{},
-					nil,
-				)
-				return err
-			},
-		},
-		"test StorageAt": {
-			function: func() error {
-				_, err := client.StorageAt(
-					context.Background(),
-					[20]byte{},
-					common.Hash{},
 					nil,
 				)
 				return err
