@@ -120,14 +120,16 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 		if _, err := resolveWalletPublicKeyHash(recording, walletID); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		starts := recording.pastNewWalletRegisteredStartBlocks
-		if len(starts) != 1 || starts[0] != currentBlock-reservationDefaultLookBackBlocks {
-			t.Errorf(
-				"expected one lookup bounded to the last %d blocks, got start blocks %v",
-				reservationDefaultLookBackBlocks,
-				starts,
-			)
-		}
+
+		// One window, bounded by the look-back below the tip, and never a
+		// genesis-to-tip query: every request inside it is chunked, so a
+		// provider that caps the eth_getLogs range still answers.
+		assertChunkedWalletRegistrationQueries(
+			t,
+			recording,
+			[]uint64{currentBlock - reservationDefaultLookBackBlocks},
+			currentBlock,
+		)
 	})
 
 	t.Run("old registration is found by widening the window, never by a genesis scan first", func(t *testing.T) {
@@ -145,22 +147,73 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 		if pkh != expectedPKH {
 			t.Errorf("unexpected public key hash %x", pkh)
 		}
-		starts := recording.pastNewWalletRegisteredStartBlocks
-		expected := []uint64{
-			currentBlock - reservationDefaultLookBackBlocks,
-			currentBlock - 2*reservationDefaultLookBackBlocks,
-			currentBlock - 4*reservationDefaultLookBackBlocks,
-		}
-		if len(starts) != len(expected) {
-			t.Fatalf("expected start blocks %v, got %v", expected, starts)
-		}
-		for i := range expected {
-			if starts[i] != expected[i] {
-				t.Errorf("expected start blocks %v, got %v", expected, starts)
-				break
-			}
-		}
+
+		assertChunkedWalletRegistrationQueries(
+			t,
+			recording,
+			[]uint64{
+				currentBlock - reservationDefaultLookBackBlocks,
+				currentBlock - 2*reservationDefaultLookBackBlocks,
+				currentBlock - 4*reservationDefaultLookBackBlocks,
+			},
+			currentBlock,
+		)
 	})
+}
+
+// assertChunkedWalletRegistrationQueries pins the shape of the
+// wallet-registration walk: it covers the given windows in order, stopping
+// at the window that yields the registration, and every individual query it
+// issues inside a window is bounded and no wider than
+// reservationEventScanSpan(). Unbounded queries are what a provider with
+// an eth_getLogs range cap rejects, and one rejection costs the wallet its
+// stranding check.
+func assertChunkedWalletRegistrationQueries(
+	t *testing.T,
+	recording *filterRecordingChain,
+	expectedWindowStarts []uint64,
+	endBlock uint64,
+) {
+	t.Helper()
+
+	for _, query := range recording.walletRegistrationQueries {
+		if query.endBlock < 0 {
+			t.Fatalf(
+				"query starting at [%d] carried no EndBlock: a provider that "+
+					"caps the eth_getLogs range rejects it",
+				query.startBlock,
+			)
+		}
+		span := uint64(query.endBlock) - query.startBlock + 1
+		if span > reservationEventScanSpan() {
+			t.Fatalf(
+				"query over blocks [%d..%d] spans %d blocks, above the %d "+
+					"chunk size",
+				query.startBlock,
+				query.endBlock,
+				span,
+				reservationEventScanSpan(),
+			)
+		}
+		if uint64(query.endBlock) > endBlock {
+			t.Fatalf(
+				"query over blocks [%d..%d] reaches past the chain tip [%d]",
+				query.startBlock,
+				query.endBlock,
+				endBlock,
+			)
+		}
+	}
+
+	starts := recording.windowStarts()
+	if len(starts) != len(expectedWindowStarts) {
+		t.Fatalf("expected window starts %v, got %v", expectedWindowStarts, starts)
+	}
+	for i := range expectedWindowStarts {
+		if starts[i] != expectedWindowStarts[i] {
+			t.Fatalf("expected window starts %v, got %v", expectedWindowStarts, starts)
+		}
+	}
 }
 
 // TestCheckStaleReservedDeposit_Resolution covers the resolution outcomes of
@@ -694,11 +747,11 @@ func TestWireReservationWatchers_DrivesRealNotifications_NotJustWiringSuccess(t 
 // NewReservationActionTimeoutWatcher's constructor argument, end to
 // end: a successful Reanchor-timeout notification defers its wallet to
 // a stranding recheck (see
-// ReservationActionTimeoutWatcher.strandingRecheckWallets), and that
+// ReservationActionTimeoutWatcher.strandingRecheckQueue), and that
 // recheck - drained on the action-timeout watcher's own next poll tick,
 // not the wallet's one-shot OnWalletClosed subscription, which has
 // already fired and been consumed by this point (see
-// strandingRecheckWallets's doc comment) - must notify the reservation
+// strandingRecheckQueue's doc comment) - must notify the reservation
 // stranded. reservationActionTimeoutPollInterval is temporarily
 // shrunk so the test does not wait on the real one-minute default.
 func TestWireReservationWatchers_DrainsStrandingRecheckThroughRealWiring(t *testing.T) {
@@ -893,6 +946,7 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 			context.Background(),
 			spvChain,
 			strandingWatcher,
+			nil,
 			[][20]byte{wallet},
 			0,
 		)
@@ -907,20 +961,41 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 		}
 	})
 
-	t.Run("still-unresolved wallet is skipped without error", func(t *testing.T) {
+	t.Run("still-unresolved wallet is queued for the poll loop", func(t *testing.T) {
 		spvChain := newLocalChain()
 		strandingWatcher := newReservationStrandingWatcher(spvChain)
+		watcher := NewReservationActionTimeoutWatcher(
+			spvChain,
+			0,
+			common.Address{},
+			strandingWatcher,
+			0,
+			nil,
+		)
 
+		wallet := walletPKHAt(0x51)
 		retryReservationStrandingStartupScan(
 			context.Background(),
 			spvChain,
 			strandingWatcher,
-			[][20]byte{walletPKHAt(0x51)},
+			watcher,
+			[][20]byte{wallet},
 			0,
 		)
 
 		if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 0 {
 			t.Fatalf("expected no notifications for a still-unresolved wallet, got %v", notified)
+		}
+
+		// The second chance is not the last one: the wallet whose state
+		// still cannot be read stays queued for the poll loop's drain.
+		if !watcher.strandingRecheckQueue.has(strandingRecheckTarget{
+			walletPublicKeyHash: wallet,
+		}) {
+			t.Fatal(
+				"expected the still-unresolved wallet to be queued on the " +
+					"stranding recheck queue after the retry pass",
+			)
 		}
 	})
 
@@ -941,6 +1016,7 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 			ctx,
 			spvChain,
 			strandingWatcher,
+			nil,
 			[][20]byte{wallet},
 			time.Hour,
 		)
@@ -1318,7 +1394,7 @@ func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
 	blocks := []uint64{
 		windowStart - 1,   // before the window
 		windowStart + 100, // first chunk
-		windowStart + reservationEventScanChunkSize + 100, // second chunk
+		windowStart + reservationEventScanSpan() + 100, // second chunk
 	}
 	for i, blockNumber := range blocks {
 		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
@@ -1460,6 +1536,7 @@ func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 				context.Background(),
 				spvChain,
 				strandingWatcher,
+				nil,
 				[][20]byte{wallet},
 				0,
 			)

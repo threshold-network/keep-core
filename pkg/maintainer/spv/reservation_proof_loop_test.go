@@ -2635,7 +2635,7 @@ func (c *reservationChunkFailingChain) PastReservationAcceptanceRequestedEvents(
 // only shows up later at a height the first pass could have covered - as
 // after a short reorg - is still found by the next pass.
 func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
-	const currentBlock = 2*reservationEventScanChunkSize + 500
+	currentBlock := uint64(2*reservationEventScanSpan() + 500)
 	confirmedTip := uint64(currentBlock) - reservationEventScanConfirmationBlocks
 
 	newFixture := func() (*localChain, *reservationChunkFailingChain, *reservationProofScanState, Config) {
@@ -2686,7 +2686,7 @@ func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
 	t.Run("every chunk is scanned", func(t *testing.T) {
 		inner, chain, state, config := newFixture()
 		firstChunkKey := addEvent(inner, 1, 100)
-		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanSpan()+100)
 
 		if err := prove(chain, state, config); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -2705,9 +2705,9 @@ func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
 	t.Run("a failing chunk keeps earlier progress", func(t *testing.T) {
 		inner, chain, state, config := newFixture()
 		firstChunkKey := addEvent(inner, 1, 100)
-		secondChunkKey := addEvent(inner, 2, reservationEventScanChunkSize+100)
+		secondChunkKey := addEvent(inner, 2, reservationEventScanSpan()+100)
 
-		failStart := reservationEventScanChunkSize
+		failStart := reservationEventScanSpan()
 		chain.failChunkStart = &failStart
 		if err := prove(chain, state, config); err == nil {
 			t.Fatal("expected the failing chunk to be reported")
@@ -2718,10 +2718,10 @@ func TestProveReservationAcceptanceActions_ChunkedScan(t *testing.T) {
 		if _, ok := state.pendingAcceptanceEvents[secondChunkKey]; ok {
 			t.Error("expected the failed chunk's event not to be tracked yet")
 		}
-		if state.acceptanceLastScannedBlock != reservationEventScanChunkSize-1 {
+		if state.acceptanceLastScannedBlock != reservationEventScanSpan()-1 {
 			t.Errorf(
 				"expected the cursor at the end of the first chunk %d, got %d",
-				reservationEventScanChunkSize-1,
+				reservationEventScanSpan()-1,
 				state.acceptanceLastScannedBlock,
 			)
 		}

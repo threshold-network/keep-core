@@ -61,12 +61,12 @@ func assertContiguousCoverage(
 		if r.end < r.start {
 			t.Errorf("range %d is inverted: %v", i, r)
 		}
-		if r.end-r.start+1 > reservationEventScanChunkSize {
+		if r.end-r.start+1 > reservationEventScanSpan() {
 			t.Errorf(
 				"range %d spans %d blocks, above the chunk bound of %d",
 				i,
 				r.end-r.start+1,
-				reservationEventScanChunkSize,
+				reservationEventScanSpan(),
 			)
 		}
 		if i == 0 && r.start != start {
@@ -144,14 +144,13 @@ func collectChunks(
 // contiguous, non-overlapping, within the chunk bound, and jointly cover
 // the full range.
 func TestFetchPastEventsInChunks_ChunkBoundaries(t *testing.T) {
-	const (
-		chunkSize = reservationEventScanChunkSize
-		lastOf1   = chunkSize - 1 // last block of chunk 1
-		firstOf2  = chunkSize     // first block of chunk 2
-		lastOf2   = 2*chunkSize - 1
-		firstOf3  = 2 * chunkSize
-		endBlock  = 3*chunkSize - 1
-	)
+	chunkSize := reservationEventScanSpan()
+
+	lastOf1 := chunkSize - 1 // last block of chunk 1
+	firstOf2 := chunkSize    // first block of chunk 2
+	lastOf2 := 2*chunkSize - 1
+	firstOf3 := 2 * chunkSize
+	endBlock := 3*chunkSize - 1
 
 	f := &rangeRecordingFetcher{
 		events: []chunkTestEvent{
@@ -207,22 +206,22 @@ func TestFetchPastEventsInChunks_SingleChunk(t *testing.T) {
 	f := &rangeRecordingFetcher{
 		events: []chunkTestEvent{
 			{BlockNumber: 0},
-			{BlockNumber: reservationEventScanChunkSize - 1},
+			{BlockNumber: reservationEventScanSpan() - 1},
 		},
 	}
 
-	got, _, err := collectChunks(f, 0, reservationEventScanChunkSize-1)
+	got, _, err := collectChunks(f, 0, reservationEventScanSpan()-1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertEachEventReturnedOnce(t, got, f.events)
-	assertContiguousCoverage(t, f.ranges, 0, reservationEventScanChunkSize-1)
+	assertContiguousCoverage(t, f.ranges, 0, reservationEventScanSpan()-1)
 
 	if len(f.ranges) != 1 {
 		t.Fatalf("expected a single chunk fetch, got %d: %v", len(f.ranges), f.ranges)
 	}
-	if f.ranges[0].start != 0 || f.ranges[0].end != reservationEventScanChunkSize-1 {
-		t.Errorf("expected chunk [0..%d], got %v", reservationEventScanChunkSize-1, f.ranges[0])
+	if f.ranges[0].start != 0 || f.ranges[0].end != reservationEventScanSpan()-1 {
+		t.Errorf("expected chunk [0..%d], got %v", reservationEventScanSpan()-1, f.ranges[0])
 	}
 }
 
@@ -261,22 +260,22 @@ func TestFetchPastEventsInChunks_ErrorInSecondChunk(t *testing.T) {
 		failErr: errors.New("provider rejected the range"),
 	}
 
-	got, chunkEnds, err := collectChunks(f, 0, 2*reservationEventScanChunkSize-1)
+	got, chunkEnds, err := collectChunks(f, 0, 2*reservationEventScanSpan()-1)
 	if err == nil {
 		t.Fatal("expected an error from the second chunk, got nil")
 	}
 	assertEachEventReturnedOnce(t, got, []chunkTestEvent{{BlockNumber: 100}})
-	if len(chunkEnds) != 1 || chunkEnds[0] != reservationEventScanChunkSize-1 {
+	if len(chunkEnds) != 1 || chunkEnds[0] != reservationEventScanSpan()-1 {
 		t.Errorf(
 			"expected only the first chunk [..%d] to be delivered, got %v",
-			reservationEventScanChunkSize-1,
+			reservationEventScanSpan()-1,
 			chunkEnds,
 		)
 	}
 	expectedRange := fmt.Sprintf(
 		"[%d..%d]",
-		reservationEventScanChunkSize,
-		2*reservationEventScanChunkSize-1,
+		reservationEventScanSpan(),
+		2*reservationEventScanSpan()-1,
 	)
 	if !strings.Contains(err.Error(), "fetching past events in chunk "+expectedRange) {
 		t.Errorf(
@@ -292,7 +291,7 @@ func TestFetchPastEventsInChunks_ErrorInSecondChunk(t *testing.T) {
 		t,
 		f.ranges,
 		0,
-		2*reservationEventScanChunkSize-1,
+		2*reservationEventScanSpan()-1,
 	)
 }
 

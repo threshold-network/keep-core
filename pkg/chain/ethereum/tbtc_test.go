@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -652,10 +653,13 @@ func TestResolveCustodiedReservationKeys(t *testing.T) {
 		}
 	})
 
-	t.Run("a failing lookup skips only that key", func(t *testing.T) {
+	t.Run("a failing lookup fails the read instead of truncating it", func(t *testing.T) {
 		// Keys 1 and 3 both belong to the wallet; the lookup of key 1
-		// fails. Key 3 must still be queried and returned: one unreadable
-		// reservation must not drop the wallet's other reservations.
+		// fails. Returning key 3 alone would hand the caller a custody
+		// set it cannot tell apart from a complete one - the shape of the
+		// answer is identical - so a stranded key 1 would go unnotified
+		// against a wallet the stranding watcher believes it has covered.
+		// The read must fail, and the caller retries on its next pass.
 		var queried []int64
 		failingLookup := func(key *big.Int) (*tbtc.Reservation, error) {
 			queried = append(queried, key.Int64())
@@ -674,14 +678,25 @@ func TestResolveCustodiedReservationKeys(t *testing.T) {
 			nil,
 			failingLookup,
 		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if err == nil {
+			t.Fatalf(
+				"expected the failed lookup to fail the read, got keys "+
+					"[%+v] and no error",
+				keys,
+			)
 		}
-		if !reflect.DeepEqual([]int64{1, 3}, queried) {
-			t.Errorf("expected keys [1 3] to be queried, actual %v", queried)
+		if keys != nil {
+			t.Errorf("expected no keys alongside the error, actual [%+v]", keys)
 		}
-		if expectedKeys := []*big.Int{big.NewInt(3)}; !reflect.DeepEqual(expectedKeys, keys) {
-			t.Errorf("expected [%+v], actual [%+v]", expectedKeys, keys)
+		if !strings.Contains(err.Error(), "cannot get reservation [1]") {
+			t.Errorf("expected the error to name the unreadable key, actual [%v]", err)
+		}
+		if !reflect.DeepEqual([]int64{1}, queried) {
+			t.Errorf(
+				"expected the walk to stop at the unreadable key [1], "+
+					"actual queries %v",
+				queried,
+			)
 		}
 	})
 }
