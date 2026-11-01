@@ -398,7 +398,13 @@ func (rsw *reservationStrandingWatcher) checkStranding(
 				err,
 			)
 			// Continue with the remaining reservations: a single failure
-			// must not starve the others.
+			// must not starve the others. Flag the wallet for another pass
+			// as well: the notification that failed is the only thing this
+			// pass exists to land, and the close/termination event that
+			// brought the wallet here is one-shot, so a failure dropped
+			// here would leave the reservation unnotified - and its
+			// capacity pinned - with nothing left to retry it.
+			recheck = true
 			continue
 		}
 

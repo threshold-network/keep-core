@@ -893,6 +893,7 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 			context.Background(),
 			spvChain,
 			strandingWatcher,
+			nil,
 			[][20]byte{wallet},
 			0,
 		)
@@ -907,20 +908,41 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 		}
 	})
 
-	t.Run("still-unresolved wallet is skipped without error", func(t *testing.T) {
+	t.Run("still-unresolved wallet is queued for the poll loop", func(t *testing.T) {
 		spvChain := newLocalChain()
 		strandingWatcher := newReservationStrandingWatcher(spvChain)
+		watcher := NewReservationActionTimeoutWatcher(
+			spvChain,
+			0,
+			common.Address{},
+			strandingWatcher,
+			0,
+			nil,
+		)
 
+		wallet := walletPKHAt(0x51)
 		retryReservationStrandingStartupScan(
 			context.Background(),
 			spvChain,
 			strandingWatcher,
-			[][20]byte{walletPKHAt(0x51)},
+			watcher,
+			[][20]byte{wallet},
 			0,
 		)
 
 		if notified := spvChain.getSubmittedReservationStrandedKeys(); len(notified) != 0 {
 			t.Fatalf("expected no notifications for a still-unresolved wallet, got %v", notified)
+		}
+
+		// The second chance is not the last one: the wallet whose state
+		// still cannot be read stays queued for the poll loop's drain.
+		if !watcher.strandingRecheckQueue.has(strandingRecheckTarget{
+			walletPublicKeyHash: wallet,
+		}) {
+			t.Fatal(
+				"expected the still-unresolved wallet to be queued on the " +
+					"stranding recheck queue after the retry pass",
+			)
 		}
 	})
 
@@ -941,6 +963,7 @@ func TestRetryReservationStrandingStartupScan(t *testing.T) {
 			ctx,
 			spvChain,
 			strandingWatcher,
+			nil,
 			[][20]byte{wallet},
 			time.Hour,
 		)
@@ -1460,6 +1483,7 @@ func TestStartupStrandingScanChecksDissolutionEligibleClosingWallet(
 				context.Background(),
 				spvChain,
 				strandingWatcher,
+				nil,
 				[][20]byte{wallet},
 				0,
 			)

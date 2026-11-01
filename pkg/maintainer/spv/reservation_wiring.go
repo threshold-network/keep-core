@@ -400,68 +400,18 @@ func WireReservationWatchers(
 	// permanently omitted from stranding notification, since the live
 	// OnWalletClosed subscription cannot replay an already-emitted close
 	// event.
-	var unresolvedWallets [][20]byte
-
-	for _, event := range registeredEvents {
-		var wallet *tbtc.WalletChainData
-		var walletErr error
-		for attempt := range 3 {
-			wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
-			if walletErr == nil {
-				break
-			}
-			reservationWiringLogger.Warnf(
-				"stranding startup scan attempt %d/3 failed to fetch wallet [0x%x]: [%v]",
-				attempt+1,
-				event.WalletPublicKeyHash,
-				walletErr,
-			)
-		}
-		if walletErr != nil {
-			reservationWiringLogger.Warnf(
-				"stranding startup scan giving up on wallet [0x%x] after "+
-					"3 fetch attempts; queuing it for a second-chance "+
-					"retry pass once wiring completes instead of "+
-					"assuming it is Live: [%v]",
-				event.WalletPublicKeyHash,
-				walletErr,
-			)
-			unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
-			continue
-		}
-		// Closed and Terminated wallets are always checked; a Closing
-		// wallet is checked too, but only reservations past their
-		// dissolution-eligible time are notified (see
-		// checkStrandingForWalletState).
-		var checkErr error
-		for attempt := range 3 {
-			var checked bool
-			checked, _, checkErr = strandingWatcher.checkStrandingForWalletState(
-				event.WalletPublicKeyHash,
-				wallet.State,
-			)
-			if !checked || checkErr == nil {
-				break
-			}
-			reservationWiringLogger.Warnf(
-				"stranding startup scan attempt %d/3 failed to check "+
-					"wallet [0x%x]: [%v]",
-				attempt+1,
-				event.WalletPublicKeyHash,
-				checkErr,
-			)
-		}
-		if checkErr != nil {
-			reservationWiringLogger.Warnf(
-				"stranding startup scan giving up on wallet [0x%x] "+
-					"after 3 check attempts; its stranded reservations, "+
-					"if any, will not be notified by this startup scan: [%v]",
-				event.WalletPublicKeyHash,
-				checkErr,
-			)
-			continue
-		}
-	}
+	//
+	// startupRecheckWallets collects the wallets this scan could not leave
+	// settled - the check failed, or it flagged the wallet for a later pass
+	// (a Closing wallet not yet dissolution-eligible, a reservation with a
+	// pending action) - and is queued on the action-timeout watcher's
+	// stranding recheck queue once that watcher exists, so the scan's work
+	// continues on later poll ticks instead of ending with this pass.
+	unresolvedWallets, startupRecheckWallets := checkStrandingForStartupScanWallets(
+		spvChain,
+		strandingWatcher,
+		registeredEvents,
+	)
 
 	// Computed once here so the stale-deposit watcher (first reveal scan)
 	// and the action-timeout watcher (first action-request scan) share a
@@ -503,11 +453,21 @@ func WireReservationWatchers(
 		subscription.Unsubscribe()
 	}()
 
+	// Hand the wallets the startup scan could not settle to the
+	// action-timeout watcher's stranding recheck queue, so they are
+	// re-examined on later poll ticks: the startup scan runs once, and the
+	// close events that would otherwise bring these wallets back have
+	// already been emitted and cannot be replayed.
+	for _, walletPublicKeyHash := range startupRecheckWallets {
+		actionTimeoutWatcher.ScheduleStrandingRecheck(walletPublicKeyHash)
+	}
+
 	if len(unresolvedWallets) > 0 {
 		go retryReservationStrandingStartupScan(
 			ctx,
 			spvChain,
 			strandingWatcher,
+			actionTimeoutWatcher,
 			unresolvedWallets,
 			getReservationStrandingStartupScanRetryDelay(),
 		)
@@ -862,16 +822,113 @@ func scanReservationStrandingStartupRegistrations(
 	return registeredEvents, err
 }
 
+// checkStrandingForStartupScanWallets runs the startup scan's per-wallet
+// work over the registrations it found: Closed and Terminated wallets are
+// checked outright, Closing and Live ones only for reservations past their
+// dissolution-eligible time (see checkStrandingForWalletState).
+//
+// Two lists come back. unresolvedWallets holds the wallets whose state
+// could not be read on any of the 3 attempts; they are handed to
+// retryReservationStrandingStartupScan for a second-chance pass.
+// recheckWallets holds the wallets whose check failed, or that the check
+// itself flagged for a later pass (a Closing wallet not yet
+// dissolution-eligible, a reservation with a pending action). Both are
+// returned rather than only logged, because the wallet close event that
+// would otherwise bring the wallet back is one-shot: a wallet dropped here
+// is dropped from stranding coverage for the lifetime of the process.
+func checkStrandingForStartupScanWallets(
+	spvChain Chain,
+	strandingWatcher *reservationStrandingWatcher,
+	registeredEvents []*tbtc.NewWalletRegisteredEvent,
+) (unresolvedWallets [][20]byte, recheckWallets [][20]byte) {
+	for _, event := range registeredEvents {
+		var wallet *tbtc.WalletChainData
+		var walletErr error
+		for attempt := range 3 {
+			wallet, walletErr = spvChain.GetWallet(event.WalletPublicKeyHash)
+			if walletErr == nil {
+				break
+			}
+			reservationWiringLogger.Warnf(
+				"stranding startup scan attempt %d/3 failed to fetch wallet [0x%x]: [%v]",
+				attempt+1,
+				event.WalletPublicKeyHash,
+				walletErr,
+			)
+		}
+		if walletErr != nil {
+			reservationWiringLogger.Warnf(
+				"stranding startup scan giving up on wallet [0x%x] after "+
+					"3 fetch attempts; queuing it for a second-chance "+
+					"retry pass once wiring completes instead of "+
+					"assuming it is Live: [%v]",
+				event.WalletPublicKeyHash,
+				walletErr,
+			)
+			unresolvedWallets = append(unresolvedWallets, event.WalletPublicKeyHash)
+			continue
+		}
+
+		var checked bool
+		var recheck bool
+		var checkErr error
+		for attempt := range 3 {
+			checked, recheck, checkErr = strandingWatcher.checkStrandingForWalletState(
+				event.WalletPublicKeyHash,
+				wallet.State,
+			)
+			if !checked || checkErr == nil {
+				break
+			}
+			reservationWiringLogger.Warnf(
+				"stranding startup scan attempt %d/3 failed to check "+
+					"wallet [0x%x]: [%v]",
+				attempt+1,
+				event.WalletPublicKeyHash,
+				checkErr,
+			)
+		}
+		if checkErr != nil {
+			reservationWiringLogger.Warnf(
+				"stranding startup scan giving up on wallet [0x%x] "+
+					"after 3 check attempts; its stranded reservations, "+
+					"if any, will not be notified by this startup scan: [%v]",
+				event.WalletPublicKeyHash,
+				checkErr,
+			)
+			recheckWallets = append(recheckWallets, event.WalletPublicKeyHash)
+			continue
+		}
+		if recheck {
+			reservationWiringLogger.Infof(
+				"stranding startup scan flagged wallet [0x%x] for a later "+
+					"pass; queuing it on the stranding recheck queue",
+				event.WalletPublicKeyHash,
+			)
+			recheckWallets = append(recheckWallets, event.WalletPublicKeyHash)
+		}
+	}
+
+	return unresolvedWallets, recheckWallets
+}
+
 // retryReservationStrandingStartupScan gives the startup catch-up scan's
 // unresolved wallets (see WireReservationWatchers) one more chance, after
 // waiting out delay, once the rest of the wiring has already completed.
 // delay is a parameter (rather than reading reservationStrandingStartupScanRetryDelay
 // directly) so tests can exercise this function without waiting on a real
 // timer.
+//
+// A wallet this pass still cannot settle - the state read fails, the check
+// fails, or the check asks for another pass - is queued on
+// actionTimeoutWatcher's stranding recheck queue, so the second chance is
+// not the last one. A nil actionTimeoutWatcher drops that follow-up: the
+// caller has no watcher to drain the queue.
 func retryReservationStrandingStartupScan(
 	ctx context.Context,
 	spvChain Chain,
 	strandingWatcher *reservationStrandingWatcher,
+	actionTimeoutWatcher *ReservationActionTimeoutWatcher,
 	walletPublicKeyHashes [][20]byte,
 	delay time.Duration,
 ) {
@@ -892,23 +949,32 @@ func retryReservationStrandingStartupScan(
 		if err != nil {
 			reservationWiringLogger.Errorf(
 				"stranding startup scan second-chance retry still failed "+
-					"to fetch wallet [0x%x]; its stranded reservations, "+
-					"if any, will not be notified by the startup scan: [%v]",
+					"to fetch wallet [0x%x]; queuing it on the stranding "+
+					"recheck queue for later poll ticks: [%v]",
 				walletPublicKeyHash,
 				err,
 			)
+			if actionTimeoutWatcher != nil {
+				actionTimeoutWatcher.ScheduleStrandingRecheck(walletPublicKeyHash)
+			}
 			continue
 		}
-		if _, _, err := strandingWatcher.checkStrandingForWalletState(
+
+		_, recheck, err := strandingWatcher.checkStrandingForWalletState(
 			walletPublicKeyHash,
 			wallet.State,
-		); err != nil {
+		)
+		if err != nil {
 			reservationWiringLogger.Errorf(
 				"stranding startup scan second-chance retry failed to "+
-					"check wallet [0x%x]: [%v]",
+					"check wallet [0x%x]; queuing it on the stranding "+
+					"recheck queue for later poll ticks: [%v]",
 				walletPublicKeyHash,
 				err,
 			)
+		}
+		if (err != nil || recheck) && actionTimeoutWatcher != nil {
+			actionTimeoutWatcher.ScheduleStrandingRecheck(walletPublicKeyHash)
 		}
 	}
 }
@@ -949,10 +1015,23 @@ func subscribeReservationWalletClosed(
 			if err != nil {
 				reservationWiringLogger.Errorf(
 					"failed to resolve public key hash for closed "+
-						"wallet ID [0x%x]: [%v]",
+						"wallet ID [0x%x]: [%v]; queuing the wallet ID on "+
+						"the stranding recheck queue so later poll ticks "+
+						"retry the resolution",
 					event.WalletID,
 					err,
 				)
+				// The close event is one-shot, so returning here would
+				// remove the wallet from stranding coverage for good. The
+				// public key hash is unknown, but the wallet ID is not:
+				// the action-timeout watcher's drain resolves it before
+				// checking, and re-queues the ID if the resolution fails
+				// again.
+				if actionTimeoutWatcher != nil {
+					actionTimeoutWatcher.ScheduleStrandingRecheckByWalletID(
+						event.WalletID,
+					)
+				}
 				return
 			}
 
