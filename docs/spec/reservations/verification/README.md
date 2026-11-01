@@ -64,7 +64,7 @@ The live milestone tracker remains `docs/plans/reservations-epic-tracker.md` on 
 |---|---|---|
 | [System model](01-system-model.md) | SM- | Actors, components, storage and allowed transitions |
 | [Invariants](02-invariants.md) | INV- | Legal/illegal state relationships, conservation equations, backing and time rules |
-| [Parameters and governance](03-parameters-governance.md) | PAR- | Types, units, disabled-cap semantics, sizing and governance order |
+| [Parameters and governance](03-parameters-governance.md) | PAR- | Types, units, disabled-cap semantics, sizing and governance order. [Deploy-ceremony cross-parameter rules](03-deploy-ceremony-parameters.md) owns PAR-X11 |
 | [User stories](04-user-stories.md) | US- | Positive and negative paths, actors, guards, events and reverts |
 | [Edge cases](05-edge-cases.md) | EC- | Equality boundaries, races, late proofs, reorgs and state changes |
 | [Failure modes](06-failure-modes.md) | FM- | Triggers, detection, money at risk and available mitigation |
