@@ -834,18 +834,23 @@ func reservationParametersOutput(
 	return packed
 }
 
-// TestReservationBuildSelector pins the hardcoded deployment marker the
-// pre-reservations classifier searches the deployed code for against the
-// generated Bridge ABI, so an ABI change cannot silently make the classifier
-// look for a selector no build carries (which would report every deployment,
-// reservations build included, as pre-reservations).
+// TestReservationBuildSelector pins the deployment marker the
+// pre-reservations classifier searches the deployed code for to the selector
+// of getReservationRouter(). A typo here would make the classifier search for
+// bytes no build carries, so it would report every deployment - reservations
+// build included - as pre-reservations.
+//
+// The signature is hashed directly rather than read back from the generated
+// Bridge ABI: CI's build image regenerates the tbtc bindings from the
+// published artifacts plus the vendored fallback fragments, and those
+// fragments carry isReservedDeposit but not getReservationRouter, so the ABI
+// the CI image compiles against does not contain this entry point.
 func TestReservationBuildSelector(t *testing.T) {
-	bridgeABI := parseGenABI(t, tbtcabi.BridgeABI)
-
-	expected := methodSelector(t, bridgeABI, "getReservationRouter")
-	if !bytes.Equal(reservationBuildSelector, expected[:]) {
+	expected := crypto.Keccak256([]byte("getReservationRouter()"))[:4]
+	if !bytes.Equal(reservationBuildSelector, expected) {
 		t.Fatalf(
-			"reservations-build selector drift: classifier looks for 0x%x, the ABI says 0x%x",
+			"reservations-build selector drift: classifier looks for 0x%x, "+
+				"getReservationRouter() hashes to 0x%x",
 			reservationBuildSelector,
 			expected,
 		)
