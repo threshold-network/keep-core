@@ -1,14 +1,14 @@
 {
-  "baseline": "7dd510d93",
-  "baseline_note": "The head after the 2026-10-30 re-pin, when the pin rule was adopted. Lines added or changed since this commit are checked; the citations already in the set are the reading backlog on the board row, not work for this check.",
+  "baseline": "fe04c9ee1",
+  "baseline_note": "The commit before the 2026-10-31 re-pin to the unpublished freeze tree, so every line the re-pin and the 2026-11-01 re-pin to the public heads added or changed is in scope for this check. The baseline sits at the spec head the auditors read, not at the re-pin commit, because a baseline set at the re-pin exempts the very lines the rule exists to catch.",
   "pins": {
     "tbtc-v2": {
       "previous": "44d9c9c6a",
-      "current": "c8350d109"
+      "current": "72b891eec"
     },
     "keep-core": {
       "previous": "f03cc61dc",
-      "current": "4ced1c839"
+      "current": "931dcd63c"
     }
   },
   "paths": [

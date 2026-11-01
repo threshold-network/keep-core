@@ -31,11 +31,11 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
   settled by the same Bitcoin transaction, the generation the maintainer
   proves is the newest `Pending` one, which the client sorts first, submits
   alone for the key and claims on success
-  (`keep-core@4ced1c8398:pkg/maintainer/spv/reservation_proof_loop.go:862-875`,
+  (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_proof_loop.go:875-888`,
   `:1180-1182`, `:1248-1250`), and the older `TimedOut` generation that this
   settlement leaves behind can then never settle, because the position's
   anchor has moved away from the source anchor that generation recorded
-  (`tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
+  (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
   which INV-503 and EC-14 already accept.
 - **Enforcing code.** On-time current-generation check
   (`ReservationProofs.sol:482-487` acceptance, `:663-667` re-anchor);
@@ -111,11 +111,11 @@ taken on 2026-10-29 and the code does not change.
     `block.timestamp >= dissolutionEligibleAt`; `Closing` once **both**
     `block.timestamp >= dissolutionEligibleAt` **and**
     `block.timestamp >= closingStartedAt + walletClosingPeriod`
-    (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1325-1336`).
+    (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1331-1342`).
     The closing-period half is an exclusive re-anchor window, not an extra
     delay on dissolution.
   - Late acceptance settlement is allowed iff
-    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@c8350d109:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
+    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
     equality allowed, `"Late acceptance settlement window expired"` at
     :210). Late re-anchor settlement carries no such bound.
   - Reveal caps the refund deadline: `refundDeadline <= now + term +
@@ -127,12 +127,12 @@ taken on 2026-10-29 and the code does not change.
 - **Client check on a Closing wallet.** The keep-core stranding watcher gates a
   `Closing` wallet on both conditions. The dispatch sets the
   dissolution-eligible requirement for `Live` and `Closing`
-  (`keep-core@4ced1c839:pkg/maintainer/spv/reservation_stranding_watch.go:232-234`),
+  (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_stranding_watch.go:232-234`),
   the loop compares the chain head with `DissolutionEligibleAt` (`:356-368`), and
   a `Closing` wallet additionally has to be past
   `closingStartedAt + walletClosingPeriod` (`:379-392`), so the client no longer
   sends the notification the contract would revert
-  (`tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1324-1336`).
+  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1330-1342`).
   A wallet that fails either gate sets the `recheck` flag and is retried on a
   later pass. Before keep-core #4365 the `Closing` check read the
   dissolution-eligible time alone and logged the revert without setting the
@@ -143,12 +143,12 @@ taken on 2026-10-29 and the code does not change.
   timeoutAt + 24h == refundDeadline + 1s" (:433);
   `Bridge.ReservationStrandingLibrary.test.ts` "succeeds when reservation is
   dissolution-eligible" (:1366); at `tbtc-v2@c8350d109`:
-  `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
+  `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
   (Closing rejected past dissolution eligibility while the closing period runs),
   `:263` and `:313` (stranding once both conditions hold, inclusive at the end
   of the closing period), `:386` and `:397` (a `Live` wallet before and after
   dissolution eligibility), and
-  `tbtc-v2@c8350d109:solidity/test/bridge/ReservationProofs.test.ts:446`
+  `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:446`
   (late acceptance one second past the window reverts), `:456`
   (`"Late acceptance settlement window expired"`).
 - **Status.** holds at `tbtc-v2@c8350d109` for the corrected windows. The
@@ -241,7 +241,7 @@ taken on 2026-10-29 and the code does not change.
   A later debt repayment burns supply without another Bitcoin miner fee.
   This does not assert that fee debt captures every possible pooled loss or uncredited spend.
 - **Enforcing code.** `financeInKindFee` records the shortfall
-  (`tbtc-v2@c8350d109:solidity/contracts/vault/ReservationVault.sol:211-229`).
+  (`tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:211-229`).
   Repayment and debt-first sweeping decrease it (:237-261, :297-318).
   `_burnFromReserve` floors fractional-satoshi token balance before coverage
   (:354-371). A fractional satoshi does not cover a whole-satoshi fee.

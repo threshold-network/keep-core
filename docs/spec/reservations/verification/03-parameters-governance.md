@@ -64,7 +64,7 @@ capacity reduction and a cap raise can silently replace each other. The view
 is unrestricted, as the same values are already public through
 `ReservationCapsUpdateStarted`, and it is read-only: it shows what a `begin`
 is about to replace, it does not prevent the replacement
-(`tbtc-v2@c8350d109:solidity/contracts/bridge/BridgeGovernance.sol:1999-2019`).
+(`tbtc-v2@72b891eec:solidity/contracts/bridge/BridgeGovernance.sol:1999-2019`).
 tbtc-v2#1179 adds that getter and the freeze pin carries it.
 
 | ID | Parameter (type) | Meaning | Validation rule (cite) | Who may set | Status | Test |
@@ -186,10 +186,10 @@ not the on-chain feasibility guard of PAR-X3. When the on-chain
 `max(revealAheadPeriod + REVEAL_DRIFT_SECONDS, RES_ACTION_TIMEOUT + DEPOSIT_REFUND_SAFETY_MARGIN + REVEAL_DRIFT_SECONDS)`
 as the lowest reveal-to-refund distance, derives a minimum feasible term from it,
 and throws when `RESERVATION_TERM_SECONDS` is below that term
-(`tbtc-v2@c8350d109:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:784-829`).
+(`tbtc-v2@72b891eec:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:863-908`).
 The on-chain guard remains PAR-X3. Status `holds`.
 Test:
-`tbtc-v2@c8350d109:solidity/test/deploy/98_generate_reservation_mainnet_calldata.test.ts:545`
+`tbtc-v2@72b891eec:solidity/test/deploy/98_generate_reservation_mainnet_calldata.test.ts:641`
 (reveal-ahead period rejected) and `:549` (longest accepted reveal-ahead period).
 
 ### PAR-X4 Saturation sizing
@@ -232,19 +232,19 @@ leaves Live), `:379` (blocks every acceptance while `L <= R`); SDK mirror
 
 ### PAR-X5 Action-timeout vs REQUEST_TIMEOUT_SAFETY_MARGIN
 `reservationActionTimeout > REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`
-(2h + 2h + 1 s) at `tbtc-v2@c8350d109:solidity/contracts/bridge/Reservation.sol:1647-1651`,
+(2h + 2h + 1 s) at `tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1653-1657`,
 so the wallet validator always has a signing window before the action can time
 out, including for a deposit revealed in the same block as the request: the
 first admissible signing timestamp is `revealedAt + DEPOSIT_MIN_AGE + 1` and the
 last is `timeoutAt - REQUEST_TIMEOUT_SAFETY_MARGIN - 1`, because the validator's
 bound is strict (`block.timestamp < action.timeoutAt - REQUEST_TIMEOUT_SAFETY_MARGIN`,
-`tbtc-v2@c8350d109:solidity/contracts/bridge/WalletProposalValidator.sol:1000-1007`)
+`tbtc-v2@72b891eec:solidity/contracts/bridge/WalletProposalValidator.sol:1000-1007`)
 and proposal timestamps are integer seconds. The original pin required
 only `> REQUEST_TIMEOUT_SAFETY_MARGIN` (`Reservation.sol:1393`), which left a
 same-block reveal without a window. The re-anchor request additionally requires
 a non-empty signing window against the safety-margined deadline
 (`Reservation.sol:833`). Status `holds`. Test:
-`tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationCaps.test.ts:98-130`
+`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationCaps.test.ts:100-132`
 (the action-timeout floor cases: `:116` rejects the old floor `safety margin + 1`,
 `:122` rejects `safety margin + deposit min age + 1`, `:128` accepts `+ 2`);
 `Reservation.test.ts` "action timeout is too short for signing window" covers
@@ -272,7 +272,7 @@ floor is `newAnchorAmount > txMaxFee` (`ReservationProofs.sol:695`). The two
 are distinct and the request-time floor is the binding one; a re-anchor may
 settle between `txMaxFee` and `minAmount + txMaxFee` if the fee is bounded
 (snapshotted), but the request-time check is what caps the grind.
-Status `holds`. Test: `tbtc-v2@c8350d109:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:711` ("bounds the grind at a request-time amount floor, not the settlement-time dust floor").
+Status `holds`. Test: `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:850` ("bounds the grind at a request-time amount floor, not the settlement-time dust floor").
 
 ### PAR-X9 Release-to-pool refund-margin guard (decision D26, at `d20cf74ba`)
 `releaseReservedDepositToPool` re-routes a revealed, never-requested reserved
