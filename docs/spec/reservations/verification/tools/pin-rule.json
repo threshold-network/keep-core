@@ -1,5 +1,5 @@
 {
-  "baseline": "fe04c9ee1",
+  "baseline": "7dcfd9800",
   "baseline_note": "The commit before the 2026-10-31 re-pin to the unpublished freeze tree, so every line the re-pin and the 2026-11-01 re-pin to the public heads added or changed is in scope for this check. The baseline sits at the spec head the auditors read, not at the re-pin commit, because a baseline set at the re-pin exempts the very lines the rule exists to catch.",
   "pins": {
     "tbtc-v2": {
