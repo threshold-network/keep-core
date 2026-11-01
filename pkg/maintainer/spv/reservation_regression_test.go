@@ -384,11 +384,11 @@ func TestSingleReservationReadFailureFlagsWalletForRecheck(t *testing.T) {
 		strandingWatcher := newReservationStrandingWatcher(failing)
 		strandingWatcher.retryDelay = 0
 		ratw := NewReservationActionTimeoutWatcher(failing, 0, common.Address{}, strandingWatcher, 0, nil)
-		ratw.strandingRecheckWallets[wallet] = struct{}{}
+		ratw.ScheduleStrandingRecheck(wallet)
 
 		ratw.drainStrandingRechecks()
 
-		if _, queued := ratw.strandingRecheckWallets[wallet]; !queued {
+		if !strandingRecheckQueued(ratw, wallet) {
 			t.Fatal("expected the wallet with an unread reservation to stay queued for the next drain")
 		}
 	})
