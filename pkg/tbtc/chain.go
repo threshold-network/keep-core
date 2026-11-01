@@ -731,6 +731,15 @@ type ReservationChain interface {
 	// rather than a default deposit.
 	IsReservedDeposit(depositKey *big.Int) (bool, error)
 
+	// ReservationsVaultTrusted reports whether the Bridge trusts the
+	// reservation vault configured in the reservation parameters, i.e.
+	// whether reservations are live on-chain. It reads the same state the
+	// C-4 startup gate compares with the compiled activation block, and the
+	// sweep paths use it to refuse a sweep while reservations are live
+	// on-chain but not active in this client (see tbtc.ReservationsSweepGate).
+	// A Bridge deployed before the reservation upgrade cannot answer it.
+	ReservationsVaultTrusted() (bool, error)
+
 	// OnReservationAcceptanceRequested registers a callback that is invoked
 	// when an on-chain ReservationAcceptanceRequested event is seen.
 	OnReservationAcceptanceRequested(

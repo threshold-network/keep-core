@@ -270,15 +270,17 @@ func start(cmd *cobra.Command) error {
 
 			// The C-4 activation ordering gate compares the client's
 			// compiled activation block for the running network with the
-			// contract's reported reservation state. A mismatch means the
-			// on-chain activation and the client release are out of order,
-			// which is not something the node can fix: report it loudly
-			// instead of running silently in the wrong state.
-			warnOnReservationsActivationMismatch(
+			// contract's reported reservation state. A C-4 violation is
+			// fatal: the chain accepts reserved deposits that this node
+			// will never coordinate, which is exactly the state the
+			// activation block exists to prevent.
+			if err := verifyReservationsActivation(
 				blockCounter,
 				tbtcChain,
 				clientConfig.Ethereum.Network,
-			)
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -300,24 +302,30 @@ func isBootstrap() bool {
 	return clientConfig.LibP2P.Bootstrap
 }
 
-// warnOnReservationsActivationMismatch logs the reservations activation
-// startup warning when the client's compiled activation block for the
-// running network and the contract's reported reservation state disagree.
+// verifyReservationsActivation checks the reservations activation state at
+// startup and returns an error when the C-4 ordering gate has been violated.
 //
-// The check is a warning, not a fatal error: the node's other duties (DKG,
-// heartbeats, redemptions) do not depend on the reservations feature, so
-// refusing to start would turn a reservations misconfiguration into a total
-// outage. A C-4 violation is logged at error severity and a pending on-chain
-// activation at warning severity.
+// A C-4 violation - the Bridge trusts the reservation vault while this client
+// has no activation block for the network or has not reached it - is fatal:
+// reserved deposits can be accepted on-chain while this node never coordinates
+// their anchors, and running on would hide exactly that from the operator. The
+// sweep paths independently refuse to sweep in that state (see
+// tbtc.ReservationsSweepGate), so the node also stops before it can do damage.
 //
-// A failure to read the chain head or the contract state is itself reported
-// as a warning: the check could not establish that the two agree, and
-// silently skipping it would hide exactly the situation it exists to catch.
-func warnOnReservationsActivationMismatch(
+// Two states are logged and do not stop the node:
+//
+//   - The on-chain activation is still pending (the client is ready, the
+//     contract is not): nothing is reserved yet, so there is nothing to refuse.
+//   - The state cannot be read at all: a Bridge deployed before the reservation
+//     surface cannot answer the query, and refusing to start there would turn
+//     the client cut-over that must precede the Bridge upgrade into a total
+//     outage, halting duties that have nothing to do with reservations (DKG,
+//     heartbeats, redemptions).
+func verifyReservationsActivation(
 	blockCounter chain.BlockCounter,
 	vaultReader tbtc.ReservationsActivationVaultReader,
 	network ethereumutil.Network,
-) {
+) error {
 	status, err := tbtc.CollectReservationsActivationStatus(
 		network,
 		blockCounter,
@@ -331,22 +339,28 @@ func warnOnReservationsActivationMismatch(
 			network,
 			err,
 		)
-		return
+		return nil
 	}
 
 	message, severity := tbtc.EvaluateReservationsActivation(status)
 	if message == "" {
-		return
+		return nil
 	}
 
 	switch severity {
 	case tbtc.ReservationsActivationError:
 		logger.Errorf(
+			"reservations activation ordering violation (C-4): %s; "+
+				"refusing to start",
+			message,
+		)
+		return fmt.Errorf(
 			"reservations activation ordering violation (C-4): %s",
 			message,
 		)
 	default:
 		logger.Warnf("reservations activation warning: %s", message)
+		return nil
 	}
 }
 

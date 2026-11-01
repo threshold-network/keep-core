@@ -124,6 +124,12 @@ type LocalChain struct {
 	reservationCaps    [2]uint64
 	reservationCapsSet bool
 
+	// reservationVaultTrusted is what ReservationsVaultTrusted reports;
+	// reservationVaultTrustedErr, when set, makes it fail instead (a
+	// Bridge without the reservation surface, or a failing read).
+	reservationVaultTrusted    bool
+	reservationVaultTrustedErr error
+
 	belowDustNotifications []*belowDustNotification
 	reservationWalletKeys  map[[20]byte][]*big.Int
 	reservedDeposits       map[string]bool
@@ -2190,6 +2196,38 @@ func (lc *LocalChain) SetReservationParameters(params tbtc.ReservationParameters
 
 	lc.reservationParametersValue = params
 	lc.reservationParametersSet = true
+}
+
+// ReservationsVaultTrusted reports the value installed via
+// SetReservationsVaultTrusted, or the error installed via
+// SetReservationsVaultTrustedError. The default is (false, nil): the Bridge
+// trusts no reservation vault, i.e. reservations are not live on-chain.
+func (lc *LocalChain) ReservationsVaultTrusted() (bool, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	if lc.reservationVaultTrustedErr != nil {
+		return false, lc.reservationVaultTrustedErr
+	}
+	return lc.reservationVaultTrusted, nil
+}
+
+// SetReservationsVaultTrusted makes ReservationsVaultTrusted report trusted.
+func (lc *LocalChain) SetReservationsVaultTrusted(trusted bool) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationVaultTrusted = trusted
+}
+
+// SetReservationsVaultTrustedError makes ReservationsVaultTrusted fail with
+// err, modeling a Bridge that does not carry the reservation surface at all
+// (a pre-reservations deployment) as well as a failing chain read.
+func (lc *LocalChain) SetReservationsVaultTrustedError(err error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.reservationVaultTrustedErr = err
 }
 
 // ReservationCaps returns the chain's configured reservation cap-pair,

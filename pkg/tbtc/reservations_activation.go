@@ -220,3 +220,56 @@ func CollectReservationsActivationStatus(
 
 	return status, nil
 }
+
+// ReservationsSweepGate reports whether a deposit sweep may proceed, given the
+// client's compiled activation window for the running network
+// (reservationsActive) and the chain's own reservation state.
+//
+// The sweep paths consult the reserved-deposit predicate (IsReservedDeposit)
+// only inside the activation window, because a Bridge deployed before the
+// reservation upgrade does not carry that predicate at all. That leaves a
+// hole: a release whose activation entry is missing, or whose entry has not
+// been reached, sweeps reserved deposits without ever asking. This gate closes
+// it by asking the chain rather than trusting the table:
+//
+//   - Window open: the per-deposit checks are authoritative and fail closed on
+//     their own, so the sweep is allowed and the state reads as known.
+//   - Window closed, Bridge reports the reservation vault trusted:
+//     reservations are live on-chain while this client does not coordinate
+//     them, so the sweep is refused.
+//   - Window closed, Bridge reports no trusted vault: nothing on-chain is
+//     reserved, the sweep is allowed and the state reads as known.
+//   - Window closed, Bridge cannot answer: the client cannot establish the
+//     reservation state. The sweep is still allowed and the state reads as
+//     unknown so the caller can warn, because the only Bridge that cannot
+//     answer is one deployed before the reservation surface existed, and such
+//     a Bridge cannot trust a reservation vault - so no deposit on it can be
+//     reserved. Refusing here would instead halt every sweep protocol-wide for
+//     any client cut over before the Bridge upgrade, which is the ordering
+//     hazard the M1 release plan carries, and a stalled fleet is the worse
+//     failure: the on-chain WalletProposalValidator still rejects a sweep that
+//     spends a reserved deposit.
+func ReservationsSweepGate(
+	reservationsActive bool,
+	vaultReader ReservationsActivationVaultReader,
+) (reservationStateKnown bool, err error) {
+	if reservationsActive {
+		return true, nil
+	}
+
+	trusted, trustedErr := vaultReader.ReservationsVaultTrusted()
+	if trustedErr != nil {
+		return false, nil
+	}
+
+	if trusted {
+		return true, fmt.Errorf(
+			"the Bridge trusts the reservation vault, so reservations are " +
+				"live on-chain, but reservations are not active in this " +
+				"client for this network; refusing to sweep, as a reserved " +
+				"deposit would otherwise be swept unchecked",
+		)
+	}
+
+	return true, nil
+}

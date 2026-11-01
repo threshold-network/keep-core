@@ -392,3 +392,80 @@ var errTest = errors.New("test error")
 // compile-time assertion that the test counter satisfies the interface the
 // production code reads the chain head through.
 var _ chain.BlockCounter = (*activationStatusTestChain)(nil)
+
+// TestReservationsSweepGate pins the reservations sweep gate's contract. The
+// gate answers one question for both sweep paths: may this client sweep while
+// the chain's reservation state is what it is?
+//
+//   - an open activation window means the reserved-deposit checks run and
+//     fail closed on their own, so the gate allows the sweep unconditionally;
+//   - a closed window plus a trusted reservation vault is the C-4 violation
+//     this gate exists for: reservations are live on-chain while the client
+//     believes they are not, so the sweep is refused;
+//   - a closed window plus an untrusted vault allows the sweep;
+//   - a closed window plus a Bridge that cannot answer at all (a
+//     pre-reservations deployment, whose runtime carries neither
+//     ReservationsVaultTrusted nor IsReservedDeposit) allows the sweep and
+//     reports that the state is unknown, so a client cut over before the
+//     Bridge upgrade keeps sweeping instead of halting every sweep
+//     protocol-wide. Such a Bridge cannot trust a reservation vault, so no
+//     deposit on it can be reserved and allowing the sweep loses nothing.
+func TestReservationsSweepGate(t *testing.T) {
+	tests := map[string]struct {
+		reservationsActive bool
+		vault              *activationStatusTestVault
+		expectKnown        bool
+		expectErr          bool
+	}{
+		"open window, trusted vault": {
+			reservationsActive: true,
+			vault:              &activationStatusTestVault{trusted: true},
+			expectKnown:        true,
+		},
+		"open window, unreadable vault state": {
+			reservationsActive: true,
+			vault:              &activationStatusTestVault{err: errTest},
+			expectKnown:        true,
+		},
+		"closed window, trusted vault": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{trusted: true},
+			expectKnown:        true,
+			expectErr:          true,
+		},
+		"closed window, untrusted vault": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{trusted: false},
+			expectKnown:        true,
+		},
+		"closed window, pre-reservations Bridge": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{err: errTest},
+			expectKnown:        false,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			known, err := ReservationsSweepGate(
+				test.reservationsActive,
+				test.vault,
+			)
+
+			if known != test.expectKnown {
+				t.Errorf(
+					"unexpected reservation state knowledge\nexpected: %v\nactual:   %v",
+					test.expectKnown,
+					known,
+				)
+			}
+			if (err != nil) != test.expectErr {
+				t.Errorf(
+					"unexpected error presence\nexpected error: %v\nactual error:   %v",
+					test.expectErr,
+					err,
+				)
+			}
+		})
+	}
+}

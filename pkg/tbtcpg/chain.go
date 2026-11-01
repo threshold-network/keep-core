@@ -271,6 +271,14 @@ type Chain interface {
 	// rather than a default deposit.
 	IsReservedDeposit(depositKey *big.Int) (bool, error)
 
+	// ReservationsVaultTrusted reports whether the Bridge trusts the
+	// reservation vault configured in the reservation parameters, i.e.
+	// whether reservations are live on-chain. The sweep paths use it to
+	// refuse a sweep while reservations are live on-chain but not active in
+	// this client (see tbtc.ReservationsSweepGate). A Bridge deployed
+	// before the reservation upgrade cannot answer it.
+	ReservationsVaultTrusted() (bool, error)
+
 	// PastReservationAcceptanceRequestedEvents fetches past
 	// ReservationAcceptanceRequested events according to the provided
 	// filter or unfiltered if the filter is nil. Returned events are sorted

@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -439,12 +440,13 @@ func (cl *capturingLogger) Warnf(format string, args ...interface{}) {
 
 // depositSweepFeeCheckChain is a minimal stub satisfying the chain interface
 // ValidateDepositSweepProposal requires. Its ValidateDepositSweepProposal
-// unconditionally reports the proposal as valid, and its other two methods
-// are never invoked for a proposal with no deposits. This isolates the
-// follower-side sweep-fee soft check (deposit_sweep.go, below the
-// "calling chain for proposal validation" log line) from on-chain proposal
-// validation and deposit-lookup concerns that the soft check does not
-// depend on.
+// unconditionally reports the proposal as valid, its ReservationsVaultTrusted
+// reports no trusted vault (reservations not live on-chain, so the sweep
+// gate allows the sweep), and its other methods are never invoked for a
+// proposal with no deposits. This isolates the follower-side sweep-fee soft
+// check (deposit_sweep.go, below the "calling chain for proposal validation"
+// log line) from on-chain proposal validation and deposit-lookup concerns
+// that the soft check does not depend on.
 type depositSweepFeeCheckChain struct{}
 
 func (depositSweepFeeCheckChain) PastDepositRevealedEvents(
@@ -482,8 +484,8 @@ func (depositSweepFeeCheckChain) IsReservedDeposit(*big.Int) (bool, error) {
 	return false, nil
 }
 
-func (depositSweepFeeCheckChain) ReservationParameters() (*ReservationParameters, error) {
-	return nil, fmt.Errorf("reservation parameters not configured in this stub")
+func (depositSweepFeeCheckChain) ReservationsVaultTrusted() (bool, error) {
+	return false, nil
 }
 
 // TestValidateDepositSweepProposal_SweepFeeSoftCheck exercises the
@@ -563,53 +565,52 @@ func TestValidateDepositSweepProposal_SweepFeeSoftCheck(t *testing.T) {
 	}
 }
 
-// TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError
-// exercises the fail-closed posture required by reservationsActive's doc
-// comment: when reservationsActive is true, a ReservationParameters
-// failure must hard-fail proposal validation, not silently degrade to a
-// reservations-inactive posture. This is the mirror image of
-// TestValidateDepositSweepProposal_SweepFeeSoftCheck above, which
-// deliberately passes reservationsActive=false to dodge this same stub
-// chain's always-erroring ReservationParameters.
-func TestValidateDepositSweepProposal_FailsClosedOnReservationParametersError(t *testing.T) {
-	var walletPublicKeyHash [20]byte
-	stubChain := depositSweepFeeCheckChain{}
-	btcChain := newLocalBitcoinChain()
+// TestValidateDepositSweepProposal_ClosedWindowDoesNotOverRefuse is the
+// positive control for the reservations sweep gate: with the client's
+// activation
+// window closed and the Bridge reporting no trusted reservation vault, a
+// sweep validates normally. The gate refuses only on positive evidence that
+// reservations are live on-chain.
+func TestValidateDepositSweepProposal_ClosedWindowDoesNotOverRefuse(
+	t *testing.T,
+) {
+	fixture := newSweepProposalFixture(t)
 
-	proposal := &DepositSweepProposal{
-		SweepTxFee: big.NewInt(1),
-	}
-
-	logger := &capturingLogger{}
-
-	_, err := ValidateDepositSweepProposal(
-		logger,
-		walletPublicKeyHash,
-		proposal,
+	if _, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
 		0,
-		true,
-		stubChain,
-		btcChain,
-	)
-	if err == nil {
-		t.Fatal(
-			"expected validation to fail closed when reservationsActive " +
-				"is true and ReservationParameters errors",
-		)
-	}
-	if !strings.Contains(err.Error(), "reservation parameters") {
-		t.Errorf(
-			"expected error to mention reservation parameters, got: [%v]",
+		false,
+		fixture.chain,
+		fixture.bitcoinChain,
+	); err != nil {
+		t.Fatalf(
+			"expected a sweep to validate while reservations are not live "+
+				"on-chain, got error: [%v]",
 			err,
 		)
 	}
 }
 
-// TestValidateDepositSweepProposal_RejectsReservedDeposit exercises the
-// follower-side defense-in-depth check: a deposit revealed against the
-// reservation vault must be rejected here even if the leader (running a
-// pre-reservations binary, or simply buggy) proposed sweeping it anyway.
-func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
+// sweepProposalFixture is a deposit sweep proposal that validates cleanly
+// against chain, together with the chains the follower-side tests drive
+// ValidateDepositSweepProposal with.
+type sweepProposalFixture struct {
+	chain               *localChain
+	bitcoinChain        *localBitcoinChain
+	proposal            *DepositSweepProposal
+	walletPublicKeyHash [20]byte
+}
+
+// newSweepProposalFixture builds the fixture from the first loaded
+// deposit-sweep scenario. Every deposit keeps the vault its scenario
+// DepositRevealed event carries while the chain's configured reservation
+// vault is a different address: exactly the state a still-reserved deposit
+// is left in by a reservation vault rotation.
+func newSweepProposalFixture(t *testing.T) *sweepProposalFixture {
+	t.Helper()
+
 	scenarios, err := test.LoadDepositSweepTestScenarios()
 	if err != nil {
 		t.Fatal(err)
@@ -619,7 +620,7 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 	}
 	scenario := scenarios[0]
 	if len(scenario.Deposits) == 0 {
-		t.Fatal("scenario has no deposits to reserve")
+		t.Fatal("scenario has no deposits")
 	}
 
 	hostChain := Connect()
@@ -667,17 +668,6 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 		depositRevealBlock := uint64(100 * i)
 		depositsRevealBlocks[i] = big.NewInt(int64(depositRevealBlock))
 
-		eventVault := deposit.Vault
-		if i == 0 {
-			// The first deposit's vault is overridden to match the
-			// reservation vault configured below, so the pre-filter
-			// lets it reach the IsReservedDeposit check this test
-			// exercises. Other deposits keep their scenario-fixture
-			// vault, which does not match, proving they sweep
-			// unaffected.
-			eventVault = &reservationVault
-		}
-
 		err = hostChain.setPastDepositRevealedEvents(
 			&DepositRevealedEventFilter{
 				StartBlock:          depositRevealBlock,
@@ -694,7 +684,7 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 					WalletPublicKeyHash: deposit.WalletPublicKeyHash,
 					RefundPublicKeyHash: deposit.RefundPublicKeyHash,
 					RefundLocktime:      deposit.RefundLocktime,
-					Vault:               eventVault,
+					Vault:               deposit.Vault,
 					BlockNumber:         depositRevealBlock,
 				},
 			},
@@ -730,33 +720,181 @@ func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Mark the first deposit's key as reserved. Everything else about the
-	// proposal remains identical to a scenario the existing
-	// TestDepositSweepAction_Execute suite already proves validates and
-	// sweeps cleanly when nothing is reserved.
-	reservedKey := hostChain.BuildDepositKey(
-		depositsKeys[0].FundingTxHash,
-		depositsKeys[0].FundingOutputIndex,
-	)
-	hostChain.setReservedDeposit(reservedKey, true)
+	// The chain's reservation vault differs from every deposit's revealed
+	// vault, so a vault-address comparison cannot be what decides whether
+	// a deposit is reserved.
 	hostChain.setReservationParameters(&ReservationParameters{
 		ReservationVault: reservationVault,
 	})
 
-	_, err = ValidateDepositSweepProposal(
+	return &sweepProposalFixture{
+		chain:               hostChain,
+		bitcoinChain:        bitcoinChain,
+		proposal:            proposal,
+		walletPublicKeyHash: walletPublicKeyHash,
+	}
+}
+
+// TestValidateDepositSweepProposal_RejectsReservedDeposit exercises the
+// follower-side defense-in-depth check: a deposit the chain reports as
+// reserved must be rejected here even if the leader (running a
+// pre-reservations binary, or simply buggy) proposed sweeping it anyway.
+//
+// The deposit's DepositRevealed event carries a vault that is not the
+// chain's configured reservation vault, i.e. the state a still-reserved
+// deposit is left in by a reservation vault rotation.
+func TestValidateDepositSweepProposal_RejectsReservedDeposit(t *testing.T) {
+	fixture := newSweepProposalFixture(t)
+
+	fixture.chain.setReservedDeposit(
+		fixture.chain.BuildDepositKey(
+			fixture.proposal.DepositsKeys[0].FundingTxHash,
+			fixture.proposal.DepositsKeys[0].FundingOutputIndex,
+		),
+		true,
+	)
+
+	_, err := ValidateDepositSweepProposal(
 		&capturingLogger{},
-		walletPublicKeyHash,
-		proposal,
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
 		0,
 		true,
-		hostChain,
-		bitcoinChain,
+		fixture.chain,
+		fixture.bitcoinChain,
 	)
 	if err == nil {
 		t.Fatal("expected validation to reject a proposal containing a reserved deposit")
 	}
-	if !strings.Contains(err.Error(), "reserved") {
+	if !strings.Contains(err.Error(), "is a reserved deposit") {
 		t.Errorf("expected error to mention the reserved deposit, got: [%v]", err)
+	}
+}
+
+// reservedCheckErrorChain wraps the package's local chain to make
+// IsReservedDeposit fail, modeling a reserved-deposit read the client cannot
+// answer while its activation window is open.
+type reservedCheckErrorChain struct {
+	*localChain
+
+	isReservedErr error
+}
+
+func (c *reservedCheckErrorChain) IsReservedDeposit(
+	*big.Int,
+) (bool, error) {
+	return false, c.isReservedErr
+}
+
+// TestValidateDepositSweepProposal_FailsClosedOnIsReservedDepositError pins
+// the fail-closed posture of the reserved-deposit check: while the client's
+// activation window is open, an IsReservedDeposit failure must hard-fail
+// proposal validation rather than degrade to "not reserved". Treating an
+// unreadable reserved status as unreserved is the hole this check exists to
+// close.
+func TestValidateDepositSweepProposal_FailsClosedOnIsReservedDepositError(
+	t *testing.T,
+) {
+	fixture := newSweepProposalFixture(t)
+
+	errChain := &reservedCheckErrorChain{
+		localChain:    fixture.chain,
+		isReservedErr: errors.New("rpc timeout"),
+	}
+
+	_, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
+		0,
+		true,
+		errChain,
+		fixture.bitcoinChain,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected validation to fail closed when IsReservedDeposit " +
+				"errors",
+		)
+	}
+	if !strings.Contains(err.Error(), "reservation status") {
+		t.Errorf(
+			"expected error to mention the reservation status read, got: [%v]",
+			err,
+		)
+	}
+}
+
+// TestValidateDepositSweepProposal_RefusesWhenReservationsLiveOnChainButInactive
+// exercises the reservations sweep gate end to end: a client whose compiled
+// activation window for the network is still closed must not validate a
+// sweep proposal while the Bridge reports the reservation vault as trusted,
+// because the reserved-deposit checks are only consulted inside the window.
+func TestValidateDepositSweepProposal_RefusesWhenReservationsLiveOnChainButInactive(
+	t *testing.T,
+) {
+	fixture := newSweepProposalFixture(t)
+	fixture.chain.setReservationsVaultTrusted(true)
+
+	_, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
+		0,
+		false,
+		fixture.chain,
+		fixture.bitcoinChain,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected validation to refuse a sweep while reservations are " +
+				"live on-chain and inactive in this client",
+		)
+	}
+	if !strings.Contains(err.Error(), "reservations") {
+		t.Errorf("expected error to mention reservations, got: [%v]", err)
+	}
+}
+
+// TestValidateDepositSweepProposal_PreM1BridgeStillSweeps covers the
+// ordering hazard the M1 release plan carries: a client cut over before the
+// Bridge upgrade must keep sweeping. Such a Bridge carries neither
+// ReservationsVaultTrusted nor IsReservedDeposit, so both calls fail while
+// the client's activation window is still closed; the sweep must proceed
+// rather than halt protocol-wide.
+func TestValidateDepositSweepProposal_PreM1BridgeStillSweeps(t *testing.T) {
+	fixture := newSweepProposalFixture(t)
+
+	preM1Err := errors.New("execution reverted: no such method")
+	fixture.chain.setReservationsVaultTrustedErr(preM1Err)
+
+	preM1Chain := &reservedCheckErrorChain{
+		localChain:    fixture.chain,
+		isReservedErr: preM1Err,
+	}
+
+	validated, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
+		0,
+		false,
+		preM1Chain,
+		fixture.bitcoinChain,
+	)
+	if err != nil {
+		t.Fatalf(
+			"expected the sweep to proceed against a pre-reservations "+
+				"Bridge, got error: [%v]",
+			err,
+		)
+	}
+	if len(validated) != len(fixture.proposal.DepositsKeys) {
+		t.Errorf(
+			"expected all %d deposits to validate, got %d",
+			len(fixture.proposal.DepositsKeys),
+			len(validated),
+		)
 	}
 }
 
