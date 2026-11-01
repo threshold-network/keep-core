@@ -845,12 +845,6 @@ func expectNoProposal(
 	}
 }
 
-// uint64Ptr and uint32Ptr let a TestReservationAcceptanceTask_BoundaryChecks
-// table row distinguish an explicit cap value of 0 (production's
-// "unlimited" semantic for these caps) from the field's unset zero value.
-func uint64Ptr(v uint64) *uint64 { return &v }
-func uint32Ptr(v uint32) *uint32 { return &v }
-
 // expectedAnchorsEqual compares two proposal objects field-by-field.
 // deep.Equal cannot be used for this: by default it does not descend into
 // unexported fields, and *big.Int's representation is entirely unexported,

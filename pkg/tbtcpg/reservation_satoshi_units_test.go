@@ -9,29 +9,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// satoshiUnitsVectorFile is the repository path of the shared cross-repo
-// test vector for the satoshi-to-TBTC-base-unit conversion. The same file
-// is read by the tbtc-v2 Solidity suite (as a Foundry test data file) and
-// by the tbtc-v2 TypeScript SDK suite, so one set of numbers pins the unit
-// across all three code bases.
-//
-// The file lives in the shared internal/testdata/reservations package
-// because the production consumers of the unit boundary sit in two
-// different packages: the chain adapters that read the vault's
-// inKindFeeDebtSat view and TBTC balance (pkg/chain/ethereum) and the
-// gauge publisher that reports them (this package). A vector readable from
-// only one of them would let one side assert the boundary against its own
-// copy of the numbers.
-//
-// The two copies of the file (this one and tbtc-v2's) are kept in
-// agreement BY HAND, not by a cross-repo check: neither repository's CI
-// can see the other repository's file, so there is no automated comparison
-// between them. What IS enforced here is that this copy carries every key
-// the shared file carries: the parser rejects unknown keys, so a key added
-// to the shared file without being added to this copy fails this test
-// rather than being silently ignored.
-const satoshiUnitsVectorFile = reservations.SatoshiUnitsVectorFile
-
 // satoshiUnitsVector is the parsed shared vector file.
 //
 // Every key the shared file carries is declared here, and the parser

@@ -513,11 +513,6 @@ func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
 		)
 	}
 
-	if parameters.ReservationVault == "" {
-		// No vault configured: reservations are disabled on-chain.
-		return false, nil
-	}
-
 	vaultAddress, err := decodeReservationVaultAddress(parameters.ReservationVault)
 	if err != nil {
 		return false, fmt.Errorf(
@@ -526,7 +521,12 @@ func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
 		)
 	}
 	if vaultAddress == (common.Address{}) {
-		// No vault configured: reservations are disabled on-chain.
+		// No vault configured: the parameters carry the zero address and
+		// reservations are disabled on-chain. This is the only form the
+		// "unconfigured" state takes on the wire -
+		// convertReservationParametersFromAbiType formats the address as a
+		// full 20-byte hex string, so it is never empty - which is why no
+		// separate empty-string check is needed here.
 		return false, nil
 	}
 
@@ -1161,9 +1161,10 @@ func (tc *TbtcChain) NotifyReservationStranded(
 // as originally documented), and - conditionally - from the 1-minute
 // action-timeout poll loop's recheck path whenever a Reanchor-type
 // reservation action times out against a wallet that is already
-// Closed/Terminated. A failure to resolve the registration bound fails
-// the call instead of widening the scan to genesis (StartBlock 0): the
-// caller treats the cause as best-effort and the next pass retries.
+// Closed/Terminated. A failure to resolve the registration bound, or the
+// chain tip, fails the call instead of widening the scan to genesis
+// (StartBlock 0): the caller treats the cause as best-effort and the next
+// pass retries.
 func (tc *TbtcChain) WalletTerminationCause(
 	walletPublicKeyHash [20]byte,
 ) (tbtc.WalletTerminationCause, error) {

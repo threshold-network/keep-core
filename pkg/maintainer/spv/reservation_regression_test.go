@@ -835,6 +835,13 @@ func TestStaleDepositCursorPreservedAcrossTicks(t *testing.T) {
 	if !ok {
 		t.Fatal("pollTick failed")
 	}
+	// Every deposit discovered on tick 1 is still in the reserve and still
+	// tracked: the budget only defers the per-deposit reads, it never
+	// evicts a deposit that is still waiting for one, so a second tick over
+	// the same chain must report the same tracked set.
+	if trackedCount != totalDeposits {
+		t.Fatalf("expected %d tracked deposits, got %d", totalDeposits, trackedCount)
+	}
 	if spvChain.reservedDepositWalletCalls != 50 {
 		t.Fatalf("expected 50 wallet reads on tick 2, got %d", spvChain.reservedDepositWalletCalls)
 	}
