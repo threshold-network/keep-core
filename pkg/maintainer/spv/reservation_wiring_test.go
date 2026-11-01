@@ -165,7 +165,7 @@ func TestResolveWalletPublicKeyHash(t *testing.T) {
 // wallet-registration walk: it covers the given windows in order, stopping
 // at the window that yields the registration, and every individual query it
 // issues inside a window is bounded and no wider than
-// reservationEventScanChunkSize. Unbounded queries are what a provider with
+// reservationEventScanSpan(). Unbounded queries are what a provider with
 // an eth_getLogs range cap rejects, and one rejection costs the wallet its
 // stranding check.
 func assertChunkedWalletRegistrationQueries(
@@ -185,14 +185,14 @@ func assertChunkedWalletRegistrationQueries(
 			)
 		}
 		span := uint64(query.endBlock) - query.startBlock + 1
-		if span > reservationEventScanChunkSize {
+		if span > reservationEventScanSpan() {
 			t.Fatalf(
 				"query over blocks [%d..%d] spans %d blocks, above the %d "+
 					"chunk size",
 				query.startBlock,
 				query.endBlock,
 				span,
-				reservationEventScanChunkSize,
+				reservationEventScanSpan(),
 			)
 		}
 		if uint64(query.endBlock) > endBlock {
@@ -1394,7 +1394,7 @@ func TestScanReservationStrandingStartupRegistrations(t *testing.T) {
 	blocks := []uint64{
 		windowStart - 1,   // before the window
 		windowStart + 100, // first chunk
-		windowStart + reservationEventScanChunkSize + 100, // second chunk
+		windowStart + reservationEventScanSpan() + 100, // second chunk
 	}
 	for i, blockNumber := range blocks {
 		spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{

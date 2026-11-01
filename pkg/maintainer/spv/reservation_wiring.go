@@ -1062,7 +1062,7 @@ func subscribeReservationWalletClosed(
 // the last reservationDefaultLookBackBlocks blocks and doubles the window
 // until the registration is found or genesis is reached, the way the
 // Ethereum chain handle resolves a wallet's registration block. Each
-// doubled window is fetched in reservationEventScanChunkSize chunks and the
+// doubled window is fetched in reservationEventScanSpan chunks and the
 // walk stops at the chunk that yields the registration, because a window
 // can cover millions of blocks while a provider caps the span of a single
 // eth_getLogs - one unbounded query inside a window would fail the whole

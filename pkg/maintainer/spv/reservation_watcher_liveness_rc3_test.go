@@ -73,7 +73,54 @@ func TestResolveWalletPublicKeyHashChunksRegistrationScan(t *testing.T) {
 
 	chain := &cappedEventRangeChain{
 		localChain: base,
-		maxSpan:    reservationEventScanChunkSize,
+		maxSpan:    reservationEventScanSpan(),
+	}
+
+	resolved, err := resolveWalletPublicKeyHash(chain, walletID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != wallet {
+		t.Fatalf("expected wallet [0x%x], got [0x%x]", wallet, resolved)
+	}
+	if chain.queries == 0 {
+		t.Fatal("expected at least one registration query")
+	}
+}
+
+// TestResolveWalletPublicKeyHashHonoursConfiguredSpan pins that the
+// registration lookup behind the stranding path uses the operator-configured
+// eth_getLogs span, not a span of its own. An operator behind a provider with
+// a cap tighter than the default lowers
+// tbtc.ReservationEventScanMaxBlockSpan; a lookup that kept issuing
+// default-sized chunks was rejected by that provider, so the wallet ID never
+// resolved and the wallet stayed queued with no stranding coverage.
+func TestResolveWalletPublicKeyHashHonoursConfiguredSpan(t *testing.T) {
+	const configuredSpan = uint64(250)
+
+	previousSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = configuredSpan
+	defer func() { tbtc.ReservationEventScanMaxBlockSpan = previousSpan }()
+
+	wallet := walletPKHAt(0x65)
+	walletID := [32]byte{0x65}
+
+	base := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(2_000_000)
+	base.setBlockCounter(blockCounter)
+
+	base.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       walletID,
+		WalletPublicKeyHash: wallet,
+		BlockNumber:         1000,
+	})
+
+	// The provider enforces exactly the configured cap, so any chunk wider
+	// than the override is rejected the way a real provider would.
+	chain := &cappedEventRangeChain{
+		localChain: base,
+		maxSpan:    configuredSpan,
 	}
 
 	resolved, err := resolveWalletPublicKeyHash(chain, walletID)
