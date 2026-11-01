@@ -110,6 +110,30 @@ func (q *strandingRecheckQueue) pop() (strandingRecheckTarget, bool) {
 	return target, true
 }
 
+// popBatch removes and returns up to max of the oldest targets, in queue
+// order. Taking the whole batch out of the queue before any of it is
+// rechecked is what makes the per-tick cap a cap on distinct wallets: a
+// target re-queued while its own recheck runs goes to the tail of what is
+// left, so it waits for a later tick instead of being popped again inside
+// the same drain and spending the tick's whole budget on itself.
+func (q *strandingRecheckQueue) popBatch(max int) []strandingRecheckTarget {
+	if max <= 0 {
+		return nil
+	}
+
+	batch := make([]strandingRecheckTarget, 0, max)
+	for len(batch) < max {
+		target, ok := q.pop()
+		if !ok {
+			break
+		}
+
+		batch = append(batch, target)
+	}
+
+	return batch
+}
+
 // len returns the number of wallets waiting for a recheck.
 func (q *strandingRecheckQueue) len() int {
 	return len(q.queued)
@@ -310,15 +334,15 @@ func NewReservationActionTimeoutWatcher(
 	metricsRecorder MetricsRecorder,
 ) *ReservationActionTimeoutWatcher {
 	return &ReservationActionTimeoutWatcher{
-		spvChain:                spvChain,
-		nowFn:                   defaultActionTimeoutNowFn,
-		interval:                pollInterval,
-		pendingActions:          make(map[string]*pendingAction),
-		operatorAddress:         operatorAddress,
-		strandingWatcher:        strandingWatcher,
-		strandingRecheckQueue:   newStrandingRecheckQueue(),
-		activationBlock:         activationBlock,
-		metricsRecorder:         metricsRecorder,
+		spvChain:              spvChain,
+		nowFn:                 defaultActionTimeoutNowFn,
+		interval:              pollInterval,
+		pendingActions:        make(map[string]*pendingAction),
+		operatorAddress:       operatorAddress,
+		strandingWatcher:      strandingWatcher,
+		strandingRecheckQueue: newStrandingRecheckQueue(),
+		activationBlock:       activationBlock,
+		metricsRecorder:       metricsRecorder,
 	}
 }
 
@@ -954,22 +978,22 @@ func (ratw *ReservationActionTimeoutWatcher) scheduleStrandingRecheck(
 	ratw.strandingRecheckQueue.push(target)
 }
 
-// popStrandingRecheckTarget removes the oldest queued wallet, if any. The
-// mutex is held only for the queue operation, never across a chain read, so
-// a caller adding a wallet from another goroutine (the OnWalletClosed
-// handler) never waits on the drain's RPC latency.
-func (ratw *ReservationActionTimeoutWatcher) popStrandingRecheckTarget() (
-	strandingRecheckTarget,
-	bool,
-) {
+// popStrandingRecheckBatch removes up to max of the oldest queued wallets in
+// a single lock acquisition. The mutex is held only for the queue operations,
+// never across a chain read, so a caller adding a wallet from another
+// goroutine (the OnWalletClosed handler) never waits on the drain's RPC
+// latency.
+func (ratw *ReservationActionTimeoutWatcher) popStrandingRecheckBatch(
+	max int,
+) []strandingRecheckTarget {
 	ratw.strandingRecheckMutex.Lock()
 	defer ratw.strandingRecheckMutex.Unlock()
 
 	if ratw.strandingRecheckQueue == nil {
-		return strandingRecheckTarget{}, false
+		return nil
 	}
 
-	return ratw.strandingRecheckQueue.pop()
+	return ratw.strandingRecheckQueue.popBatch(max)
 }
 
 // drainStrandingRechecks runs the deferred stranding recheck (see the
@@ -985,6 +1009,12 @@ func (ratw *ReservationActionTimeoutWatcher) popStrandingRecheckTarget() (
 // in pollPendingActions) always happens after the drain for wallets
 // notified in a prior tick.
 //
+// The batch is taken out of the queue before the first recheck runs, so a
+// wallet whose recheck fails is re-queued behind everything still waiting
+// and is not popped again until a later tick: the cap bounds the number of
+// distinct wallets a tick pays for, and a target that keeps failing cannot
+// spend the tick's whole budget on retries of itself.
+//
 // The wallet hash recorded in a queued target is the one the
 // reservation already had BEFORE its NotifyReservationActionTimeout
 // call: ReservationRouter.sol's notifyReservationActionTimeout restores
@@ -992,12 +1022,9 @@ func (ratw *ReservationActionTimeoutWatcher) popStrandingRecheckTarget() (
 // reassign a new one), so no re-resolution via GetReservation is
 // needed here.
 func (ratw *ReservationActionTimeoutWatcher) drainStrandingRechecks() {
-	for range reservationStrandingRecheckMaxWalletsPerTick {
-		target, ok := ratw.popStrandingRecheckTarget()
-		if !ok {
-			return
-		}
-
+	for _, target := range ratw.popStrandingRecheckBatch(
+		reservationStrandingRecheckMaxWalletsPerTick,
+	) {
 		ratw.recheckStrandingForTarget(target)
 	}
 }

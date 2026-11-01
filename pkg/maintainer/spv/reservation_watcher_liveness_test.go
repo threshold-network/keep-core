@@ -138,3 +138,52 @@ func TestDrainStrandingRechecksIsBoundedPerTick(t *testing.T) {
 		}
 	}
 }
+
+// TestDrainStrandingRechecksChecksARequeuedWalletOncePerDrain pins that the
+// per-tick budget counts distinct wallets, not attempts. A recheck that fails
+// at the GetWallet read re-queues its wallet, and the wallet was previously
+// popped again inside the same drain: one wallet behind a flapping provider
+// then consumed the whole budget, with a retry pause between every attempt,
+// while every other queued wallet waited for the next tick.
+func TestDrainStrandingRechecksChecksARequeuedWalletOncePerDrain(t *testing.T) {
+	setReservationStrandingRetryDelay(0)
+	defer setReservationStrandingRetryDelay(DefaultReservationStrandingRetryDelay)
+
+	// A wallet with no chain entry fails every GetWallet, which is the
+	// observable shape of a transient read failure on a recheck.
+	base := newLocalChain()
+	chain := &walletCountingChain{localChain: base}
+	wallet := walletPKHAt(0x33)
+
+	ratw := NewReservationActionTimeoutWatcher(
+		chain,
+		0,
+		common.Address{},
+		newReservationStrandingWatcher(chain),
+		0,
+		nil,
+	)
+	ratw.ScheduleStrandingRecheck(wallet)
+
+	ratw.drainStrandingRechecks()
+
+	if chain.walletFetches != 1 {
+		t.Fatalf(
+			"expected one drain to check a failing wallet once, got %d reads",
+			chain.walletFetches,
+		)
+	}
+	if !strandingRecheckQueued(ratw, wallet) {
+		t.Fatal("expected a failed recheck to leave the wallet queued")
+	}
+
+	// The retry is deferred, not dropped: the next tick re-examines it.
+	ratw.drainStrandingRechecks()
+
+	if chain.walletFetches != 2 {
+		t.Fatalf(
+			"expected a second drain to check the wallet once more, got %d reads",
+			chain.walletFetches,
+		)
+	}
+}
