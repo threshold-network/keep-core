@@ -229,13 +229,16 @@ func CollectReservationsActivationStatus(
 }
 
 // ErrReservationsSurfaceUnavailable reports that the Bridge provably has no
-// reservation surface: the client's call to the Bridge's reservation getter
-// reverted without revert data, while the same Bridge answered a getter that
-// predates the reservations upgrade. It is the one failure of
+// reservation surface: the deployed code, followed through any proxy
+// implementation pointer, carries none of the reservations build's dispatcher
+// entry points, so the contract cannot serve the reservation API at all. It is
+// the one failure of
 // ReservationsActivationVaultReader.ReservationsVaultTrusted that proves the
 // deployment predates reservations instead of leaving the on-chain
 // reservation state unknown; every reader that returns it must have
-// established both halves of that proof on chain.
+// established that proof from the deployment itself, never from the shape of a
+// failed read, because a reservations-build Bridge can also produce an
+// execution revert with no returndata.
 var ErrReservationsSurfaceUnavailable = fmt.Errorf(
 	"the Bridge has no reservation surface: the deployment predates the " +
 		"reservations upgrade",

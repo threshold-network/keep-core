@@ -10,6 +10,7 @@ package ethereum
 //     balance of the vault address itself, not another account's.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -59,6 +60,18 @@ type reservationFakeClient struct {
 	balances         map[common.Address]*big.Int
 	balanceOfTargets []common.Address
 	balanceOfSel     [4]byte
+
+	// codes serves the runtime code deployed at an address, and codeErrors
+	// the failure a code read for that address produces instead.
+	codes      map[common.Address][]byte
+	codeErrors map[common.Address]error
+	codeCalls  map[common.Address]int
+
+	// storage and storageErrors serve per-slot storage words, which the
+	// pre-reservations classifier reads to follow EIP-1967 implementation
+	// pointers. A slot with no registered word reads as zero.
+	storage       map[common.Address]map[common.Hash][]byte
+	storageErrors map[common.Address]map[common.Hash]error
 }
 
 func newReservationFakeClient(t *testing.T) *reservationFakeClient {
@@ -71,11 +84,16 @@ func newReservationFakeClient(t *testing.T) *reservationFakeClient {
 	copy(balanceOfSel[:], crypto.Keccak256([]byte("balanceOf(address)"))[:4])
 
 	return &reservationFakeClient{
-		views:        make(map[common.Address]map[[4]byte]func() []byte),
-		viewErrors:   make(map[common.Address]map[[4]byte]error),
-		viewCalls:    make(map[common.Address]map[[4]byte]int),
-		balances:     make(map[common.Address]*big.Int),
-		balanceOfSel: balanceOfSel,
+		views:         make(map[common.Address]map[[4]byte]func() []byte),
+		viewErrors:    make(map[common.Address]map[[4]byte]error),
+		viewCalls:     make(map[common.Address]map[[4]byte]int),
+		balances:      make(map[common.Address]*big.Int),
+		balanceOfSel:  balanceOfSel,
+		codes:         make(map[common.Address][]byte),
+		codeErrors:    make(map[common.Address]error),
+		codeCalls:     make(map[common.Address]int),
+		storage:       make(map[common.Address]map[common.Hash][]byte),
+		storageErrors: make(map[common.Address]map[common.Hash]error),
 	}
 }
 
@@ -183,14 +201,96 @@ func (c *reservationFakeClient) CallContract(
 	return respond(), nil
 }
 
-// CodeAt answers the contract-code probe go-ethereum issues when a view
-// call returns zero bytes; the fake never does, so this is defensive.
+// CodeAt serves the runtime code registered for a contract address, which
+// is how the pre-reservations classifier reads a deployment's identity.
 func (c *reservationFakeClient) CodeAt(
 	ctx context.Context,
 	contract common.Address,
 	blockNumber *big.Int,
 ) ([]byte, error) {
-	return []byte{0x00}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.codeCalls[contract]++
+
+	if err, ok := c.codeErrors[contract]; ok {
+		return nil, err
+	}
+	return c.codes[contract], nil
+}
+
+// StorageAt serves the storage word registered for one slot of a contract,
+// which is how the classifier follows a proxy's implementation pointer.
+func (c *reservationFakeClient) StorageAt(
+	ctx context.Context,
+	contract common.Address,
+	key common.Hash,
+	blockNumber *big.Int,
+) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err, ok := c.storageErrors[contract][key]; ok {
+		return nil, err
+	}
+	if word, ok := c.storage[contract][key]; ok {
+		return word, nil
+	}
+	return make([]byte, common.HashLength), nil
+}
+
+// setCode registers the runtime code deployed at a contract address.
+func (c *reservationFakeClient) setCode(
+	target common.Address,
+	code []byte,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.codes[target] = code
+}
+
+// setCodeError registers the failure a code read for one address produces.
+func (c *reservationFakeClient) setCodeError(
+	target common.Address,
+	err error,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.codeErrors[target] = err
+}
+
+// setImplementation registers the EIP-1967 implementation a proxy points at.
+func (c *reservationFakeClient) setImplementation(
+	proxy common.Address,
+	implementation common.Address,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.storage[proxy] == nil {
+		c.storage[proxy] = make(map[common.Hash][]byte)
+	}
+	c.storage[proxy][eip1967ImplementationSlot] = common.BytesToHash(
+		implementation.Bytes(),
+	).Bytes()
+}
+
+// setStorageError registers the failure a storage read for one slot of one
+// contract produces.
+func (c *reservationFakeClient) setStorageError(
+	target common.Address,
+	key common.Hash,
+	err error,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.storageErrors[target] == nil {
+		c.storageErrors[target] = make(map[common.Hash]error)
+	}
+	c.storageErrors[target][key] = err
 }
 
 // methodSelector returns the 4-byte selector for a named ABI method,
@@ -459,91 +559,178 @@ func newReservationSurfaceChain(
 	}
 }
 
-// revertingCallError models the error go-ethereum surfaces for an EVM revert
-// that carries revert data.
-type revertingCallError struct {
+// jsonRPCCallError models the error go-ethereum's JSON-RPC client surfaces
+// for an EVM revert: a wrapped rpc.jsonError whose ErrorData() is the hex
+// string the node returned, "0x" for an empty payload.
+type jsonRPCCallError struct {
 	message string
-	data    []byte
+	data    string
 }
 
-func (e *revertingCallError) Error() string { return e.message }
+func (e *jsonRPCCallError) Error() string { return e.message }
 
-func (e *revertingCallError) ErrorData() interface{} { return e.data }
+func (e *jsonRPCCallError) ErrorData() interface{} { return e.data }
+
+// reservationsBuildCode models the runtime code of a reservations-build
+// contract: the dispatcher of a build that declares getReservationRouter().
+// The bytes around the selector stand for arbitrary dispatcher code, so the
+// classifier cannot be relying on the selector being the whole code.
+func reservationsBuildCode() []byte {
+	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
+	code = append(code, reservationBuildSelector...)
+	code = append(code, 0x14, 0x61, 0x01, 0x23, 0x57, 0x00)
+	return code
+}
+
+// preReservationsCode models the runtime code of a contract that predates the
+// reservations build: it dispatches the functions both builds declare, and
+// carries no reservations-build selector.
+func preReservationsCode(t *testing.T) []byte {
+	t.Helper()
+
+	bridgeABI := parseGenABI(t, tbtcabi.BridgeABI)
+	depositParameters := methodSelector(t, bridgeABI, "depositParameters")
+
+	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
+	code = append(code, depositParameters[:]...)
+	code = append(code, 0x14, 0x61, 0x01, 0x23, 0x57, 0x00)
+	return code
+}
 
 // TestReservationsVaultTrustedClassifiesReadFailures pins which reservation
-// read failures prove that the Bridge predates the reservations upgrade, and
-// which do not. Only a revert without revert data, from a Bridge that still
-// answers a getter that exists in both builds, is proof of a pre-reservations
-// deployment; everything else must surface as an ordinary error so the sweep
-// gate refuses the sweep instead of reading "reservations are not live".
+// read failures make the adapter report a pre-reservations deployment, and
+// which must surface as an ordinary error so the sweep gate refuses the
+// sweep.
+//
+// The classification is a property of the deployed code, not of the error
+// shape: a reservations-build Bridge bubbles a failed delegated reservation
+// call as an execution revert with no returndata, so the empty-revert shape
+// the fallback produces says nothing about which functions exist. Only a
+// deployment whose implementation chain carries no reservations-build selector
+// is provably pre-reservations; everything unreadable or unrecognised is an
+// error.
 func TestReservationsVaultTrustedClassifiesReadFailures(t *testing.T) {
 	bridgeAddress := common.HexToAddress("0x00000000000000000000000000000000000000b1")
+	implementationAddress := common.HexToAddress("0x00000000000000000000000000000000000000c1")
+	deeperAddress := common.HexToAddress("0x00000000000000000000000000000000000000c2")
+	deepestAddress := common.HexToAddress("0x00000000000000000000000000000000000000c3")
 
 	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
-	bridgeABI := parseGenABI(t, tbtcabi.BridgeABI)
-
 	parametersSelector := methodSelector(t, routerABI, "reservationParameters")
-	depositParametersSelector := methodSelector(t, bridgeABI, "depositParameters")
 
 	transientErr := errors.New("Post \"https://rpc.example\": context deadline exceeded")
-	revertWithReasonErr := &revertingCallError{
-		message: "execution reverted: reservation parameters are not set",
-		data:    []byte{0x08, 0xc3, 0x79, 0xa0},
-	}
+	emptyRevertErr := errors.New("execution reverted")
 
 	tests := map[string]struct {
-		readErr            error
-		bridgeGetterErr    error
-		expectUnavailable  bool
-		expectProbeSkipped bool
+		readErr     error
+		deploy      func(t *testing.T, client *reservationFakeClient)
+		expectPreM1 bool
 	}{
-		"pre-reservations Bridge: empty revert, pre-upgrade getter answers": {
-			readErr:           errors.New("execution reverted"),
-			expectUnavailable: true,
+		"reservations deployment: an empty revert is not proof": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setCode(implementationAddress, reservationsBuildCode())
+				client.setImplementation(bridgeAddress, implementationAddress)
+			},
 		},
-		"pre-reservations Bridge: empty revert data payload, pre-upgrade getter answers": {
-			readErr:           &revertingCallError{message: "execution reverted", data: []byte{}},
-			expectUnavailable: true,
+		"reservations deployment: a revert with an all-zero payload is not proof": {
+			readErr: &jsonRPCCallError{
+				message: "execution reverted",
+				data:    "0x00",
+			},
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setCode(implementationAddress, reservationsBuildCode())
+				client.setImplementation(bridgeAddress, implementationAddress)
+			},
 		},
-		"transient RPC failure is not proof of absence": {
-			readErr:            transientErr,
-			expectUnavailable:  false,
-			expectProbeSkipped: true,
+		"reservations deployment: a transient read failure is not proof": {
+			readErr: transientErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setCode(implementationAddress, reservationsBuildCode())
+				client.setImplementation(bridgeAddress, implementationAddress)
+			},
 		},
-		"revert carrying revert data is not proof of absence": {
-			readErr:            revertWithReasonErr,
-			expectUnavailable:  false,
-			expectProbeSkipped: true,
+		"pre-reservations deployment: empty revert": {
+			readErr:     emptyRevertErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setCode(implementationAddress, preReservationsCode(t))
+				client.setImplementation(bridgeAddress, implementationAddress)
+			},
 		},
-		"empty revert from a Bridge that cannot answer its own getters is not proof": {
-			readErr:           errors.New("execution reverted"),
-			bridgeGetterErr:   errors.New("execution reverted"),
-			expectUnavailable: false,
+		"pre-reservations deployment: a transient read failure still sweeps": {
+			readErr:     transientErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setCode(implementationAddress, preReservationsCode(t))
+				client.setImplementation(bridgeAddress, implementationAddress)
+			},
+		},
+		"pre-reservations deployment without a proxy": {
+			readErr:     emptyRevertErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, preReservationsCode(t))
+			},
+		},
+		"unreadable implementation code": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setImplementation(bridgeAddress, implementationAddress)
+				client.setCodeError(implementationAddress, transientErr)
+			},
+		},
+		"unreadable implementation slot": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setStorageError(
+					bridgeAddress, eip1967ImplementationSlot, transientErr,
+				)
+			},
+		},
+		"truncated implementation slot": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.mu.Lock()
+				client.storage[bridgeAddress] = map[common.Hash][]byte{
+					eip1967ImplementationSlot: {0x01, 0x02},
+				}
+				client.mu.Unlock()
+			},
+		},
+		"no code at the bridge address": {
+			readErr: emptyRevertErr,
+			deploy:  func(t *testing.T, client *reservationFakeClient) {},
+		},
+		"implementation chain deeper than the bound": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				code := []byte{0x60, 0x80, 0x60, 0x40}
+				client.setCode(bridgeAddress, code)
+				client.setCode(implementationAddress, code)
+				client.setCode(deeperAddress, code)
+				client.setCode(deepestAddress, code)
+				client.setImplementation(bridgeAddress, implementationAddress)
+				client.setImplementation(implementationAddress, deeperAddress)
+				client.setImplementation(deeperAddress, deepestAddress)
+				client.setImplementation(deepestAddress, implementationAddress)
+			},
 		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			client := newReservationFakeClient(t)
+			test.deploy(t, client)
 			client.setViewError(t, bridgeAddress, parametersSelector, test.readErr)
-			if test.bridgeGetterErr != nil {
-				client.setViewError(
-					t, bridgeAddress, depositParametersSelector, test.bridgeGetterErr,
-				)
-			} else {
-				client.setView(
-					t,
-					bridgeAddress,
-					depositParametersSelector,
-					func() []byte {
-						return packOutputs(
-							t, bridgeABI, "depositParameters",
-							uint64(1000), uint64(20), uint64(500),
-							uint32(150),
-						)
-					},
-				)
-			}
 
 			chain := newReservationSurfaceChain(t, client, bridgeAddress)
 
@@ -552,27 +739,13 @@ func TestReservationsVaultTrustedClassifiesReadFailures(t *testing.T) {
 				t.Fatal("expected the read to fail")
 			}
 
-			unavailable := errors.Is(err, tbtc.ErrReservationsSurfaceUnavailable)
-			if unavailable != test.expectUnavailable {
+			preM1 := errors.Is(err, tbtc.ErrReservationsSurfaceUnavailable)
+			if preM1 != test.expectPreM1 {
 				t.Fatalf(
-					"unexpected pre-reservations classification\nexpected unavailable: %v\nactual:               %v\nerror: %v",
-					test.expectUnavailable,
-					unavailable,
+					"unexpected pre-reservations classification\nexpected pre-reservations: %v\nactual:                    %v\nerror: %v",
+					test.expectPreM1,
+					preM1,
 					err,
-				)
-			}
-
-			probeCalls := client.viewCallsFor(bridgeAddress, depositParametersSelector)
-			if test.expectProbeSkipped && probeCalls != 0 {
-				t.Fatalf(
-					"expected no pre-upgrade getter probe for a non-revert failure, got %d",
-					probeCalls,
-				)
-			}
-			if !test.expectProbeSkipped && probeCalls < 1 {
-				t.Fatalf(
-					"expected the pre-upgrade getter probe to run, got %d calls",
-					probeCalls,
 				)
 			}
 		})
@@ -661,20 +834,41 @@ func reservationParametersOutput(
 	return packed
 }
 
-// TestReservationParametersSelector pins the hardcoded selector the raw
-// reservation-surface probe issues against the generated ReservationRouter
-// ABI, so a router ABI change cannot silently make the probe ask for a
-// different function (which would revert without data even on an upgraded
-// Bridge and be misread as a pre-reservations deployment).
-func TestReservationParametersSelector(t *testing.T) {
-	routerABI := parseGenABI(t, tbtcabi.ReservationRouterABI)
+// TestReservationBuildSelector pins the hardcoded deployment marker the
+// pre-reservations classifier searches the deployed code for against the
+// generated Bridge ABI, so an ABI change cannot silently make the classifier
+// look for a selector no build carries (which would report every deployment,
+// reservations build included, as pre-reservations).
+func TestReservationBuildSelector(t *testing.T) {
+	bridgeABI := parseGenABI(t, tbtcabi.BridgeABI)
 
-	expected := methodSelector(t, routerABI, "reservationParameters")
-	if reservationParametersSelector != expected {
+	expected := methodSelector(t, bridgeABI, "getReservationRouter")
+	if !bytes.Equal(reservationBuildSelector, expected[:]) {
 		t.Fatalf(
-			"reservationParameters selector drift: probe issues 0x%x, the ABI says 0x%x",
-			reservationParametersSelector,
+			"reservations-build selector drift: classifier looks for 0x%x, the ABI says 0x%x",
+			reservationBuildSelector,
 			expected,
+		)
+	}
+}
+
+// TestEIP1967ImplementationSlot pins the slot address the classifier reads the
+// implementation pointer from, so a typo cannot silently point every
+// deployment read at some other word (which reads as zero: the classifier
+// would then stop at the proxy, find no selector in proxy code, and report
+// every reservations deployment as pre-reservations).
+func TestEIP1967ImplementationSlot(t *testing.T) {
+	// EIP-1967: bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1).
+	digest := crypto.Keccak256([]byte("eip1967.proxy.implementation"))
+	value := new(big.Int).SetBytes(digest)
+	value.Sub(value, big.NewInt(1))
+
+	expected := common.BytesToHash(value.Bytes())
+	if eip1967ImplementationSlot != expected {
+		t.Fatalf(
+			"implementation slot drift: classifier reads %s, EIP-1967 specifies %s",
+			eip1967ImplementationSlot.Hex(),
+			expected.Hex(),
 		)
 	}
 }

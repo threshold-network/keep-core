@@ -335,6 +335,16 @@ func (mec *mockEthereumClient) CodeAt(
 	return nil, nil
 }
 
+func (mec *mockEthereumClient) StorageAt(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockNumber *big.Int,
+) ([]byte, error) {
+	mec.mockRequest()
+	return nil, nil
+}
+
 func (mec *mockEthereumClient) CallContract(
 	ctx context.Context,
 	call ethereum.CallMsg,
@@ -507,6 +517,17 @@ func getTests(
 				_, err := client.CodeAt(
 					context.Background(),
 					[20]byte{},
+					nil,
+				)
+				return err
+			},
+		},
+		"test StorageAt": {
+			function: func() error {
+				_, err := client.StorageAt(
+					context.Background(),
+					[20]byte{},
+					common.Hash{},
 					nil,
 				)
 				return err

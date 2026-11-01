@@ -36,6 +36,17 @@ type EthereumClient interface {
 		account common.Address,
 		blockNumber *big.Int,
 	) (*big.Int, error)
+
+	// StorageAt is not part of bind.ContractBackend's caller surface, but
+	// contract identity checks need it: an EIP-1967 proxy keeps its
+	// implementation address in a storage slot, so reading deployed code
+	// along an implementation chain starts with a storage read.
+	StorageAt(
+		ctx context.Context,
+		account common.Address,
+		key common.Hash,
+		blockNumber *big.Int,
+	) ([]byte, error)
 }
 
 // AddressFromHex converts the passed string to a common.Address and returns it,

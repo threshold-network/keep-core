@@ -99,10 +99,8 @@ type TbtcChain struct {
 	// the address invariant explanation).
 	reservationRouter *tbtccontract.ReservationRouter
 	// bridgeAddress is the Bridge address the bindings are attached to. The
-	// reservation-surface probe issues a raw call to it (see
-	// reservationSurfaceAvailable): the generated bindings route failures
-	// through keep-common's error resolver, which rewraps them and destroys
-	// the revert shape the pre-reservations classification depends on.
+	// pre-reservations classifier reads the code deployed there and follows
+	// its EIP-1967 implementation pointer (see reservationSurfaceAbsent).
 	bridgeAddress common.Address
 	// walletRegistrationBlockCache memoizes the result of
 	// earliestWalletRegistrationBlock per wallet public key hash for the
@@ -517,14 +515,15 @@ func (tc *TbtcChain) ReservationParameters() (
 //
 // A Bridge deployed before the reservations upgrade carries no reservation
 // getter at all, so the read fails there. That case alone returns
-// tbtc.ErrReservationsSurfaceUnavailable, and only on positive evidence: the
-// reservation getter reverts without revert data (the shape of a call to a
-// selector the contract does not implement) while the same Bridge answers a
-// getter that predates the reservations upgrade. Any other failure - a
-// timeout, an RPC or transport error, a revert carrying data, or a
-// reservation revert from a Bridge that cannot answer its own pre-upgrade
-// getters - is returned as an ordinary error, so the caller cannot mistake it
-// for "reservations are not live on-chain".
+// tbtc.ErrReservationsSurfaceUnavailable, and only on positive evidence about
+// the deployment rather than about the error: no contract along the Bridge's
+// implementation chain carries the reservations-build dispatcher selector, and
+// the chain ends at a contract with no implementation of its own (see
+// reservationSurfaceAbsent). Any other failure - any failed read on a
+// reservations-build deployment, whatever the error's shape, and every
+// deployment whose code could not be read or classified - is returned as an
+// ordinary error, so the caller cannot mistake it for "reservations are not
+// live on-chain".
 func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
 	abiParameters, err := tc.reservationRouter.ReservationParameters()
 	if err != nil {
