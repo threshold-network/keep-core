@@ -7,6 +7,7 @@ on:
     branches:
       - main
       - dev
+      - reservations-epic
     paths-ignore:
       - "docs/**"
       - "infrastructure/**"
@@ -1292,6 +1293,9 @@ jobs:
   # unless `client-detect-changes` succeeded AND each gated job
   # succeeded, or was skipped only because the path filter was 'false' on
   # a pull request; on non-PR events every gated job must have succeeded.
+  # `reservation-router-vendored-fallback-verify` is gated too: it carries no
+  # job-level `if:` and no path filter, so it is expected to succeed on every
+  # event, and its failure or cancellation fails this gate.
   # The required-check context swap (client-build-test-publish ->
   # client-gate) is time-gated by decision D2 and lands in a follow-up on
   # protected main; the original required contexts stay in place.
@@ -1302,6 +1306,7 @@ jobs:
       - client-build-test-publish
       - client-scan
       - client-format
+      - reservation-router-vendored-fallback-verify
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate client gate
@@ -1312,6 +1317,7 @@ jobs:
           BTP: ${{ needs.client-build-test-publish.result }}
           SCAN: ${{ needs.client-scan.result }}
           FORMAT: ${{ needs.client-format.result }}
+          VENDORED_FALLBACK: ${{ needs.reservation-router-vendored-fallback-verify.result }}
         run: |
           # Skipped jobs report Success for required-check purposes, so
           # this aggregator is the only place where a skip can be told
@@ -1327,6 +1333,7 @@ jobs:
           btp="$(normalize "$BTP")"
           scan="$(normalize "$SCAN")"
           format="$(normalize "$FORMAT")"
+          vendored="$(normalize "$VENDORED_FALLBACK")"
 
           # A `client-detect-changes` crash (dorny/paths-filter error)
           # propagates as skipped success on every downstream required
@@ -1341,6 +1348,7 @@ jobs:
           # directly from each job`s own `if:` condition:
           #   client-build-test-publish: event != pull_request || filter == true
           #   client-scan, client-format:   event == push             || filter == true
+          #   reservation-router-vendored-fallback-verify: every event (no `if:`)
           # A job that was expected to run must be `success`. A job that
           # was not expected to run is fine as `skipped` (its own `if:`
           # was false) or `success` (it ran anyway - never an error).
@@ -1354,6 +1362,10 @@ jobs:
                 # event == push || filter == true
                 [ "$EVENT" = "push" ] || [ "$PATH_FILTER" = "true" ]
                 ;;
+              reservation-router-vendored-fallback-verify)
+                # no job-level `if:` and no path filter
+                return 0
+                ;;
               *)
                 return 1
                 ;;
@@ -1362,7 +1374,8 @@ jobs:
 
           for pair in "client-build-test-publish:$BTP" \
                      "client-scan:$SCAN" \
-                     "client-format:$FORMAT"; do
+                     "client-format:$FORMAT" \
+                     "reservation-router-vendored-fallback-verify:$VENDORED_FALLBACK"; do
             name="${pair%%:*}"
             state="$(normalize "${pair#*:}")"
             if [ "$state" = failed ]; then
@@ -1377,4 +1390,4 @@ jobs:
             fi
             # Not expected to run and state is `skipped` or `success`: fine.
           done
-          echo "client-gate: all required client checks succeeded (build-test-publish=${btp}, scan=${scan}, format=${format})"
+          echo "client-gate: all required client checks succeeded (build-test-publish=${btp}, scan=${scan}, format=${format}, vendored-fallback=${vendored})"
