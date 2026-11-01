@@ -108,7 +108,7 @@ D31 is integrated on the reservations branches. Nothing in this section means a 
 
 The keep-core review line (an earlier keep-core review line) has no member-proof re-anchor binding. On that line the fallback would send a third-party request, which keeps the caps. Its `reservations-upgrade` branch is superseded by `reservations-epic` and must not be merged.
 
-`client.yml` pins `TBTC_V2_REF` to `d1bf5bc281992885970f7c232cd9a66b7a6b5127` at the keep-core public head (`keep-core@931dcd63c:.github/workflows/client.yml:216`), which is the tbtc-v2 commit that added the 730-day dissolution-delay bound. It is not the spec freeze: the freeze is the tbtc-v2 public head `72b891eec` (XR-G-2). The two are separate pins with separate jobs, and the CI pin moves when the workflow moves.
+`client.yml` pins `TBTC_V2_REF` to `72b891eecd8c0c843d9d6726d37eac76240b58cc` at the keep-core public head (`keep-core@e7f483601:.github/workflows/client.yml:226`), which is the tbtc-v2 commit that added the 730-day dissolution-delay bound. It is not the spec freeze: the freeze is the tbtc-v2 public head `72b891eec` (XR-G-2). The two are separate pins with separate jobs, and the CI pin moves when the workflow moves. The pin was `d1bf5bc281992885970f7c232cd9a66b7a6b5127` at `keep-core@931dcd63c:.github/workflows/client.yml:216`, and moved when #4371 bumped it on 2026-11-01.
 
 ## D28: existing maintainer role plus watchdog alerts
 
@@ -118,7 +118,7 @@ Wallet operator watchers remain in place.
 An independent proof submitter still needs SPV-maintainer authorization.
 Permissionless cleanup transactions need a funded caller, not a wallet signing quorum.
 
-The published head `keep-core@931dcd63c` carries `keep-core@e7f483601:reservation_keeper_observer.go`, `keep-core@e7f483601:reservation_keeper_risk.go` and `reservation_params_feasibility.go`, so the D28 watchdogs are in the public release.
+The published head `keep-core@e7f483601` carries `keep-core@e7f483601:reservation_keeper_observer.go`, `keep-core@e7f483601:reservation_keeper_risk.go` and `reservation_params_feasibility.go`, so the D28 watchdogs are in the public release.
 
 At keep-core `9c4e1b221`, enabling `Maintainer.Spv.ReservationProofsEnabled` starts the existing proof loops and watcher wiring
 (`keep-core@9c4e1b221:pkg/maintainer/spv/spv.go:86-135`).
