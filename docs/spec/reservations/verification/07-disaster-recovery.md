@@ -104,16 +104,8 @@ It remains re-anchorable and can be stranded after `dissolutionEligibleAt`
 - Verify recovery: the proof updates custody; the source count reaches zero.
   A privileged hand-off can leave the target above its caps, so target
   headroom is not a recovery condition for it. A retired source does not return to Live.
-- Test: a privileged hand-off to a full target succeeds for the owner,
-  an SPV maintainer and a proven member, a third party reverts, and a
-  hold-occupied target does not block it
-  (`tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:427`,
-  `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:466`,
-  `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:553`).
-  The mainnet fork run (a local mainnet-fork run (no pin)) exercised
-  a privileged above-cap hand-off. The complete saturation recovery has
-  not been rehearsed on Sepolia, and nothing is deployed there.
-- Status: `holds-untested`.
+- Test: a privileged hand-off to a full target succeeds for the owner, an SPV maintainer and a proven member, a third party reverts, and a hold-occupied target does not block it: `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:584` ("owner: a MovingFunds re-anchor to a full target succeeds and the target count becomes cap+1"), `:598` ("owner: a Closing re-anchor to a full target succeeds"), `:612` ("SPV maintainer: a MovingFunds re-anchor to a full target succeeds"), `:627` ("proven source-wallet member: a MovingFunds re-anchor to a full target succeeds"), `:651` ("a third party into the full target still reverts on the count cap") and `:1044` ("a privileged hand-off skips the target's ordinary cap when a hold occupies the slot"); lab H-3 `resv-reanchor-closing-source` PASS (8,983 s, run `20261030t004510z-piotrroslani-16d4`) gates the client half.
+- Status: `holds`.
 
 ## DR-02 Stranded positions: the custodying wallet is Terminated or Closed
 
@@ -174,8 +166,8 @@ Fault B, empty fee reserve. `feeReserveTarget` is 0 on Sepolia (D21), so `sweepF
   A Bank credit alone does not prove arbitrary unbacked minting.
   Fee debt separately measures the uncompensated Bitcoin fees described in DR-09.
 - Verify recovery: `isVaultTrusted(vault) == false`; no new `ReservationCreditProcessed` through the vault; `inKindFeeDebtSat` stable or falling.
-- Rehearsed: none. Fault A is a known gap with no rehearsed mitigation; the deactivation path (`setVaultStatus(false)`) has no reservation-specific fork/Sepolia rehearsal. Never.
-- Status: `holds-untested` for trust revocation and the complete incident procedure. The provenance fix is not implemented; its design is not silently selected by this recovery guide.
+- Rehearsed: `tbtc-v2@72b891eec:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:71` ("test_acceptanceProof_creditsDepositorDirectlyWhenVaultUntrusted") with the control `:127` ("test_acceptanceProof_routesThroughVaultWhenTrusted") executes the revoked-trust settlement path on the real Bridge, router and vault, in the archived `yarn test:audit-poc` run at the freeze head. The fork or Sepolia rehearsal of the deactivation itself is still absent, so the field says what was and was not rehearsed.
+- Status: `holds` for the revoked-trust settlement path. The residual is that there is no fork or Sepolia rehearsal of a vault deactivation, so the Fault A provenance gap is unchanged.
 
 ## DR-05 Router set to the wrong address (write-once)
 
@@ -207,7 +199,7 @@ Bad state. A Bridge implementation upgrade intended to change the router (or oth
 
 ## Deployment prerequisites
 
-Next to the C-4 activation ordering gate (`architecture.md` §8) there is a second ordering prerequisite. `Redemption.sol` calls `RebateStaking(...).isRebateAuthorized` directly and reverts when the staking contract lacks that selector (`tbtc-v2@c8350d109:solidity/contracts/bridge/Redemption.sol:274-284`), so a compatible staking upgrade must land before or with the Bridge. The staking upgrade is an outstanding prerequisite; this set does not name who arranges it.
+Next to the C-4 activation ordering gate (`architecture.md` §8) there is a second ordering prerequisite. `Redemption.sol` calls `RebateStaking(...).isRebateAuthorized` directly and reverts when the staking contract lacks that selector (`tbtc-v2@72b891eec:solidity/contracts/bridge/Redemption.sol:274-284`), so a compatible staking upgrade must land before or with the Bridge. The repository arranges it: deploy script `tbtc-v2@72b891eec:99_deploy_rebate_staking_reservation_implementation.ts` emits ONE Timelock `scheduleBatch`/`executeBatch` pair whose action `[0]` upgrades the `RebateStaking` proxy and whose action `[1]` upgrades the Bridge proxy (`tbtc-v2@72b891eec:solidity/deploy/99_deploy_rebate_staking_reservation_implementation.ts:123-141`). One `executeBatch` is atomic, so there is no window in which the Bridge is upgraded but the staking implementation is not; two separate `schedule` calls would leave that window open for `getMinDelay()` seconds, during which every vault redemption reverts. The Bridge implementation is an input to that script, not something it deploys: it is read from `BRIDGE_RESERVATION_IMPLEMENTATION`, and the script refuses to run without it (`:1062-1074`) and refuses to run when the named address has no code on the target network (`:1620-1626`). The script's own pre-flight then refuses to emit a batch whose artefacts fail the selector scan, so the ordering guarantee is enforced by the tooling rather than by operator discipline. See PAR-X11.
 
 ## DR-07 keep-core release with the wrong activation block
 

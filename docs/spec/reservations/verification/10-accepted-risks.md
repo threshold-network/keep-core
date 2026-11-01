@@ -157,7 +157,7 @@ taken on 2026-10-29 and the code does not change.
 - Bound on impact: a stranded position that is never notified keeps occupying a slot and a global count until it is notified later or its wallet re-appears; it does not create a new loss, it delays the evidence and the capacity release.
 - Monitoring: the warning log when the startup scan bound truncates; a manually discovered unnotified `ReservationStranded` candidate.
 - Revisit trigger: before mainnet (raise the lookback or run the startup scan from the reservation activation block, which the wiring already computes, `keep-core:pkg/maintainer/spv/reservation_wiring.go:440`).
-- Status: `holds-untested` (the bounded scan and the truncation warning are in code, `keep-core:pkg/maintainer/spv/reservation_wiring.go:136`, `:742`; not rehearsed).
+- Status: `holds` (the bounded scan and the truncation warning are in code, `keep-core@931dcd63c:pkg/maintainer/spv/reservation_wiring.go:136`, `:762`, and `TestScanReservationStrandingStartupRegistrations` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_wiring_test.go:1311`) executes the 216000-block start and the doubling windows against that code).
 
 ## AR-14 A re-anchor timeout starts a cooldown that blocks everyone but governance
 

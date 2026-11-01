@@ -137,10 +137,8 @@ D31 (hand-off reserve gate, at `tbtc-v2@806b1106f`, includes the SDK floor `dc5c
   re-checks at `Reservation.sol:512` (depositor), `:554` (Live), `:562`
   (amount), `:586` (signing window); preflight doc "The deadline-based
   signing-window rules are not checked here" `tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:470`.
-- **Test:** the SDK checks themselves are unit-tested (US-93, US-97); the
-  guarantee they do NOT provide is the on-chain re-check, pinned by the on-chain
-  US-04/US-05 tests (`Reservation.test.ts` guards), not by any SDK assertion. Status `holds-untested` (SDK-to-on-chain TOCTOU boundary).
-- **Status:** `holds-untested` (the boundary is a documented limit, SM-C14); the SDK never implies the preflight guarantees acceptance.
+- **Test** `tbtc-v2@72b891eec:typescript/test/services/reservations.test.ts:1405` ("should keep the acceptance preflight ok after the refund window closes, so the preflight does not predict the reverted request") and `:1431` ("should report the acceptance rules it can see but not the signing window, so the preflight is a partial prediction"); the SDK checks themselves are unit-tested (US-93, US-97). The SDK cases are cited at the tbtc-v2 public head `72b891eec`; the unpublished `spec/c-rows-sdk` branch head `90ead08ad0` that first carried them is not a public revision, so the row names the public head.
+- **Status** `holds` for the SDK preflight's partial prediction (the two cases above fail when the preflight starts reporting the signing window, and when the request stops reverting on it); the row's other half, that the preflight cannot see the state that changes between the read and the request, stays `holds-untested` and is the row SM-C14 now covers.
 - **D31 note (at `tbtc-v2@806b1106f`):** the hand-off reserve gate adds one more input that can change between the SDK read and the on-chain request: `liveWalletsCount` falls when a Live wallet leaves Live, which tightens the budget (on-chain test `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:346`). The SDK check `handoffReserveExceeded` returns false when `maxReservationsPerWallet` is 0, while on-chain `N = 0` would reject every acceptance (`tbtc-v2@806b1106f:typescript/src/services/reservations/reservations-service.ts:707-722`); the SDK treats that as an unset cap, so a `go` or `ok` there is still only a prediction. Status unchanged: `holds-untested`.
 
 #### US-99 - Release-to-pool and status reads via the SDK

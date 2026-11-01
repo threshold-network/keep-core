@@ -41,7 +41,7 @@ The table names assets exposed by each abuse case. Detailed entries state its pr
 
 - **Wallet signing assumptions.** The client distinguishes GroupSize, DKG GroupQuorum and signature HonestThreshold (`keep-core:pkg/tbtc/tbtc.go:28-45`). Signing requires at least the configured HonestThreshold ready members (`keep-core:pkg/tbtc/signing_loop.go:288`). Availability and malicious-key safety are separate assumptions. Do not use DKG quorum as the reservation signing threshold.
 - **Relay difficulty is honest.** SPV proofs are checked against the Bridge relay's `getCurrentEpochDifficulty`/`getPrevEpochDifficulty` (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:300`); the relay is trusted not to understate difficulty. Proof work is gated by `observedDiff >= requestedDiff * txProofDifficultyFactor` (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:325`).
-- **Governance is trusted, and parameter changes are delayed.** `updateReservationParameters` and `updateReservationCaps` run through a begin/finalize ceremony with a governance delay (`tbtc-v2:solidity/contracts/bridge/BridgeGovernance.sol:1834`, `:1893`, at `9d2086965`). At `806b1106f` the caps ceremony takes five arguments, the fifth being the hand-off reserve (`tbtc-v2@806b1106f:solidity/contracts/bridge/BridgeGovernance.sol:1896`, `tbtc-v2@806b1106f:solidity/contracts/bridge/BridgeGovernance.sol:1917`); it is still delayed, and a zero reserve is rejected ("Hand-off reserve must be greater than zero", `tbtc-v2@806b1106f:solidity/contracts/bridge/Reservation.sol:1701`). `setVaultStatus`, `setSpvMaintainerStatus`, `setReservationRouter`, and `forceStaleReservedDeposit` are `onlyOwner` with no delay (`BridgeGovernance.sol:308`, `:317`, `:1811`; `forceStaleReservedDeposit` at `tbtc-v2@c8350d109:solidity/contracts/bridge/BridgeGovernance.sol:1939-1941`): instant, trusted-governance-only. `forceStaleReservedDeposit` still requires no pending acceptance authorization, so it cannot kill a live acceptance; it does not check the refund deadline and is the override for a depositor who parked a far-future deadline.
+- **Governance is trusted, and parameter changes are delayed.** `updateReservationParameters` and `updateReservationCaps` run through a begin/finalize ceremony with a governance delay (`tbtc-v2@72b891eec:solidity/contracts/bridge/BridgeGovernance.sol:1834`, `:1893`, at `9d2086965`). At `806b1106f` the caps ceremony takes five arguments, the fifth being the hand-off reserve (`tbtc-v2@806b1106f:solidity/contracts/bridge/BridgeGovernance.sol:1896`, `tbtc-v2@806b1106f:solidity/contracts/bridge/BridgeGovernance.sol:1917`); it is still delayed, and a zero reserve is rejected ("Hand-off reserve must be greater than zero", `tbtc-v2@806b1106f:solidity/contracts/bridge/Reservation.sol:1701`). `setVaultStatus`, `setSpvMaintainerStatus`, `setReservationRouter`, and `forceStaleReservedDeposit` are `onlyOwner` with no delay (`tbtc-v2@72b891eec:BridgeGovernance.sol:308`, `:317`, `:1811`; `forceStaleReservedDeposit` at `tbtc-v2@72b891eec:solidity/contracts/bridge/BridgeGovernance.sol:1939-1941`): instant, trusted-governance-only. `forceStaleReservedDeposit` still requires no pending acceptance authorization, so it cannot kill a live acceptance; it does not check the refund deadline and is the override for a depositor who parked a far-future deadline.
 - **Trusted protocol contracts.** Bank, the token vault, token and relay must implement their stated accounting and proof roles. Bank-only credit is not, by itself, reservation provenance: ordinary proved sweep credits also exist. VF-02 records that boundary.
 
 ## Adversary capability notes
@@ -72,10 +72,10 @@ Mitigations: reveal-time refund-deadline cap (`Deposit.sol:244`); permissionless
 
 Residual: the grief window is capped to one custody term plus a 24-hour margin (`tbtc-v2:solidity/contracts/bridge/WalletProposalValidatorConstants.sol:13`), and the per-deposit parking is one pending slot. No on-chain fee is charged to park a slot, so a bulk griefer spends gas but not funds.
 
-Test: the refund-locktime cap and the pending marker are pinned indirectly by the acceptance guard test set (`tbtc-v2:solidity/test/bridge/Reservation.test.ts:206`, "guard 5: pendingReservedDeposit[key].isReserved"). A dedicated far-future-locktime parking test was not found.
+Test: `tbtc-v2@72b891eec:solidity/test-foundry/ReservationRefundLocktimeCap.t.sol:55` ("test_reservedReveal_rejectsLocktimeOneSecondPastCap") and `:74` ("test_reservedReveal_acceptsLocktimeAtCap") and `:90` ("test_poolReveal_acceptsSameFarFutureLocktime"); the opt-in audit PoC of the same three claims is `tbtc-v2@72b891eec:solidity/test/audit-poc/ReservationTimeBounds.t.sol:64`, and the cap itself is `tbtc-v2@72b891eec:solidity/contracts/bridge/Deposit.sol:235-253`. The cases are cited at the tbtc-v2 public head `72b891eec`; the unpublished `spec/c-rows-sol` branch head `462fdd840` that first carried them is not a public revision, so the row names the public head.
 
 Negative stories (04-user-stories.md, by topic): US-02 "Reserved reveal rejected: refund locktime beyond term + safety margin"; US-10 "Stale reserved deposit (permissionless) and force stale (governance)"
-Status: `holds-untested`.
+Status: `holds` (the promoted cases are in `test-foundry`, which the `contracts-foundry` CI job runs under `FOUNDRY_PROFILE: ci`, so the cap is now gate-visible rather than opt-in).
 
 ## TM-02 Grief a target wallet's capacity via third-party re-anchor holds
 
@@ -110,10 +110,10 @@ Mitigations: acceptance is depositor-only and one generation per key (`Reservati
 
 Residual: same-block reordering of a depositor's own acceptance is possible and costs the depositor the window; the deposit still holds and can re-request. No on-chain reordering protection (no within-block ordering guarantee) exists.
 
-Test: the "Acceptance already pending" and single-generation guards are pinned (`tbtc-v2:solidity/test/bridge/Reservation.test.ts:298`, "guard 9"). No dedicated MEV reordering test.
+Test: the "Acceptance already pending" and single-generation guards are pinned (`tbtc-v2@72b891eec:solidity/test/bridge/Reservation.test.ts:303`, "guard 9"); the Live-source rotation is executed by `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:690` ("keeps the Live-source gate shut for a direct EOA call"), `:937` ("depends on the governance gate: a Live wallet's anchor cannot be rotated permissionlessly") and `:634` ("applies a rotation in the same block as the owner's call, and refuses a non-owner"); the Halmos forwarder checks `check_forwarder_rejectsNonOwner` and `check_forwarder_ownerCallReachesBridge`.
 
 Negative stories (04-user-stories.md, by topic): US-05 "Acceptance request: capacity and amount-cap gates (negative)"; US-25 "Re-anchor: cap revert -> next candidate"; US-31 "Re-anchor: third party, owner, SPV maintainer, member proof exempt the third-party hold cap"
-Status: `holds-untested`.
+Status: `holds`.
 
 ## TM-04 Replay a proof against the wrong generation
 
@@ -191,10 +191,10 @@ Mitigations: stranding only fires on one of the four admissible states, and the 
 
 Residual: this is the accepted M1 loss story; no on-chain compensation exists. The attack is a *forcing* path, not a forgery; it costs the griefer only griefing pressure.
 
-Test: stranding transition and counter decrement are pinned (`tbtc-v2:solidity/test/bridge/Bridge.ReservationStranding.test.ts:525`, `tbtc-v2:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:110`). The cross-cutting chain (pressure -> slash -> strand) is not rehearsed end-to-end.
+Test: stranding transition and counter decrement are pinned (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStranding.test.ts:538` ("strands an Active reservation on a Terminated wallet: state transition, counter decrement, and event with exact args"), `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:75` ("notifyReservationAcceptanceTimedOut decrements activeReservationsCount and emits ReservationOccupancyChanged")); lab PC-L04 `resv-third-party-hold-and-strand` PASS (9,189 s, run `20261029t180846z-piotrroslani-ec1b`) rehearses the cross-cutting chain (hold cap refuses the second position with all signing nodes stopped, then both strand on the moving-funds timeout).
 
 Negative stories (04-user-stories.md, by topic): US-13 "Stranding on a Terminated wallet"; US-14 "Stranding on a Closing wallet after dissolution eligibility and the closing period"; US-101 "Stranding on a dissolution-eligible Live wallet"; US-49 "Stranding watcher (keep-core side)"
-Status: `holds-untested`. The entry conditions above replace the earlier "the wallet has left Live" framing. The client-side gap (VF-10) was the shipped watcher never taking the Live branch; keep-core #4365 added it, and the branch runs on the startup catch-up scan and the action-timeout recheck queue.
+Status: `holds`. The residual is that the pressure-to-slash-to-strand chain is not reproduced end to end on the Bitcoin side.
 
 ## TM-08 Slash honest operators via saturation
 
@@ -268,10 +268,10 @@ Mitigations: the reservation credit path is the SPV-proven acceptance (`tbtc-v2:
 
 Residual: the documented provenance gap remains relevant when governance trusts a vault that is not correctly wired. VF-02 confirms this narrower path. The known-gap comment is not a completed fix or an acceptance decision.
 
-Test: `tbtc-v2:solidity/test/vault/ReservationVault.test.ts:137` pins the `onlyBank` guard and the gross-mint fee math; no test exercises a *non-reservation* credit arriving at a trusted vault.
+Test: `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationNonReservationCredit.t.sol:435` ("test_nonReservationBankCreditIntoTrustedReservationVaultMintsGrossAndChargesInitiationFee") and `:535` ("test_pooledBankCreditDoesNotMintTbtcAndChargesNoFee") and `:603` ("test_reservationAcceptanceCreditHasIdenticalFeeTreatmentButCreatesProvenance")
 
 Negative stories (04-user-stories.md, by topic): US-11 "Mint, fee, and the credit path"
-Status: `holds-untested` (the gap is acknowledged; the no-verification residual is Finding F-04).
+Status: `holds` for the credit-provenance claim: the cases fail when the trusted vault stops minting gross with the initiation fee on a non-reservation credit, when a pooled credit starts minting TBTC or starts charging a fee, and when the reservation acceptance credit stops having the same fee treatment while still creating its provenance.
 
 ## TM-12 Kill a pending deposit via stale notify
 
@@ -288,10 +288,10 @@ Mitigations: `forceStaleReservedDeposit` still requires no pending acceptance au
 
 Residual: governance can discard an eligible unrequested or timed-out intent without waiting for the depositor's refund deadline. This is an intentional anti-grief power. It cannot clear a current Pending acceptance.
 
-Test: `notifyStaleReservedDeposit` is pinned (`tbtc-v2:solidity/test/bridge/Bridge.ReservationStranding.test.ts:727`, "succeeds once the deadline has elapsed"). `forceStaleReservedDeposit` has no dedicated test.
+Test: `notifyStaleReservedDeposit` is pinned (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStranding.test.ts:715` ("rejects immediately when refundDeadlineValidated is false and the deadline has not elapsed (reveal-ahead disabled)"), `:742` ("succeeds once the deadline has elapsed when refundDeadlineValidated is false (reveal-ahead disabled)"), `:760` ("rejects when the deposit key is not a pending reserved deposit"), `:773` ("rejects when the refund deadline has not yet elapsed (reveal-ahead enabled, validated=true)"), `:794` ("succeeds when the refund deadline has elapsed (reveal-ahead enabled, validated=true)"), `:812` ("rejects when an acceptance authorization is pending")); `forceStaleReservedDeposit` is executed by `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStranding.test.ts:858` ("force-clears the reserved deposit when the owner calls, before its deadline") and `:875` ("refuses a non-owner and leaves the deposit pending"), with the library guards at `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:966` ("forceStaleReservedDeposit guards").
 
 Negative stories (04-user-stories.md, by topic): US-10 "Stale reserved deposit (permissionless) and force stale (governance)"; US-65 "forceStaleReservedDeposit (governance override)"
-Status: `holds-untested` (notify holds and is tested; force is untested, see Findings).
+Status: `holds` (both the permissionless and the governance paths are executed).
 
 ## TM-13 DoS keep-core event scans via an unbounded scan or a hostile RPC provider
 
@@ -323,10 +323,10 @@ An alert improves detection; it does not remove the RPC trust assumption or guar
 
 Residual: target discovery and the below-dust history check include full-history queries. Repeated passes may repeat them. The provider compatibility risk is real; VF-05 rejected the stronger attacker-DoS claim.
 
-Test: none for RPC-provider throttling; the bounded-scan behavior is unit-tested (`keep-core:pkg/maintainer/spv/reservation_event_scan_test.go`).
+Test: `keep-core@931dcd63c:pkg/maintainer/spv/reservation_event_scan.go:19` chunk size and `:27` twelve-block lag are exercised by `TestReservationScanRange` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_event_scan_test.go:306`) and the four `TestFetchPastEventsInChunks_*` tests; `TestProveReservationTransaction_SelectsConfirmedRBFCandidate` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_proof_loop_test.go:1367`) shows a replaced candidate is skipped; lab PC-L08 `resv-chain-read-fault` PASS (7,215 s, run `20261030t140022z-piotrroslani-6e6b`) shows the keeper recovering from an injected failing chain read, and its step text reads "only the keeper retries the failed read and sends the reservation stranding notification".
 
 Negative stories (04-user-stories.md, by topic): US-28 "Activation-block gating: client and on-chain coupling"; US-29 "Deposit sweep rejects reserved deposits and fails closed on reservation parameter error"; US-46 "Per-item errors do not block sibling actions; restart resumes scan"; US-51 "Watcher restart and metrics"
-Status: `holds-untested` (bounded paths hold; unbounded residuals are Finding F-03).
+Status: `holds`. The residual is that provider throttling of `eth_getLogs` itself is not staged, and full-history queries remain Finding F-03.
 
 ## TM-14 Abuse a parameter governance write
 
@@ -437,10 +437,10 @@ Mitigations: `updateInitiationFee` is capped at `MAX_FEE_BASIS_POINTS = 500` (`R
 
 Residual: the vault owner can pull fee revenue that was earmarked for in-kind financing; the shortfall is borne by the system as visible over-supply.
 
-Test: `tbtc-v2:solidity/test/vault/ReservationVault.test.ts:273` pins `financeInKindFee` and the debt accounting; the owner-drain residual is the documented Fee-Reserve-Target governance step (`tbtc-v2@52f4f3005:solidity/docs/RESERVATION_SEPOLIA_DEPLOYMENT.md:792`).
+Test: `tbtc-v2@72b891eec:solidity/test/vault/ReservationVault.test.ts:844` ("should revert when the fee exceeds MAX_FEE_BASIS_POINTS"), `:691` ("should repay the debt before sweeping the excess") and `:484` ("should partially repay the debt and burn the exact TBTC amount"); the Medusa accounting campaign bounds the debt to the predicted credits. The owner-drain residual is the documented Fee-Reserve-Target governance step (`tbtc-v2@52f4f3005:solidity/docs/RESERVATION_SEPOLIA_DEPLOYMENT.md:792`).
 
 Negative stories (04-user-stories.md, by topic): US-68 "Vault fee and reserve management"; US-69 "Debt repayment and in-kind fee financing"; US-81 "Sweep excess to treasury"; US-83 "balance approval always reverts"
-Status: `holds-untested`.
+Status: `holds`. The residual is that the owner's ability to pull earmarked fee revenue stays a documented residual.
 
 ## TM-20 Bitcoin reorg or fee manipulation
 
@@ -456,10 +456,10 @@ Mitigations: the SPV scan stops 12 blocks behind the tip (`reservation_event_sca
 
 Residual: the 12-block and confirmation-depth margins are the reorg backstop; a reorg deeper than that window requires the maintainer to drop the proof and rescan.
 
-Test: none specific to reservation reorgs; the confirmation-depth behavior is the shared SPV path.
+Test: `keep-core@931dcd63c:pkg/maintainer/spv/reservation_event_scan.go:27` `reservationEventScanConfirmationBlocks = 12` is exercised by `TestReservationScanRange` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_event_scan_test.go:306`), and `TestProveReservationTransaction_SelectsConfirmedRBFCandidate` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_proof_loop_test.go:1367`) shows a replaced candidate is skipped.
 
 Negative stories (04-user-stories.md, by topic): US-28 "Activation-block gating: client and on-chain coupling" (scans stop 12 blocks behind tip); EC-12/EC-13 "Ethereum / Bitcoin reorg" in 05-edge-cases.md
-Status: `holds-untested`.
+Status: `holds`. The residual is that a reorg deeper than the window is the documented assumption.
 
 ---
 

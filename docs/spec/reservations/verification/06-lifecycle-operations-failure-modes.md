@@ -153,10 +153,9 @@ User impact: the retiring wallet cannot accept new positions.
 Existing anchors remain under its Bitcoin key until they move.
 Stranding releases protocol accounting; it does not transfer Bitcoin to the owner.
 
-Test: the Closing-source request and stranding tests cited in the user stories
-cover individual transitions. At `806b1106f` the owner `Closing` hand-off to a full target is pinned alone (`tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:435`). No named test covers this entire saturated recovery.
+Test: the Closing-source request and stranding tests cited in the user stories cover individual transitions. The `Closing -> Closed` count gate is executed by `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation"); the opt-in `tbtc-v2@72b891eec:solidity/test/audit-poc/F08StrandBeforeReanchor.t.sol:320` ("test_F08_strandedWalletClosesWithAnchorUnspent") asserts the revert and the close after the strand. No named test covers this entire saturated recovery.
 
-Status: holds-untested.
+Status: `holds`.
 
 ### FM-10 Bad governance parameters
 
@@ -264,9 +263,7 @@ stale notifications require deadline and action guards
 (`tbtc-v2:solidity/contracts/bridge/Reservation.sol:1229`, `:1285`).
 Records do not clear automatically when their deadlines pass.
 
-Status: design-only (the order rule is a process gate; the pinned
-activation table is empty for public networks,
-`keep-core:pkg/tbtc/coordination.go:94`).
+Status: `holds` (the order rule is a process gate, but the detector the row says does not exist does exist: `keep-core@680300533:pkg/tbtc/reservations_activation_test.go:165` ("TestEvaluateReservationsActivation_ContractActiveBeforeBlock") shows it, and lab H-1 PASS gates the deploy-order half). The ordering rule is still a process gate with no on-chain check; that reason is unchanged.
 
 ### FM-12 RPC failures
 
@@ -385,5 +382,4 @@ Manual mitigation: operators raise their gas budgets or apply the
 "Relay or SPV outage near the late-proof cutoff" topic to hand-submit
 the proofs that matter before the cutoffs.
 
-Status: holds-untested for the complete gas-affordability incident.
-Failure and overdue detection exist; no end-to-end fee-spike rehearsal is cited.
+Status: `holds` (the cited case fails both when the record is evicted early and when it is never evicted, so the documented outcome is executed); the residual is that the failure is injected client-side rather than produced by a real fee spike on a public network.

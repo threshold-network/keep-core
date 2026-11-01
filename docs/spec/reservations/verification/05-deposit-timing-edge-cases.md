@@ -41,12 +41,9 @@ Equality passes the cooldown check; all other request guards still apply.
 The client uses chain time for the same deadline
 (`keep-core:pkg/tbtcpg/reservation_reanchor.go:472`).
 
-Test: `test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1610`
-("rejects when reanchor cooldown is in effect");
-`keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime`
-(`pkg/tbtcpg/reservation_reanchor_custody_test.go:265`).
+Test: `tbtc-v2@72b891eec:solidity/test/audit-poc/RequireBoundaryGuards.t.sol:61` ("test_reanchor_allowedExactlyAtCooldownEnd") (revert one second before, success at equality, permissionless caller); the Hardhat negative `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1717` ("rejects when source wallet is Live and call is not privileged") covers the inside-cooldown side; `keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime` (`keep-core@931dcd63c:pkg/tbtcpg/reservation_reanchor_custody_test.go:265`). The archived `yarn test:audit-poc` run at the freeze head is green.
 
-Status: holds-untested (the cited tests cover an active cooldown, not the exact equality second).
+Status: `holds`
 
 ### EC-03 Refund deadline exact equality
 
@@ -90,14 +87,9 @@ generation's window. The client evicts a tracked TimedOut candidate on
 the same chain-head comparison
 (`keep-core:pkg/maintainer/spv/reservation_proof_loop.go:547`).
 
-Test: `test/bridge/ReservationProofs.test.ts:851` ("should settle a
-timed-out older generation without newer generation (late
-settlement)"); `keep-core`
-`TestProveReservationAcceptanceActions_TimedOutLateWindow`
-(`pkg/maintainer/spv/reservation_proof_loop_test.go:1814`).
+Test: `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:434` ("should still load a late acceptance at the last second of the window") and `:446` ("should reject a late acceptance one second after the window closes"); the existing late-settlement case is `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:930` ("should settle a timed-out older generation without newer generation (late settlement)").
 
-Status: holds-untested (no test pins the inclusive boundary second of
-the late window itself).
+Status: `holds` (the two cases above pin the inclusive boundary second of the late window, which the row's hedge said no test covered).
 
 ### EC-05 Term + 24h: reveal-ahead period bound
 

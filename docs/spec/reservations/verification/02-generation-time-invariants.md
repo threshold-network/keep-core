@@ -204,11 +204,8 @@ taken on 2026-10-29 and the code does not change.
   This is a deployment requirement, not an unconditional contract invariant.
 - **Why.** Prevents activation before clients can coordinate signed anchors.
   It does not replace vault-credit provenance validation or guarantee SPV availability.
-- **Test.** `TestReservationsActivationBlock_SanityCheck`
-  (`keep-core:pkg/tbtc/coordination_test.go:1608`) pins that `Mainnet` and
-  `Unknown` have no entry and therefore never activate.
-- **Status.** holds for the client lookup behavior.
-  The operator/deployment ordering remains holds-untested until its actual ceremony is exercised.
+- **Test.** `TestReservationsActivationBlock_SanityCheck` (`keep-core@931dcd63c:pkg/tbtc/coordination_test.go:1667`) pins that `Mainnet` and `Unknown` have no entry and therefore never activate; lab scenario H-1 `resv-activation-order` PASS (7,191 s, run `20261029t204323z-piotrroslani-b12c`) gates the deploy-order half, reading the vault-trust event block against B and the head before it.
+- **Status.** `holds` for the client lookup behavior and the deploy-order gate as the lab scenario exercises it. The residual is that the activation block B is still unchosen, so the ceremony gate ran with a lab-chosen B.
 - **Outstanding prerequisite (owner undecided, due before activation).** The
   activation block B is not yet chosen, `feeReserveTarget` is not yet seeded, and the
   irreversibility sign-off has not been given. This set does not name who owns them;
@@ -226,9 +223,8 @@ taken on 2026-10-29 and the code does not change.
   The fee remains in the vault unless a later explicit operation moves or burns it.
 - **Enforcing code.** `tbtc-v2:solidity/contracts/vault/ReservationVault.sol:175-196`
   computes the gross mint and depositor transfer.
-- **Test.** `ReservationVault.test.ts` net-transfer and fee-retention cases cited in INV-701.
-  `none` recorded here for a combined contract/client/SDK unit-consistency property.
-- **Status.** holds-untested for the combined cross-repo monetary property.
+- **Test.** `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:131` ("TestSatoshiToTbtcBaseUnits_Vector") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:170` ("TestSatoshiToTbtcBaseUnits_Constant") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:334` ("TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale"); and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:94` ("test_vectorFileStatesTheAgreedFactor") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:118` ("test_vectorFileContainsTheDefiningPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:138` ("test_vaultSatoshiMultiplierIsTenToTheTen") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:159` ("test_vaultMultiplierMatchesEverySharedVectorPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:192` ("test_vaultFeeArithmeticOnASharedVectorPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:266` ("test_tbtcVaultConstantAndConversionUseTheSameFactor") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:321` ("test_conversionTruncatesTheRemainderLikeTheSdk") tie the satoshi to the TBTC base unit and to the vault's fee-reserve scale; the contract half is the vault's `SATOSHI_MULTIPLIER` at `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:85` and the net-transfer and fee-retention cases cited in INV-701. The branch head is `680300533` on keep-core `spec/c-rows-go`, an ancestor of the held keep-core head `prep/kc-freeze-candidates` at `8e7e2b30f`; the freeze-day keep-core push publishes both.
+- **Status.** `holds` for the combined cross-repo unit property, client side and contract side: the three client cases fail on every pair when the factor is changed from 1e10 to 1e9, and the seven Foundry cases fail when the vault's `SATOSHI_MULTIPLIER` stops being 10^10, when the shared vector stops matching the vault, when the vault fee arithmetic stops matching a shared vector pair, or when the contract conversion stops truncating the remainder the way the SDK does. The shared vector file is the single source both sides read, which is what makes the cross-repo property checkable rather than asserted.
 
 ### INV-705 Miner-fee shortfall is an incremental backing difference, not the only possible system loss
 
@@ -245,6 +241,5 @@ taken on 2026-10-29 and the code does not change.
   Repayment and debt-first sweeping decrease it (:237-261, :297-318).
   `_burnFromReserve` floors fractional-satoshi token balance before coverage
   (:354-371). A fractional satoshi does not cover a whole-satoshi fee.
-- **Test.** `ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207.
-  `none` identified for the complete Bitcoin-plus-token conservation property.
-- **Status.** holds-untested for the complete monetary property.
+- **Test.** `tbtc-v2@72b891eec:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa surface campaign (23 of 23 properties pass over 1,000,600 calls at `c8350d109`) executes `property_inKindFeeDebtMatchesFinancing`. `none` identified for the complete Bitcoin-plus-token conservation property.
+- **Status.** `holds` for the incremental monetary property as the campaign executes it. The residual is that the conservation property is a vault-stack statement, not a Bitcoin-plus-token one, so no end-to-end Bitcoin-backed equality exists.

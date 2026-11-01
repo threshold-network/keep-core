@@ -134,7 +134,9 @@ including #4274/#4276-#4280/#4324).
   and `...WithReservationReanchorProposal`, added in #4277 alongside the
   switch from JSON-placeholder to real protobuf reservation proposal types.
 - **CI** (`.github/workflows/client.yml`): `client-build-test-publish` runs
-  `gotestsum -- -timeout 15m -coverprofile=... ./...` (no `-race` flag);
+  `gotestsum -- -timeout 15m -coverprofile=... ./...` (no `-race` flag on
+  this sharded suite; the separate `client-go-race` job does run the three
+  reservation packages under the race detector, see item 2 below);
   `client-integration-test` runs `gotestsum -- -timeout 20m
   -tags=integration ./...` but is gated to non-PR events only. Exactly 2
   files repo-wide use the `//go:build integration` tag
@@ -248,13 +250,20 @@ does, or the test proves nothing about ordering.
    has no dissolution path to double-settle against, see §4). Cost: ~3-5
    days to stand up `forge` + write 4-6 invariant handlers reusing the
    existing fixture deployment logic.
-2. **Add `-race` to CI for the packages reservation code touches**
-   (`pkg/tbtc`, `pkg/chain/ethereum`, `pkg/bitcoin`) — still open as of
-   2026-09-28; `client.yml`'s `gotestsum` invocations remain unflagged.
-   Reservation coordination is concurrent (goroutine dispatch per wallet
-   action, same pattern as existing heartbeat/redemption dispatch). It is
-   free to add and catches races cheaply.
-   Add `-race` **before** further coordination wiring lands, not after.
+2. **Add `-race` to CI for the packages reservation code touches** — PARTLY
+   DONE (keep-core #4368). The `client-go-race` job now runs
+   `go test -race -count=1 -timeout 30m` over `./pkg/tbtcpg/...`,
+   `./pkg/maintainer/spv/...` and `./pkg/tbtc/...`
+   (`keep-core@931dcd63c:.github/workflows/client.yml:622-657`), which is
+   the scope the `keep-core.go.race` coverage freeze bar names. It is a
+   separate job rather than a `-race` flag on the sharded suite, because the
+   race detector multiplies the suite's runtime and the bar's scope is these
+   three packages. Still open: the sharded `client-build-test-publish` suite
+   itself remains unflagged, so `pkg/chain/ethereum` and `pkg/bitcoin` are
+   still measured without the race detector, and `client.yml`'s `gotestsum`
+   invocations remain unflagged. The bare statement "no `-race` flag" in the
+   CI section above is therefore still true of the sharded suite and false of
+   the tree as a whole.
 3. **Finish keep-core's own test bar — DONE (#4274, #4278, #4279).**
    `node_test.go`/`coordination_test.go` now have the same coverage every
    other action type has:

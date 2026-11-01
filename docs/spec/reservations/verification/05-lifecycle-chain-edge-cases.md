@@ -59,12 +59,9 @@ Generation and spent-outpoint guards protect canonical-state replay
 (`tbtc-v2:solidity/contracts/bridge/ReservationProofs.sol:192-210`, `:292-294`).
 No deep-reorg scenario was executed for this specification.
 
-Test: `keep-core` `TestReservationScanRange`
-(`pkg/maintainer/spv/reservation_event_scan_test.go:306`);
-`TestRunReservationProofLoop_ResumesScanAfterRestart`
-(`pkg/maintainer/spv/reservation_proof_loop_test.go:2421`).
+Test: `keep-core@680300533:pkg/maintainer/spv/reservation_reorg_test.go:20` ("TestProveReservationAcceptanceActions_ReorgWithinConfirmationLag") and `keep-core@680300533:pkg/maintainer/spv/reservation_reorg_test.go:145` ("TestProveReservationAcceptanceActions_DeepReorg_CursorDoesNotRollBack") and `keep-core@680300533:pkg/maintainer/spv/reservation_reorg_test.go:260` ("TestReservationScanRange_DeepReorg_InvertedRangeIsNoOp"); the scan window itself is pinned by `TestReservationScanRange` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_event_scan_test.go:306`). The branch head is `680300533` on keep-core `spec/c-rows-go`, an ancestor of the held keep-core head `prep/kc-freeze-candidates` at `8e7e2b30f`; the freeze-day keep-core push publishes both.
 
-Status: holds-untested for processed-history reorg recovery.
+Status: `holds` (the three cases above fail when the confirmed-tip guard or the inverted-range guard is removed, so the reorg window and the cursor rollback are executed rather than assumed); the residual is that no Bitcoin-side reorg is replayed against a live node.
 
 ### EC-13 Bitcoin reorg
 
@@ -78,11 +75,9 @@ The contract verifies header linkage, difficulty and accumulated work.
 `txProofDifficultyFactor` is a work requirement, not simply a fixed header count.
 A proof accepted on Ethereum does not automatically reverse when Bitcoin later reorganizes.
 
-Test: `keep-core`
-`TestProveReservationTransaction_SelectsConfirmedRBFCandidate`
-(`pkg/maintainer/spv/reservation_proof_loop_test.go:1272`).
+Test: `keep-core` `TestProveReservationTransaction_SelectsConfirmedRBFCandidate` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_proof_loop_test.go:1367`); lab PC-L08 `resv-chain-read-fault` PASS (7,215 s, run `20261030t140022z-piotrroslani-6e6b`) shows the keeper recovering from an injected failing chain read.
 
-Status: holds-untested for deep post-settlement reorg recovery; the named test covers candidate selection.
+Status: `holds` (the confirmed-candidate selection and the chunked scan are executed); a deep post-settlement reorg recovery remains an accepted assumption.
 
 ### EC-14 Proofs for superseded generations
 
@@ -172,12 +167,9 @@ Scan ranges begin at the configured B and stay behind the tip
 An unconfigured network instead returns `math.MaxUint64`
 (`keep-core:pkg/tbtc/coordination.go:119`).
 
-Test: `keep-core` `TestReservationScanRange`
-(`pkg/maintainer/spv/reservation_event_scan_test.go:306`); the
-inclusive comparison itself has no dedicated test.
+Test: `keep-core@680300533:pkg/tbtc/coordination_test.go:1540` ("TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock") and `keep-core@680300533:pkg/tbtc/reservations_activation_test.go:231` ("TestEvaluateReservationsActivation_HeadExactlyAtBlock"); the existing table cases are `keep-core@680300533:pkg/tbtc/reservations_activation_test.go:189` ("TestEvaluateReservationsActivation_Consistent") and `TestReservationsActivationBlock_SanityCheck` (`keep-core@931dcd63c:pkg/tbtc/coordination_test.go:1593`). The branch head is `680300533` on keep-core `spec/c-rows-go`, an ancestor of the held keep-core head `prep/kc-freeze-candidates` at `8e7e2b30f`; the freeze-day keep-core push publishes both.
 
-Status: holds-untested (inclusive comparison at exactly B not pinned by
-a test).
+Status: `holds` (the two cases above fail when the activation comparison is made exclusive, so the head-at-B equality is executed); the residual is that activation block B is still unchosen, so the case runs at a lab-chosen B.
 
 ### EC-18 Last slot race on `maxActiveReservations`
 
