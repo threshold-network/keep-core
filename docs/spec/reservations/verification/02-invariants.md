@@ -133,7 +133,7 @@ taken on 2026-10-29 and the code does not change.
 - **Why.** Distinguishes available recovery from a guaranteed state transition.
 - **Enforcing code.** `terminateWallet` (`Wallets.sol:690-701`, no count
   check); `notifyReservationStranded` (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1314-1346`,
-  wallet-state require at :1328-1340); client watcher dispatches
+  wallet-state require at :1334-1346); client watcher dispatches
   `Closed`/`Terminated` to the stranding check, `Closing` to the
   dissolution-and-closing-period variant, and `Live` to the
   dissolution-eligible variant
@@ -178,7 +178,7 @@ taken on 2026-10-29 and the code does not change.
   (a Closed target strands on an on-time proof) and
   `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:1434`
   (a Closing target is not stranded, state stays Active, no capacity released).
-- **Status.** holds at `tbtc-v2@c8350d109` for the corrected statement. The
+- **Status.** holds at `tbtc-v2@72b891eec` for the corrected statement. The
   version recorded before VF-10 listed Closing among the settlement-strand
   targets and did not match the published code (VF-10).
 

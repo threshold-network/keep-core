@@ -131,7 +131,7 @@ taken on 2026-10-29 and the code does not change.
   A reservation may lose its in-kind status when eligible stranding is actually submitted.
 - Monitoring: compare dates with wallet state and pending actions, not the M2 release date alone.
 - Revisit trigger: before mainnet, confirm the promised custody semantics and the M2 migration terms.
-- Status: `holds` at `tbtc-v2@c8350d109` for the explicit guards
+- Status: `holds` at `tbtc-v2@72b891eec` for the explicit guards
   (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1314-1346`).
   The client side is uneven: since keep-core #4365 the watcher notifies for all
   four admissible states (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),

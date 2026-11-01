@@ -38,7 +38,7 @@ Test: `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:1308`
 `tbtc-v2@72b891eec:solidity/test/bridge/Reservation.test.ts:2105` (a proven
 anchor keeps the Live wallet in MovingFunds).
 
-Status: `holds` at `tbtc-v2@c8350d109` for the corrected rule; the Closing
+Status: `holds` at `tbtc-v2@72b891eec` for the corrected rule; the Closing
 target and the Live/pending-only routing recorded before VF-10 and VF-11 do
 not match the published code.
 
@@ -360,12 +360,12 @@ match the run (`bindingMismatch`, `tbtc-v2@72b891eec:solidity/scripts/prepare-ar
 History: the earlier pin `52f4f3005` had no guard, and `34160a556` carried the
 first version on a branch that then had no pin in this set.
 
-Test: `tbtc-v2@c8350d109:solidity/test/prepare-artifact-guard.test.ts` covers the
+Test: `tbtc-v2@72b891eec:solidity/test/prepare-artifact-guard.test.ts` covers the
 malformed-artifact rejection, the chain preflight and the binding check; this
 documentation task did not run it. No real-key wrong-chain run was performed, and
 no test pins a tampered on-chain deployment reference.
 
-Status: `holds` at `tbtc-v2@c8350d109` for the inspected guard behaviour (the
+Status: `holds` at `tbtc-v2@72b891eec` for the inspected guard behaviour (the
 malformed-progress-JSON rejection, the provider-chain preflight and the
 chain-ID/Bridge binding check). The earlier revision of this entry recorded no
 verdict, because the guard had not merged at the pins this chapter otherwise

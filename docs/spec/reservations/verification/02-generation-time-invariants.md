@@ -32,7 +32,7 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
   proves is the newest `Pending` one, which the client sorts first, submits
   alone for the key and claims on success
   (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_proof_loop.go:875-888`,
-  `:1180-1182`, `:1248-1250`), and the older `TimedOut` generation that this
+  `:1193-1195`, `:1275-1277`), and the older `TimedOut` generation that this
   settlement leaves behind can then never settle, because the position's
   anchor has moved away from the source anchor that generation recorded
   (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
@@ -142,7 +142,7 @@ taken on 2026-10-29 and the code does not change.
   refundDeadline (close bound exact)" (:405) and "should revert when
   timeoutAt + 24h == refundDeadline + 1s" (:433);
   `Bridge.ReservationStrandingLibrary.test.ts` "succeeds when reservation is
-  dissolution-eligible" (:1366); at `tbtc-v2@c8350d109`:
+  dissolution-eligible" (:1366); at `tbtc-v2@72b891eec`:
   `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
   (Closing rejected past dissolution eligibility while the closing period runs),
   `:263` and `:313` (stranding once both conditions hold, inclusive at the end
@@ -151,7 +151,7 @@ taken on 2026-10-29 and the code does not change.
   `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:446`
   (late acceptance one second past the window reverts), `:456`
   (`"Late acceptance settlement window expired"`).
-- **Status.** holds at `tbtc-v2@c8350d109` for the corrected windows. The
+- **Status.** holds at `tbtc-v2@72b891eec` for the corrected windows. The
   `Closing` clause recorded before VF-10 named dissolution eligibility only and
   did not match the published code (VF-10).
 

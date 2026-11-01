@@ -190,7 +190,7 @@ and throws when `RESERVATION_TERM_SECONDS` is below that term
 The on-chain guard remains PAR-X3. Status `holds`.
 Test:
 `tbtc-v2@72b891eec:solidity/test/deploy/98_generate_reservation_mainnet_calldata.test.ts:641`
-(reveal-ahead period rejected) and `:549` (longest accepted reveal-ahead period).
+(reveal-ahead period rejected) and `:645` (longest accepted reveal-ahead period).
 
 ### PAR-X4 Saturation sizing
 At the original pins (`9d2086965`): `maxActiveReservations` is a governance-time cap on `activeReservationsCount`,
@@ -245,8 +245,8 @@ same-block reveal without a window. The re-anchor request additionally requires
 a non-empty signing window against the safety-margined deadline
 (`Reservation.sol:833`). Status `holds`. Test:
 `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationCaps.test.ts:100-132`
-(the action-timeout floor cases: `:116` rejects the old floor `safety margin + 1`,
-`:122` rejects `safety margin + deposit min age + 1`, `:128` accepts `+ 2`);
+(the action-timeout floor cases: `:118` rejects the old floor `safety margin + 1`,
+`:124` rejects `safety margin + deposit min age + 1`, `:130` accepts `+ 2`);
 `Reservation.test.ts` "action timeout is too short for signing window" covers
 the request-time window.
 
@@ -476,7 +476,7 @@ Drift against this directory's prior specs; line numbers refer to those files.
 | Doc path:line | What it says | What the code does |
 |---|---|---|
 | `requirements.md:719` | `reservationMaxTotalAmount` "Local/test: 10,000,000 sats" | 10,000,000 is the mainnet dry-run value; local test fixtures set caps to the dust threshold (see `9d2086965` commit subject) |
-| `requirements.md:725` | `maxActiveReservations` "Local/test: 100" | 100 is the local/test caps ceremony value: `tbtc-v2@c8350d109:solidity/deploy/97_set_reservation_parameters.ts:138` passes `BigInt("100")` to `beginReservationCapsUpdate` (`:126`), next to the comment that these local/test values intentionally diverge from the mainnet launch values that `tbtc-v2@c8350d109:solidity/deploy/98_generate_reservation_mainnet_calldata.ts` derives from its own environment. It is not a contract default: no `Reservation` setter writes 100 |
+| `requirements.md:725` | `maxActiveReservations` "Local/test: 100" | 100 is the local/test caps ceremony value: `tbtc-v2@72b891eec:solidity/deploy/97_set_reservation_parameters.ts:138` passes `BigInt("100")` to `beginReservationCapsUpdate` (`:126`), next to the comment that these local/test values intentionally diverge from the mainnet launch values that `tbtc-v2@72b891eec:solidity/deploy/98_generate_reservation_mainnet_calldata.ts` derives from its own environment. It is not a contract default: no `Reservation` setter writes 100 |
 | `requirements.md:720` | `maxReservationsPerWallet` "hard-enforced == 1" by the mainnet script | On-chain only requires `> 0` (`Reservation.sol:1398`); the `== 1` pin is a deploy-script check, not a require |
 | `requirements.md:723` | `maxReservationsAmountPerWallet` "Local/test: 1,000,000 sats" | Consistent with the `9d2086965` local-dust-threshold caps |
 | `m1-b-implementation.md:246-252` | cites `tbtc-v2@9f8f5ef1:solidity/contracts/bridge/Reservation.sol:925-930` for occupancy, `tbtc-v2@9f8f5ef1:solidity/contracts/bridge/Reservation.sol:1359-1361`/`tbtc-v2@9f8f5ef1:solidity/contracts/bridge/Reservation.sol:1382-1385` for the gate, `tbtc-v2@9f8f5ef1:solidity/contracts/bridge/Reservation.sol:1217-1231` for the invariant | Actual: occupancy check in `reserveAcceptanceCapacity` at `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1005` (called from `tbtc-v2:solidity/contracts/bridge/Reservation.sol:621`), launch gate `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1501` (caps) / `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1405` (parameters), invariant `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1322` with callers `tbtc-v2:solidity/contracts/bridge/Reservation.sol:1448`/`tbtc-v2:solidity/contracts/bridge/Reservation.sol:1511` |
