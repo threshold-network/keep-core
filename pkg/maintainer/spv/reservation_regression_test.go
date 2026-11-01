@@ -400,21 +400,44 @@ func (f *timedOutReanchorFixture) reanchorProofScript() (bitcoin.Script, error) 
 	return authorizedWalletScript(f.sourceWalletPKH, encodingP2WPKH)
 }
 
-// filterRecordingChain records the StartBlock of every
+// walletRegistrationQuery is one PastNewWalletRegisteredEvents filter, as
+// the range it asked for. endBlock is -1 when the filter carried none.
+type walletRegistrationQuery struct {
+	startBlock uint64
+	endBlock   int64
+}
+
+// filterRecordingChain records the block range of every
 // PastNewWalletRegisteredEvents filter it sees.
 type filterRecordingChain struct {
 	*localChain
-	pastNewWalletRegisteredStartBlocks []uint64
+	walletRegistrationQueries []walletRegistrationQuery
 }
 
 func (c *filterRecordingChain) PastNewWalletRegisteredEvents(
 	filter *tbtc.NewWalletRegisteredEventFilter,
 ) ([]*tbtc.NewWalletRegisteredEvent, error) {
-	c.pastNewWalletRegisteredStartBlocks = append(
-		c.pastNewWalletRegisteredStartBlocks,
-		filter.StartBlock,
-	)
+	query := walletRegistrationQuery{startBlock: filter.StartBlock, endBlock: -1}
+	if filter.EndBlock != nil {
+		query.endBlock = int64(*filter.EndBlock)
+	}
+	c.walletRegistrationQueries = append(c.walletRegistrationQueries, query)
+
 	return c.localChain.PastNewWalletRegisteredEvents(filter)
+}
+
+// windowStarts returns the start block of each contiguous ascending run of
+// recorded queries, i.e. the start of every look-back window the walk
+// covered. Queries are emitted chunk by chunk in ascending order, so a run
+// is one window.
+func (c *filterRecordingChain) windowStarts() []uint64 {
+	var starts []uint64
+	for i, query := range c.walletRegistrationQueries {
+		if i == 0 || query.startBlock != uint64(c.walletRegistrationQueries[i-1].endBlock)+1 {
+			starts = append(starts, query.startBlock)
+		}
+	}
+	return starts
 }
 
 // actionReadCountingChain wraps a Chain and counts GetReservationAction

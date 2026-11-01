@@ -28,6 +28,30 @@ const (
 // time-sensitive on-chain reads.
 var reservationRPCRequestTimeout = 30 * time.Second
 
+// ReservationEventScanMaxBlockSpan is the maximum number of blocks one
+// eth_getLogs call issued by a reservation event scan may cover. Scans that
+// reach back to a wallet's registration block span millions of blocks, and
+// most third-party RPC providers reject a log query over a range that wide,
+// so every such scan walks its range in chunks of at most this many blocks.
+//
+// It is a package var rather than a constant because the cap is a property
+// of the provider an operator happens to run against, not of the protocol:
+// an operator behind a provider with a tighter cap can lower it, and the
+// tests exercise the chunking with a small span. A value of zero or less is
+// treated as the default, so an unset override can never turn a chunk into
+// an empty range.
+var ReservationEventScanMaxBlockSpan = DepositRevealLookupChunkBlocks
+
+// ReservationEventScanChunkSpan returns the effective chunk span for a
+// reservation event scan: ReservationEventScanMaxBlockSpan, or the default
+// when that has been set to zero.
+func ReservationEventScanChunkSpan() uint64 {
+	if ReservationEventScanMaxBlockSpan == 0 {
+		return DepositRevealLookupChunkBlocks
+	}
+	return ReservationEventScanMaxBlockSpan
+}
+
 // reservationRPCSlots bounds the reservation RPC calls that run at the same
 // time, including calls whose caller already gave up on a timeout. The chain
 // and Electrum methods take no context, so a timed-out call keeps its

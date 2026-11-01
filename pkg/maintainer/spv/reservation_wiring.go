@@ -1061,7 +1061,12 @@ func subscribeReservationWalletClosed(
 // genesis-to-tip scan, which most providers reject: the search starts with
 // the last reservationDefaultLookBackBlocks blocks and doubles the window
 // until the registration is found or genesis is reached, the way the
-// Ethereum chain handle resolves a wallet's registration block.
+// Ethereum chain handle resolves a wallet's registration block. Each
+// doubled window is fetched in reservationEventScanChunkSize chunks and the
+// walk stops at the chunk that yields the registration, because a window
+// can cover millions of blocks while a provider caps the span of a single
+// eth_getLogs - one unbounded query inside a window would fail the whole
+// lookup, and with it the stranding check for that wallet.
 func resolveWalletPublicKeyHash(
 	spvChain Chain,
 	walletID [32]byte,
@@ -1082,10 +1087,30 @@ func resolveWalletPublicKeyHash(
 			startBlock = currentBlock - window
 		}
 
-		events, err := spvChain.PastNewWalletRegisteredEvents(
-			&tbtc.NewWalletRegisteredEventFilter{
-				StartBlock:    startBlock,
-				EcdsaWalletID: [][32]byte{walletID},
+		var registration *tbtc.NewWalletRegisteredEvent
+		err := fetchPastEventsInChunksUntil(
+			func(chunkStartBlock, chunkEndBlock uint64) (
+				[]*tbtc.NewWalletRegisteredEvent,
+				error,
+			) {
+				return spvChain.PastNewWalletRegisteredEvents(
+					&tbtc.NewWalletRegisteredEventFilter{
+						StartBlock:    chunkStartBlock,
+						EndBlock:      &chunkEndBlock,
+						EcdsaWalletID: [][32]byte{walletID},
+					},
+				)
+			},
+			startBlock,
+			currentBlock,
+			func(events []*tbtc.NewWalletRegisteredEvent, _ uint64) bool {
+				if len(events) == 0 {
+					return true
+				}
+				// A wallet ID is registered at most once; take the latest
+				// match defensively in case of a duplicate log delivery.
+				registration = events[len(events)-1]
+				return false
 			},
 		)
 		if err != nil {
@@ -1094,10 +1119,8 @@ func resolveWalletPublicKeyHash(
 				err,
 			)
 		}
-		if len(events) > 0 {
-			// A wallet ID is registered at most once; take the latest
-			// match defensively in case of a duplicate log delivery.
-			return events[len(events)-1].WalletPublicKeyHash, nil
+		if registration != nil {
+			return registration.WalletPublicKeyHash, nil
 		}
 
 		if startBlock == 0 {

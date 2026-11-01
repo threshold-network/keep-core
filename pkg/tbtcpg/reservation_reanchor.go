@@ -1737,17 +1737,37 @@ func (rrt *ReservationReanchorTask) notifyMovingFundsBelowDustIfEligible(
 
 // walletHasReservationHistory reports whether walletPublicKeyHash has ever
 // been touched by the reservation subsystem: it accepted a reservation, or
-// it appears as either side of a reservation re-anchor. Queries are
-// unbounded (StartBlock 0) rather than restricted to the package's usual
-// look-back window, since a wallet's reservation history can predate that
-// window while remaining a valid signal that the wallet is genuinely part
-// of the reservation subsystem's remit.
+// it appears as either side of a reservation re-anchor. The range still
+// starts at block 0 rather than at the package's usual look-back window,
+// since a wallet's reservation history can predate that window while
+// remaining a valid signal that the wallet is genuinely part of the
+// reservation subsystem's remit - but it is walked in
+// tbtc.ReservationEventScanChunkSpan() chunks up to the current block,
+// because a single unbounded query over the wallet's whole lifetime is
+// rejected by providers that cap the span of an eth_getLogs call, and that
+// rejection would read as "no history" for every wallet on such a provider.
 func (rrt *ReservationReanchorTask) walletHasReservationHistory(
 	walletPublicKeyHash [20]byte,
 ) (bool, error) {
-	acceptanceEvents, err := rrt.chain.PastReservationAcceptanceRequestedEvents(
-		&tbtc.ReservationAcceptanceRequestedEventFilter{
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	currentBlock, err := rrt.reservationHistoryScanEndBlock()
+	if err != nil {
+		return false, err
+	}
+
+	touched, err := reservationHistoryExistsInChunks(
+		0,
+		currentBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) (
+			[]*tbtc.ReservationAcceptanceRequestedEvent,
+			error,
+		) {
+			return rrt.chain.PastReservationAcceptanceRequestedEvents(
+				&tbtc.ReservationAcceptanceRequestedEventFilter{
+					StartBlock:          chunkStartBlock,
+					EndBlock:            &chunkEndBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
 		},
 	)
 	if err != nil {
@@ -1756,13 +1776,24 @@ func (rrt *ReservationReanchorTask) walletHasReservationHistory(
 			err,
 		)
 	}
-	if len(acceptanceEvents) > 0 {
+	if touched {
 		return true, nil
 	}
 
-	reanchorAsSourceEvents, err := rrt.chain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			SourceWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	touched, err = reservationHistoryExistsInChunks(
+		0,
+		currentBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) (
+			[]*tbtc.ReservationReanchorRequestedEvent,
+			error,
+		) {
+			return rrt.chain.PastReservationReanchorRequestedEvents(
+				&tbtc.ReservationReanchorRequestedEventFilter{
+					StartBlock:                chunkStartBlock,
+					EndBlock:                  &chunkEndBlock,
+					SourceWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
 		},
 	)
 	if err != nil {
@@ -1772,23 +1803,94 @@ func (rrt *ReservationReanchorTask) walletHasReservationHistory(
 			err,
 		)
 	}
-	if len(reanchorAsSourceEvents) > 0 {
+	if touched {
 		return true, nil
 	}
 
-	reanchorAsTargetEvents, err := rrt.chain.PastReservationReanchorRequestedEvents(
-		&tbtc.ReservationReanchorRequestedEventFilter{
-			TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	return reservationHistoryExistsInChunks(
+		0,
+		currentBlock,
+		func(chunkStartBlock, chunkEndBlock uint64) (
+			[]*tbtc.ReservationReanchorRequestedEvent,
+			error,
+		) {
+			return rrt.chain.PastReservationReanchorRequestedEvents(
+				&tbtc.ReservationReanchorRequestedEventFilter{
+					StartBlock:                chunkStartBlock,
+					EndBlock:                  &chunkEndBlock,
+					TargetWalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+			)
 		},
 	)
+}
+
+// reservationHistoryScanEndBlock returns the block the reservation history
+// scans end at: the block counter's current block, the head every other task
+// in this package reads.
+func (rrt *ReservationReanchorTask) reservationHistoryScanEndBlock() (uint64, error) {
+	blockCounter, err := rrt.chain.BlockCounter()
 	if err != nil {
-		return false, fmt.Errorf(
-			"cannot get past reservation re-anchor requested events "+
-				"(as target): [%w]",
-			err,
-		)
+		return 0, fmt.Errorf("cannot get block counter: [%w]", err)
 	}
-	return len(reanchorAsTargetEvents) > 0, nil
+	if blockCounter == nil {
+		// A chain handle without a block counter cannot bound the history
+		// scan, and an unbounded scan is the query shape this scan exists
+		// to avoid: fail the read instead of falling back to it.
+		return 0, fmt.Errorf("cannot get current block: [no block counter]")
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, fmt.Errorf("cannot get current block: [%w]", err)
+	}
+
+	return currentBlock, nil
+}
+
+// reservationHistoryExistsInChunks reports whether the inclusive block range
+// [startBlock, endBlock] holds at least one event, walking the range in
+// tbtc.ReservationEventScanChunkSpan() chunks in ascending order and
+// stopping at the first chunk that yields one. A failed chunk fails the
+// walk: a history truncated by a provider error looks exactly like a wallet
+// that was never touched, and the below-dust notification the caller gates
+// on it would then either fire for the wrong wallet or be skipped for the
+// right one, so the caller retries on its next pass instead.
+func reservationHistoryExistsInChunks[T any](
+	startBlock uint64,
+	endBlock uint64,
+	fetch func(chunkStartBlock, chunkEndBlock uint64) ([]T, error),
+) (bool, error) {
+	if startBlock > endBlock {
+		return false, nil
+	}
+
+	chunkSpan := tbtc.ReservationEventScanChunkSpan()
+
+	for chunkStartBlock := startBlock; ; {
+		chunkEndBlock := chunkStartBlock + chunkSpan - 1
+		if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {
+			chunkEndBlock = endBlock
+		}
+
+		chunkEvents, err := fetch(chunkStartBlock, chunkEndBlock)
+		if err != nil {
+			return false, fmt.Errorf(
+				"fetching events in blocks [%d..%d]: [%w]",
+				chunkStartBlock,
+				chunkEndBlock,
+				err,
+			)
+		}
+		if len(chunkEvents) > 0 {
+			return true, nil
+		}
+
+		if chunkEndBlock == endBlock {
+			return false, nil
+		}
+		chunkStartBlock = chunkEndBlock + 1
+	}
 }
 
 // estimateReservationReanchorFee estimates the fee for a reservation

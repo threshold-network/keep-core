@@ -108,6 +108,27 @@ func fetchPastEventsInChunks[T any](
 	startBlock, endBlock uint64,
 	onChunk func(events []T, chunkEnd uint64),
 ) error {
+	return fetchPastEventsInChunksUntil(
+		fetch,
+		startBlock,
+		endBlock,
+		func(events []T, chunkEnd uint64) bool {
+			onChunk(events, chunkEnd)
+			return true
+		},
+	)
+}
+
+// fetchPastEventsInChunksUntil is fetchPastEventsInChunks for a caller that
+// may want to stop before the end of the range: onChunk reports whether the
+// walk should continue, so a lookup for one specific event - a wallet's
+// registration event, say, which that wallet can only emit once - stops at
+// the chunk that yields it instead of walking the rest of the range.
+func fetchPastEventsInChunksUntil[T any](
+	fetch func(startBlock, endBlock uint64) ([]T, error),
+	startBlock, endBlock uint64,
+	onChunk func(events []T, chunkEnd uint64) (continueWalk bool),
+) error {
 	if startBlock > endBlock {
 		return nil
 	}
@@ -125,7 +146,9 @@ func fetchPastEventsInChunks[T any](
 				chunkStart, chunkEnd, err,
 			)
 		}
-		onChunk(chunk, chunkEnd)
+		if !onChunk(chunk, chunkEnd) {
+			return nil
+		}
 
 		if chunkEnd == endBlock {
 			return nil
