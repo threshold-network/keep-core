@@ -264,7 +264,7 @@ follow-up items to track once FROST Program A activates:
    extend `testing-plan.md`'s Tier 1 Foundry recommendation to explicitly include this once
    both features are close to landing together.
 5. **Monitor wallet heartbeat health for any wallet carrying live reservations** (§5) — this is the one
-   genuinely time-sensitive operational coupling. A reservation anchored to a wallet whose heartbeat
+   genuinely time-critical operational coupling. A reservation anchored to a wallet whose heartbeat
    fails inherits that wallet's non-extendable 365-day clock; the re-anchor request should be filed
    (permissionlessly, once the wallet enters `MovingFunds`) well before that clock's tail end, not at
    the deadline.

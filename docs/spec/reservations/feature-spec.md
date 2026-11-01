@@ -1432,7 +1432,7 @@ spec:
 - **No forced sequencing.** Reservations do not need to launch after, or dissolve
   ahead of, FROST. A reservation anchored to a healthy ECDSA wallet operates normally
   through FROST's entire activation program; only an *unhealthy* wallet's own
-  365-day `MovingFunds` clock is time-sensitive (§5's stranding bound already covers
+  365-day `MovingFunds` clock is time-critical (§5's stranding bound already covers
   this operationally).
 - **The re-anchor mechanism (§4.3) is the intended migration path**, already built
   for exactly this: moving a reservation off a retiring wallet without dissolving it.

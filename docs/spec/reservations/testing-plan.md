@@ -179,7 +179,7 @@ including #4274/#4276-#4280/#4324).
   2026-08-19 survey found zero references to `Reservation` in
   `coordination_test.go`/`node_test.go` and concluded the coordination/
   dispatch integration wasn't wired. At `f66f11240`, `coordination_test.go`
-  has 50 case-insensitive `Reservation` hits including
+  has 50 `Reservation` hits when case is ignored, including
   `TestCoordinationExecutor_Coordinate_ReservationProposals` (a 3-operator,
   real-broadcast-channel, real-leader-election simulated integration test —
   this **is** the "multi-signer simulated integration test" Tier 2 item 7

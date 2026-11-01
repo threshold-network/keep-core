@@ -138,48 +138,49 @@ started closing without one, and will never sign again.
 The representative case is a liveness failure, not fraud — moving-funds timeouts require no
 malice and are the more ordinary way a wallet ends up `Terminated`.
 
-1. **Alice reserves.** She deposits 10 BTC into a reservation custodied by wallet W1. At
+1. **Alice reserves.** She deposits 10 BTC into a reservation custodied by Wallet A. At
    acceptance: `mintedAmount = anchorAmount = 10 BTC`, 10 tBTC minted to Alice, reservation state
    `Active`.
-2. **W1 ages out and is asked to move funds** — nothing to do with Alice's reservation; W1 is
-   simply old enough (or low enough on non-reservation balance) to be rotated out in the normal
-   course of wallet lifecycle. `moveFunds` transitions it `Live -> MovingFunds`.
-3. **The escape hatch exists.** While W1 is in `MovingFunds`, Alice's reservation *can* be
+2. **Wallet A ages out and is asked to move funds** — nothing to do with Alice's reservation;
+   Wallet A is simply old enough (or low enough on non-reservation balance) to be rotated out in
+   the normal course of wallet lifecycle. `moveFunds` transitions it `Live -> MovingFunds`.
+3. **The escape hatch exists.** While Wallet A is in `MovingFunds`, Alice's reservation *can* be
    re-anchored to any Live wallet with capacity (`requestReservationReanchor` is explicitly
    allowed for `MovingFunds` source wallets, `../feature-spec.md` §4.3). If the
    keep-core executor or Alice initiates this, the anchor migrates cleanly to a healthy wallet
    and Alice keeps her in-kind claim — stranding is avoided entirely.
-4. **W1's operators go quiet** — infrastructure trouble, an upgrade gone wrong, insufficient
+4. **Wallet A's operators go quiet** — infrastructure trouble, an upgrade gone wrong, insufficient
    uptime, no theft implied — and fail to complete the funds move before `movingFundsTimeout`
    elapses. **Critically: this means re-anchor was available for the whole MovingFunds window
    and was not used** — the wallet went dark enough to sign nothing at all, not even the
    re-anchor that would have saved Alice's claim.
 5. **Termination fires, unconditionally.** Anyone calls `notifyWalletMovingFundsTimeout`;
-   `movingFundsTimeoutSlashingAmount` is seized from W1's operator stake and split with the
-   caller as a reward. W1 -> `Terminated`. This transition has no dependency on Alice's
-   reservation whatsoever — it fires whether W1 holds zero reservations or fifty, and W1's
-   operators may not have done anything dishonest at all.
+   `movingFundsTimeoutSlashingAmount` is seized from Wallet A's operator stake and split with
+   the caller as a reward. Wallet A -> `Terminated`. This transition has no dependency on
+   Alice's reservation whatsoever — it fires whether Wallet A holds zero reservations or fifty,
+   and Wallet A's operators may not have done anything dishonest at all.
 6. **The gap.** Alice's reservation still reads `Active` in storage. Her 10 tBTC balance is
    unaffected either way, both now and forever — nothing about it depends on this step. The 10 BTC
    sitting at the anchor's address may well still be intact; what changed is that the protocol
-   will never again accept a signature from W1, so it is permanently unreachable through the
-   protocol regardless of whether the coins themselves are spendable.
+   will never again accept a signature from Wallet A, so it is permanently unreachable
+   through the protocol regardless of whether the coins themselves are spendable.
 7. **Someone calls `notifyReservationStranded`** — the keep-core stranding watcher
    (`reservationStrandingWatcher`, wired to wallet close/termination events), Alice herself, a
    bystander running a script; nobody is paid to do it and nobody is blocked from doing it.
-   Reservation -> `Stranded`. W1's `walletReservationsCount`/`walletReservationsAmount` and the
-   global `reservationTotalAmount`/`activeReservationsCount` all drop (by one count and 10 BTC of
-   amount, respectively), emitting `ReservationOccupancyChanged`. Alice's entry is removed from
-   the anchor -> reservation reverse index (there is no separate per-wallet list).
-   `ReservationStranded(key, W1, Alice, 10 BTC)` fires as the second event — the one that names
-   the amount.
+   Reservation -> `Stranded`. Wallet A's `walletReservationsCount`/`walletReservationsAmount`
+   and the global `reservationTotalAmount`/`activeReservationsCount` all drop (by one count and
+   10 BTC of amount, respectively), emitting `ReservationOccupancyChanged`. Alice's entry is
+   removed from the anchor -> reservation reverse index (there is no separate per-wallet list).
+   `ReservationStranded(key, Wallet A, Alice, 10 BTC)` fires as the second event — the one that
+   names the amount.
 8. **End state.** Alice still holds exactly 10 tBTC — untouched by any of the above. What she lost
    in step 5, not step 7, is the option to redeem those specific 10 BTC back in-kind. She can still
-   redeem 10 tBTC through the ordinary pooled path, against backing that is now short by W1's
-   unreachable 10 BTC — a shortfall spread across every tBTC holder, not billed to Alice alone. No
-   compensation is paid to her specifically for losing the option. The event is the only durable
-   record this happened to her, and nothing in that event or anywhere else distinguishes this
-   ordinary-timeout case from a genuine theft — both look identical downstream of `Terminated`.
+   redeem 10 tBTC through the ordinary pooled path, against backing that is now short by
+   Wallet A's unreachable 10 BTC — a shortfall spread across every tBTC holder, not billed to
+   Alice alone. No compensation is paid to her specifically for losing the option. The event is
+   the only durable record this happened to her, and nothing in that event or anywhere else
+   distinguishes this ordinary-timeout case from a genuine theft — both look identical downstream
+   of `Terminated`.
 
 ## 3. What is genuinely incomplete, and what to do about it
 

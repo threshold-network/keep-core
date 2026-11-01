@@ -104,7 +104,7 @@ This is the finding that matters for sizing m1.
 It contains a task per wallet action - `NewDepositSweepTask`,
 `NewRedemptionTask`, `NewHeartbeatTask`, `NewMovingFundsTask`,
 `NewMovedFundsSweepTask` (`tbtcpg.go`). There is **no reservation task**, and
-grepping the whole package case-insensitively for `reservation` returns **zero
+grepping the whole package while ignoring case for `reservation` returns **zero
 files**. The only change `#4238` makes there is 4 lines in `redemptions.go`.
 
 Consequence: nothing ever *decides* to propose a reservation action. The

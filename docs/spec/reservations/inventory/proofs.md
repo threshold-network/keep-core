@@ -253,7 +253,7 @@ All rows **settlement-path**.
 | Late: **`walletReservationsAmount[new] += anchorAmount`** | `:813-814` | #1093 | storage-write | yes | no | |
 | Late: unwind a newer pending generation, `restoreRetryCredit = true` | `:818-822` | #1091/#1093 | internal | yes | yes | The `true` argument only matters for a pending **Redemption** (`:1262`), so in m1 it is inert. |
 | Late: `emit ReservationLateSettled` | `:825-829` | #1091 | event | yes | no | |
-| **`walletReservationsCount[source] -= 1`** | `:836` | #1091 | storage-write | yes | no | **Not a position close.** See §4-W1. |
+| **`walletReservationsCount[source] -= 1`** | `:836` | #1091 | storage-write | yes | no | **Not a position close.** See §4-RA1. |
 | **`walletReservationsAmount[source] -= anchorAmount`** | `:837-839` | #1093 | storage-write | yes | no | |
 | **`walletReservationsAmount[new] -= (anchorAmount - newAnchorAmount)`** | `:840-841` | #1093 | storage-write | yes | no | Releases the miner-fee delta on the target. |
 | **`reservationTotalAmount -= minerFee`** | `:843`, `:846` | #1093 | storage-write | yes | no | |
@@ -338,10 +338,10 @@ Both require the custodying or target wallet to be *already* retiring or termina
 
 | Item | Source | PR | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|---|
-| **W1** re-anchor source-wallet `count -= 1` | `ReservationProofs.sol:836` | #1091 | storage-write | yes | no | **REACHABLE.** Net-zero move; not a close. |
-| **W1b** re-anchor source-wallet `amount -=` | `:837-839` | #1093 | storage-write | yes | no | **REACHABLE.** |
-| **W1c** re-anchor target `amount -=` miner-fee delta | `:840-841` | #1093 | storage-write | yes | no | **REACHABLE.** |
-| **W1d** re-anchor `reservationTotalAmount -= minerFee` | `:846` | #1093 | storage-write | yes | no | **REACHABLE.** True backing reduction. |
+| **RA1** re-anchor source-wallet `count -= 1` | `ReservationProofs.sol:836` | #1091 | storage-write | yes | no | **REACHABLE.** Net-zero move; not a close. |
+| **RA1b** re-anchor source-wallet `amount -=` | `:837-839` | #1093 | storage-write | yes | no | **REACHABLE.** |
+| **RA1c** re-anchor target `amount -=` miner-fee delta | `:840-841` | #1093 | storage-write | yes | no | **REACHABLE.** |
+| **RA1d** re-anchor `reservationTotalAmount -= minerFee` | `:846` | #1093 | storage-write | yes | no | **REACHABLE.** True backing reduction. |
 | **W2** `unwindPendingAction` Reanchor branch: target `count -= 1`, `amount -=` | `:1276-1281` | #1091 | storage-write | yes | no | **REACHABLE** via late re-anchor (`:821`) when the newer pending generation is itself a Reanchor. Releases a *reservation of capacity*, not a position. |
 | **W3** `unwindPendingAction` Acceptance branch: `total -=`, `count -= 1`, `amount -=` | `:1298-1304` | #1091 | storage-write | yes | no | **REACHABLE** via late acceptance (`:490`). |
 | **W4** `unwindPendingAction` Redemption branch: `bank.transferBalance` refund | `:1269-1272` | #1091 | internal | no | yes | Unreachable in m1: no Redemption action can exist. |
@@ -563,4 +563,4 @@ Rule 5 makes `unwindPendingAction` (`:1243`) m1 work because m1 reaches it from 
 `:821` passes `true` for `restoreRetryCredit`. That argument is consumed only inside the Redemption branch (`:1262`), so in m1 it is provably inert. **Does m1 keep the `restoreRetryCredit` parameter at all?** Dropping it makes the m2 restoration (partial `:1448-1453`, which passes `action.isPartial`) a signature change rather than an argument change.
 
 **DECISION NEEDED PD-12 — the spec's closing-site list is wrong and is load-bearing.**
-`m1-variant-comparison.md:251-253` cites `ReservationProofs.sol:715`/`:836` as "the redemption path (unreachable)". `:836` is the re-anchor source-wallet count decrement and **is reachable in m1** (§4.3-W1). The §5.3 endgame conclusion still holds, but the cited evidence does not. **Should the spec be corrected before the m1 rewrite is cut**, given that §5.4's proposed `activeReservationsCount` mitigation is sized against this list?
+`m1-variant-comparison.md:251-253` cites `ReservationProofs.sol:715`/`:836` as "the redemption path (unreachable)". `:836` is the re-anchor source-wallet count decrement and **is reachable in m1** (§4.3-RA1). The §5.3 endgame conclusion still holds, but the cited evidence does not. **Should the spec be corrected before the m1 rewrite is cut**, given that §5.4's proposed `activeReservationsCount` mitigation is sized against this list?
