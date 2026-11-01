@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -403,66 +404,92 @@ var _ chain.BlockCounter = (*activationStatusTestChain)(nil)
 //     this gate exists for: reservations are live on-chain while the client
 //     believes they are not, so the sweep is refused;
 //   - a closed window plus an untrusted vault allows the sweep;
-//   - a closed window plus a Bridge that cannot answer at all (a
-//     pre-reservations deployment, whose runtime carries neither
-//     ReservationsVaultTrusted nor IsReservedDeposit) allows the sweep and
-//     reports that the state is unknown, so a client cut over before the
-//     Bridge upgrade keeps sweeping instead of halting every sweep
-//     protocol-wide. Such a Bridge cannot trust a reservation vault, so no
-//     deposit on it can be reserved and allowing the sweep loses nothing.
+//   - a closed window whose reservation state cannot be read refuses the
+//     sweep: a failed read is not evidence that reservations are not live;
+//   - a closed window on a Bridge that provably has no reservation surface
+//     allows the sweep, because such a deployment cannot hold a reserved
+//     deposit. That is the one exception, and it requires the reader to
+//     report ErrReservationsSurfaceUnavailable, which it does only on
+//     positive on-chain evidence. Without that exception a client cut over
+//     before the Bridge upgrade would halt every sweep protocol-wide.
 func TestReservationsSweepGate(t *testing.T) {
+	unavailableErr := fmt.Errorf(
+		"wrapped: %w",
+		ErrReservationsSurfaceUnavailable,
+	)
+
 	tests := map[string]struct {
 		reservationsActive bool
 		vault              *activationStatusTestVault
-		expectKnown        bool
+		expectPreReserv    bool
 		expectErr          bool
+		expectErrMentions  string
 	}{
 		"open window, trusted vault": {
 			reservationsActive: true,
 			vault:              &activationStatusTestVault{trusted: true},
-			expectKnown:        true,
 		},
 		"open window, unreadable vault state": {
 			reservationsActive: true,
 			vault:              &activationStatusTestVault{err: errTest},
-			expectKnown:        true,
 		},
 		"closed window, trusted vault": {
 			reservationsActive: false,
 			vault:              &activationStatusTestVault{trusted: true},
-			expectKnown:        true,
 			expectErr:          true,
+			expectErrMentions:  "trusts the reservation vault",
 		},
 		"closed window, untrusted vault": {
 			reservationsActive: false,
 			vault:              &activationStatusTestVault{trusted: false},
-			expectKnown:        true,
 		},
-		"closed window, pre-reservations Bridge": {
+		"closed window, unreadable reservation state": {
 			reservationsActive: false,
 			vault:              &activationStatusTestVault{err: errTest},
-			expectKnown:        false,
+			expectErr:          true,
+			expectErrMentions:  "cannot determine whether reservations",
+		},
+		"closed window, proven pre-reservations Bridge": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{err: unavailableErr},
+			expectPreReserv:    true,
+		},
+		"closed window, pre-reservations sentinel wrapped in an ordinary error": {
+			reservationsActive: false,
+			vault: &activationStatusTestVault{
+				err: errors.New("reservation read failed"),
+			},
+			expectErr:         true,
+			expectErrMentions: "cannot determine whether reservations",
 		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			known, err := ReservationsSweepGate(
+			preReservations, err := ReservationsSweepGate(
 				test.reservationsActive,
 				test.vault,
 			)
 
-			if known != test.expectKnown {
+			if preReservations != test.expectPreReserv {
 				t.Errorf(
-					"unexpected reservation state knowledge\nexpected: %v\nactual:   %v",
-					test.expectKnown,
-					known,
+					"unexpected pre-reservations classification\nexpected: %v\nactual:   %v",
+					test.expectPreReserv,
+					preReservations,
 				)
 			}
 			if (err != nil) != test.expectErr {
 				t.Errorf(
 					"unexpected error presence\nexpected error: %v\nactual error:   %v",
 					test.expectErr,
+					err,
+				)
+			}
+			if test.expectErrMentions != "" &&
+				(err == nil || !strings.Contains(err.Error(), test.expectErrMentions)) {
+				t.Errorf(
+					"expected the error to mention %q, got: [%v]",
+					test.expectErrMentions,
 					err,
 				)
 			}

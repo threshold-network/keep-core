@@ -740,6 +740,13 @@ func TestVerifyReservationsActivation_PendingActivationIsNotFatal(t *testing.T) 
 			vaultReader:  &startTestVaultReader{err: errors.New("execution reverted")},
 			network:      ethereumutil.Sepolia,
 		},
+		"Bridge proven to predate the reservation upgrade": {
+			blockCounter: &startTestBlockCounter{head: 100},
+			vaultReader: &startTestVaultReader{
+				err: tbtc.ErrReservationsSurfaceUnavailable,
+			},
+			network: ethereumutil.Sepolia,
+		},
 	}
 
 	for name, test := range tests {

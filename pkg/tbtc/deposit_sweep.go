@@ -471,21 +471,24 @@ func ValidateDepositSweepProposal(
 	// Reservations sweep gate: the reserved-deposit check below only runs
 	// inside the activation window, so the chain's own reservation state
 	// decides whether a sweep is allowed at all when the window is closed.
-	// A refusal here means the Bridge already trusts the reservation vault
-	// while this client does not coordinate reservations.
-	reservationStateKnown, gateErr := ReservationsSweepGate(
+	// A refusal here means either that the Bridge already trusts the
+	// reservation vault while this client does not coordinate reservations,
+	// or that the reservation state cannot be determined; the only closed
+	// window that lets the sweep through without that state is a deployment
+	// that provably has no reservation surface.
+	preReservationsBridge, gateErr := ReservationsSweepGate(
 		reservationsActive,
 		chain,
 	)
 	if gateErr != nil {
 		return nil, fmt.Errorf("reservations sweep gate: [%v]", gateErr)
 	}
-	if !reservationStateKnown {
+	if preReservationsBridge {
 		validateProposalLogger.Warnf(
-			"cannot read the on-chain reservations state: the Bridge does " +
-				"not answer the reservation query, so it predates the " +
-				"reservation upgrade and cannot hold a reserved deposit; " +
-				"sweeping on the basis of this client's activation window",
+			"the Bridge has no reservation surface (it predates the " +
+				"reservations upgrade), so it cannot hold a reserved " +
+				"deposit; sweeping on the basis of this client's " +
+				"activation window",
 		)
 	}
 

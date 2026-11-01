@@ -98,6 +98,12 @@ type TbtcChain struct {
 	// constructed against the Bridge address (see reservationRouterBinding for
 	// the address invariant explanation).
 	reservationRouter *tbtccontract.ReservationRouter
+	// bridgeAddress is the Bridge address the bindings are attached to. The
+	// reservation-surface probe issues a raw call to it (see
+	// reservationSurfaceAvailable): the generated bindings route failures
+	// through keep-common's error resolver, which rewraps them and destroys
+	// the revert shape the pre-reservations classification depends on.
+	bridgeAddress common.Address
 	// walletRegistrationBlockCache memoizes the result of
 	// earliestWalletRegistrationBlock per wallet public key hash for the
 	// lifetime of this chain adapter. NewWalletRegistered fires once per
@@ -348,6 +354,7 @@ func newTbtcChain(
 		walletProposalValidator:  walletProposalValidator,
 		redemptionWatchtower:     redemptionWatchtower,
 		reservationRouter:        reservationRouter,
+		bridgeAddress:            bridgeAddress,
 		ecdsaDkgValidatorAddress: ecdsaDkgValidatorAddress,
 		sweptDepositsCache:       cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil
@@ -499,19 +506,31 @@ func (tc *TbtcChain) ReservationParameters() (
 // The C-4 activation ordering gate requires the on-chain activation to run
 // at or after the client's activation block, so the client compares this
 // value with its own compiled activation block at startup (see
-// tbtc.EvaluateReservationsActivation).
+// tbtc.EvaluateReservationsActivation). The deposit-sweep gate
+// (tbtc.ReservationsSweepGate) reads it the other way round: reservations
+// live on-chain while this client does not consider them active refuse the
+// sweep.
 //
 // When no reservation vault is configured the vault is the zero address, the
 // Bridge cannot trust it and reservations are disabled on-chain, so this
 // method returns false with a nil error.
+//
+// A Bridge deployed before the reservations upgrade carries no reservation
+// getter at all, so the read fails there. That case alone returns
+// tbtc.ErrReservationsSurfaceUnavailable, and only on positive evidence: the
+// reservation getter reverts without revert data (the shape of a call to a
+// selector the contract does not implement) while the same Bridge answers a
+// getter that predates the reservations upgrade. Any other failure - a
+// timeout, an RPC or transport error, a revert carrying data, or a
+// reservation revert from a Bridge that cannot answer its own pre-upgrade
+// getters - is returned as an ordinary error, so the caller cannot mistake it
+// for "reservations are not live on-chain".
 func (tc *TbtcChain) ReservationsVaultTrusted() (bool, error) {
-	parameters, err := tc.ReservationParameters()
+	abiParameters, err := tc.reservationRouter.ReservationParameters()
 	if err != nil {
-		return false, fmt.Errorf(
-			"cannot get reservation parameters: [%w]",
-			err,
-		)
+		return false, tc.reservationReadFailure(err)
 	}
+	parameters := convertReservationParametersFromAbiType(abiParameters)
 
 	if parameters.ReservationVault == "" {
 		// No vault configured: reservations are disabled on-chain.

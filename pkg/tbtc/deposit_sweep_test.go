@@ -860,17 +860,22 @@ func TestValidateDepositSweepProposal_RefusesWhenReservationsLiveOnChainButInact
 // ordering hazard the M1 release plan carries: a client cut over before the
 // Bridge upgrade must keep sweeping. Such a Bridge carries neither
 // ReservationsVaultTrusted nor IsReservedDeposit, so both calls fail while
-// the client's activation window is still closed; the sweep must proceed
-// rather than halt protocol-wide.
+// the client's activation window is still closed. The sweep proceeds only
+// because the reader reports the failure as positive proof that the
+// deployment has no reservation surface (ErrReservationsSurfaceUnavailable);
+// a plain read failure refuses the sweep, see the test below.
 func TestValidateDepositSweepProposal_PreM1BridgeStillSweeps(t *testing.T) {
 	fixture := newSweepProposalFixture(t)
 
-	preM1Err := errors.New("execution reverted: no such method")
+	preM1Err := fmt.Errorf(
+		"%w: [execution reverted]",
+		ErrReservationsSurfaceUnavailable,
+	)
 	fixture.chain.setReservationsVaultTrustedErr(preM1Err)
 
 	preM1Chain := &reservedCheckErrorChain{
 		localChain:    fixture.chain,
-		isReservedErr: preM1Err,
+		isReservedErr: errors.New("execution reverted"),
 	}
 
 	validated, err := ValidateDepositSweepProposal(
@@ -894,6 +899,47 @@ func TestValidateDepositSweepProposal_PreM1BridgeStillSweeps(t *testing.T) {
 			"expected all %d deposits to validate, got %d",
 			len(fixture.proposal.DepositsKeys),
 			len(validated),
+		)
+	}
+}
+
+// TestValidateDepositSweepProposal_RefusesOnUnreadableReservationState pins
+// the fail-closed half of the gate on the follower path: when the client's
+// activation window is closed and the on-chain reservation state cannot be
+// read for any reason other than a proven pre-reservations deployment, the
+// sweep is refused. A transient RPC failure sweeping unchecked is exactly the
+// state the gate exists to prevent.
+func TestValidateDepositSweepProposal_RefusesOnUnreadableReservationState(
+	t *testing.T,
+) {
+	fixture := newSweepProposalFixture(t)
+	fixture.chain.setReservationsVaultTrustedErr(
+		errors.New("context deadline exceeded"),
+	)
+
+	validated, err := ValidateDepositSweepProposal(
+		&capturingLogger{},
+		fixture.walletPublicKeyHash,
+		fixture.proposal,
+		0,
+		false,
+		fixture.chain,
+		fixture.bitcoinChain,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected validation to refuse a sweep while the reservation " +
+				"state is unreadable",
+		)
+	}
+	if validated != nil {
+		t.Fatalf("expected no validated deposits on refusal, got %v", validated)
+	}
+	if !strings.Contains(err.Error(), "cannot determine whether reservations") {
+		t.Errorf(
+			"expected the error to name the undeterminable reservation "+
+				"state, got: [%v]",
+			err,
 		)
 	}
 }
