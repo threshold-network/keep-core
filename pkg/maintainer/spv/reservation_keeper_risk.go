@@ -159,10 +159,20 @@ func (oko *ReservationKeeperObserver) countReanchorsWithoutTarget(
 	// The anchor floor: the anchor must stay above the minimum
 	// amount plus the max fee, the check privileged re-anchors do
 	// NOT skip (the per-wallet caps are the skipped ones). The sum is
-	// compared against signed anchor values, so clamp it into the int64
-	// range first; a floor above MaxInt64 is above any real anchor value.
+	// computed as a saturating addition: both operands are governance-set
+	// uint64 values with no shared upper bound (the contract only
+	// requires minAmount > txMaxFee > 0, so a large minAmount with a
+	// small non-zero fee is accepted), and a wrapping sum would turn an
+	// unattainable floor into a tiny one and make ordinary anchors look
+	// re-anchorable. The sum is then compared against signed anchor
+	// values, so clamp it into the int64 range: a floor above MaxInt64
+	// is above any real anchor value.
 	anchorFloorSats := reservationParameters.ReservationMinAmount +
 		reservationParameters.ReservationTxMaxFee
+	if anchorFloorSats < reservationParameters.ReservationMinAmount {
+		// The addition wrapped: the true floor exceeds MaxUint64.
+		anchorFloorSats = math.MaxUint64
+	}
 	anchorFloor := int64(math.MaxInt64)
 	if anchorFloorSats <= math.MaxInt64 {
 		anchorFloor = int64(anchorFloorSats)
