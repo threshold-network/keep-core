@@ -1962,16 +1962,21 @@ func resolveCustodiedReservationKeys(
 	for _, key := range keys {
 		reservation, err := reservationLookup(key)
 		if err != nil {
-			// One unreadable reservation must not hide the wallet's other
-			// reservations: log it and keep resolving the remaining keys.
-			logger.Warnf(
-				"skipping reservation [%v] of wallet [0x%x]: cannot get "+
-					"reservation: [%v]",
+			// Fail the whole read instead of returning the keys that did
+			// resolve: every caller treats the returned key set as the
+			// wallet's complete custody (stranding notification, re-anchor
+			// source selection, the below-dust drained check), so a
+			// truncated set is read as "this wallet holds nothing there"
+			// and a stranded anchor goes unnotified, or a wallet that
+			// still holds one looks drained. A failed read is reported and
+			// retried on the caller's next pass; a short one cannot be
+			// detected downstream.
+			return nil, fmt.Errorf(
+				"cannot get reservation [%v] of wallet [0x%x]: [%w]",
 				key,
 				walletPublicKeyHash,
 				err,
 			)
-			continue
 		}
 
 		if reservation.WalletPublicKeyHash != walletPublicKeyHash {

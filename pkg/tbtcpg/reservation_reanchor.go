@@ -1659,15 +1659,12 @@ func (rrt *ReservationReanchorTask) isBelowMovingFundsDustThreshold(
 // reservations.
 //
 // It also requires the on-chain reservation count to be zero first. The
-// caller reaches this method with an empty custody read, and an empty
-// custody read is not proof of an empty wallet: the key set comes from
-// event logs filtered through per-reservation lookups, and a lookup that
-// fails is skipped rather than failing the read (see
-// TbtcChain.WalletReservations), so a transient RPC failure on one
-// reservation also yields an empty list. walletReservationsCount is the
-// contract's own custody figure for the wallet, so requiring it to be
-// zero is what makes "drained" authoritative before the notification
-// starts the wallet's closing clock.
+// caller reaches this method with an empty custody read, and the count is
+// the contract's own custody figure for the wallet, so it is what makes
+// "drained" authoritative before the notification starts the wallet's
+// closing clock: the key set read behind it is derived from event logs,
+// and a log the provider has not served yet is cheaper to rule out with
+// this view call than to trust an empty list for.
 func (rrt *ReservationReanchorTask) notifyMovingFundsBelowDustIfEligible(
 	taskLogger log.StandardLogger,
 	walletPublicKeyHash [20]byte,
