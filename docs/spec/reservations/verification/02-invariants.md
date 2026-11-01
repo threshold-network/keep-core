@@ -131,7 +131,7 @@ taken on 2026-10-29 and the code does not change.
   `Closed`/`Terminated` to the stranding check, `Closing` to the
   dissolution-and-closing-period variant, and `Live` to the
   dissolution-eligible variant
-  (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`).
+  (`keep-core@e7f483601:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`).
   The `Live` branch runs on the startup catch-up scan and on the action-timeout
   recheck queue, so a `Live` position outside both paths still needs an external
   caller.

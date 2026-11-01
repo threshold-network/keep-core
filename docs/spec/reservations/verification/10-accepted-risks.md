@@ -134,7 +134,7 @@ taken on 2026-10-29 and the code does not change.
 - Status: `holds` at `tbtc-v2@72b891eec` for the explicit guards
   (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1314-1346`).
   The client side is uneven: since keep-core #4365 the watcher notifies for all
-  four admissible states (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),
+  four admissible states (`keep-core@e7f483601:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`),
   but the `Live` branch runs only on the startup catch-up scan and on the
   action-timeout recheck queue, so a Live-wallet strand that neither path reaches
   still needs another caller.
@@ -157,7 +157,7 @@ taken on 2026-10-29 and the code does not change.
 - Bound on impact: a stranded position that is never notified keeps occupying a slot and a global count until it is notified later or its wallet re-appears; it does not create a new loss, it delays the evidence and the capacity release.
 - Monitoring: the warning log when the startup scan bound truncates; a manually discovered unnotified `ReservationStranded` candidate.
 - Revisit trigger: before mainnet (raise the lookback or run the startup scan from the reservation activation block, which the wiring already computes, `keep-core:pkg/maintainer/spv/reservation_wiring.go:440`).
-- Status: `holds` (the bounded scan and the truncation warning are in code, `keep-core@931dcd63c:pkg/maintainer/spv/reservation_wiring.go:136`, `:762`, and `TestScanReservationStrandingStartupRegistrations` (`keep-core@931dcd63c:pkg/maintainer/spv/reservation_wiring_test.go:1311`) executes the 216000-block start and the doubling windows against that code).
+- Status: `holds` (the bounded scan and the truncation warning are in code, `keep-core@e7f483601:pkg/maintainer/spv/reservation_wiring.go:136`, `:762`, and `TestScanReservationStrandingStartupRegistrations` (`keep-core@e7f483601:pkg/maintainer/spv/reservation_wiring_test.go:1311`) executes the 216000-block start and the doubling windows against that code).
 
 ## AR-14 A re-anchor timeout starts a cooldown that blocks everyone but governance
 

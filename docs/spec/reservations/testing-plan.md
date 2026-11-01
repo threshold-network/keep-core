@@ -254,7 +254,7 @@ does, or the test proves nothing about ordering.
    DONE (keep-core #4368). The `client-go-race` job now runs
    `go test -race -count=1 -timeout 30m` over `./pkg/tbtcpg/...`,
    `./pkg/maintainer/spv/...` and `./pkg/tbtc/...`
-   (`keep-core@931dcd63c:.github/workflows/client.yml:622-657`), which is
+   (`keep-core@e7f483601:.github/workflows/client.yml:632-667`), which is
    the scope the `keep-core.go.race` coverage freeze bar names. It is a
    separate job rather than a `-race` flag on the sharded suite, because the
    race detector multiplies the suite's runtime and the bar's scope is these
