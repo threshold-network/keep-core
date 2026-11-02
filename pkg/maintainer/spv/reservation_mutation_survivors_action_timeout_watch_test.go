@@ -289,3 +289,59 @@ func TestReservationActionTimeoutWatcher_MutationSurvivors_NilPreloadReadsAction
 		t.Fatalf("expected exactly one acceptance timeout notification, got %d", len(calls))
 	}
 }
+
+// TestStrandingRecheckQueue_MutationSurvivors_CompactsAtHalfConsumed pins the
+// queue's bounded-storage policy at its exact boundary: once at least 64
+// targets have been consumed and the consumed prefix is at least half of the
+// backing slice, pop drops that prefix. Compaction is what keeps a
+// long-lived watcher's backing array from growing with every wallet it has
+// ever queued, so a comparison flipped, negated, or scaled differently
+// either never reclaims the prefix or reclaims it on every pop.
+func TestStrandingRecheckQueue_MutationSurvivors_CompactsAtHalfConsumed(t *testing.T) {
+	const total = 128
+
+	targetAt := func(i int) strandingRecheckTarget {
+		return strandingRecheckTarget{
+			walletPublicKeyHash: [20]byte{byte(i >> 8), byte(i)},
+		}
+	}
+
+	q := newStrandingRecheckQueue()
+	for i := 0; i < total; i++ {
+		q.push(targetAt(i))
+	}
+
+	for i := 0; i < total/2; i++ {
+		target, ok := q.pop()
+		if !ok || target != targetAt(i) {
+			t.Fatalf("pop %d: expected target %d, got %v (ok=%v)", i, i, target, ok)
+		}
+		if i < total/2-1 && q.head != i+1 {
+			t.Fatalf(
+				"pop %d: expected the consumed prefix to be kept until "+
+					"half the slice is consumed, got head %d",
+				i,
+				q.head,
+			)
+		}
+	}
+
+	if q.head != 0 || len(q.order) != total/2 {
+		t.Fatalf(
+			"expected the consumed prefix to be dropped at head == 64 and "+
+				"len == 128, got head %d, len(order) %d",
+			q.head,
+			len(q.order),
+		)
+	}
+
+	for i := total / 2; i < total; i++ {
+		target, ok := q.pop()
+		if !ok || target != targetAt(i) {
+			t.Fatalf("pop %d: expected target %d, got %v (ok=%v)", i, i, target, ok)
+		}
+	}
+	if _, ok := q.pop(); ok {
+		t.Fatal("expected the queue to be empty")
+	}
+}
