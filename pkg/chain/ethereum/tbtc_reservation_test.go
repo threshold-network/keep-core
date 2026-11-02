@@ -630,29 +630,86 @@ func pushDataOnlyCode(selector []byte) []byte {
 	return code
 }
 
+// solidityMetadata models the CBOR metadata solc appends to deployed code: a
+// map with the "ipfs" hash and the "solc" version, in the encoding the
+// Solidity documentation specifies. Its length is the map's payload length,
+// excluding the two-byte footer that the caller writes.
+func solidityMetadata(fill func(hash []byte)) []byte {
+	ipfsHash := make([]byte, 34)
+	if fill != nil {
+		fill(ipfsHash)
+	}
+
+	metadata := []byte{0xa2, 0x64, 'i', 'p', 'f', 's'}     // map(2), key "ipfs"
+	metadata = append(metadata, 0x58, byte(len(ipfsHash))) // bytes(34)
+	metadata = append(metadata, ipfsHash...)
+	metadata = append(metadata, 0x64, 's', 'o', 'l', 'c') // key "solc"
+	metadata = append(metadata, 0x43, 0x00, 0x08, 0x11)   // bytes(3) version
+	return metadata
+}
+
+// withMetadata appends metadata and the two-byte footer holding its payload
+// length, the exclusive convention Solidity uses: a 51-byte map ends in 0x0033.
+func withMetadata(body, metadata []byte) []byte {
+	code := make([]byte, 0, len(body)+len(metadata)+2)
+	code = append(code, body...)
+	code = append(code, metadata...)
+	return append(code, byte(len(metadata)>>8), byte(len(metadata)))
+}
+
 // metadataOnlyCode models pre-reservations code that carries the
-// reservations-build selector only inside the CBOR metadata tail solc appends
-// to every deployed contract, with the tail length in the final two bytes. The
-// selector sits in the ipfs hash byte string, where a real metadata blob keeps
-// arbitrary bytes; no call can reach it as a dispatcher entry.
+// reservations-build selector only inside its metadata: the ipfs hash spells
+// PUSH4 <selector>, so a walk that reads the metadata as code would report a
+// dispatch entry that no call can reach.
 func metadataOnlyCode(selector []byte) []byte {
 	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x00}
 
-	ipfsHash := make([]byte, 34)
-	copy(ipfsHash[10:], selector)
+	return withMetadata(body, solidityMetadata(func(hash []byte) {
+		hash[0] = push4Opcode
+		copy(hash[1:], selector)
+	}))
+}
 
-	tail := []byte{0xa2, 0x64, 'i', 'p', 'f', 's'} // map(2), key "ipfs"
-	tail = append(tail, 0x58, byte(len(ipfsHash))) // bytes(34)
-	tail = append(tail, ipfsHash...)
-	tail = append(tail, 0x64, 's', 'o', 'l', 'c') // key "solc"
-	tail = append(tail, 0x43, 0x00, 0x08, 0x11)   // bytes(3) version
-
-	length := len(tail) + 2
-	code := make([]byte, 0, len(body)+length)
-	code = append(code, body...)
-	code = append(code, tail...)
-	code = append(code, byte(length>>8), byte(length))
+// push4ConstantCode models pre-reservations code that pushes the
+// reservations-build selector as an ordinary constant and discards it: PUSH4
+// <selector>, POP, STOP. The opcode is there, the dispatch compare is not.
+func push4ConstantCode(selector []byte) []byte {
+	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
+	code = append(code, push4Opcode)
+	code = append(code, selector...)
+	code = append(code, 0x50, 0x00) // POP, STOP
 	return code
+}
+
+// markerDispatchWithTrailingData models a runtime whose dispatcher compares the
+// calldata selector and whose last two bytes are unrelated trailing data. The
+// final word 0x0021 is the code length, so a length check that trusts any
+// in-range value would cut the whole dispatcher out of the search window.
+func markerDispatchWithTrailingData(selector []byte) []byte {
+	code := []byte{0x60, 0x00, 0x35}      // PUSH1 0x00, CALLDATALOAD
+	code = append(code, 0x60, 0xe0, 0x1c) // PUSH1 0xe0, SHR
+	code = append(code, push4Opcode)
+	code = append(code, selector...)
+	code = append(code, eqOpcode, 0x60, 0x14, 0x57)   // EQ, PUSH1 0x14, JUMPI
+	code = append(code, 0x60, 0x00, 0x60, 0x00, 0xfd) // PUSH1 0, PUSH1 0, REVERT
+	code = append(code, 0x5b)                         // JUMPDEST
+	code = append(code, 0x60, 0x00, 0x60, 0x00, 0x52) // PUSH1 0, PUSH1 0, MSTORE
+	code = append(code, 0x60, 0x20, 0x60, 0x00, 0xf3) // PUSH1 0x20, PUSH1 0, RETURN
+	return append(code, 0x00, byte(len(code)+2))      // trailing data = code length
+}
+
+// invalidMetadataTailCode models pre-reservations code whose final two bytes
+// describe a length that does not hold a metadata map: the region they name
+// starts with a dispatcher entry, not with a CBOR map header. The tail is
+// therefore not metadata, so the whole code stays in the search window and the
+// fake dispatch entry is found - a refusal, not a false pre-reservations
+// classification.
+func invalidMetadataTailCode(selector []byte) []byte {
+	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
+	fakeTail := dispatcherEntryCode(selector)
+
+	code := append(body, fakeTail...)
+	return append(code, byte(len(fakeTail)>>8), byte(len(fakeTail)))
 }
 
 // TestReservationsVaultTrustedClassifiesReadFailures pins which reservation
@@ -753,6 +810,34 @@ func TestReservationsVaultTrustedClassifiesReadFailures(t *testing.T) {
 				client.setCode(
 					bridgeAddress,
 					metadataOnlyCode(reservationBuildSelector),
+				)
+			},
+		},
+		"pre-reservations deployment: the selector is only a pushed constant": {
+			readErr:     emptyRevertErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(
+					bridgeAddress,
+					push4ConstantCode(reservationBuildSelector),
+				)
+			},
+		},
+		"reservations deployment: a native dispatcher whose trailing data is not metadata": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(
+					bridgeAddress,
+					markerDispatchWithTrailingData(reservationBuildSelector),
+				)
+			},
+		},
+		"reservations deployment: a tail that only looks like metadata": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(
+					bridgeAddress,
+					invalidMetadataTailCode(reservationBuildSelector),
 				)
 			},
 		},
@@ -997,6 +1082,127 @@ func TestReservationBuildSelector(t *testing.T) {
 			reservationBuildSelector,
 			expected,
 		)
+	}
+}
+
+// TestExecutableCodeLength pins the metadata convention: Solidity's footer holds
+// the payload length without the footer itself, so a conventional 51-byte map
+// ends in 0x0033 and the executable region stops before the map. A tail that
+// does not parse as Solidity metadata is not stripped at all: cutting
+// executable bytes would let the classifier miss a real dispatch entry, while
+// leaving them in the window can only cause a refusal.
+func TestExecutableCodeLength(t *testing.T) {
+	selector := reservationBuildSelector
+	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x00}
+	metadata := solidityMetadata(nil)
+
+	if len(metadata) != 51 {
+		t.Fatalf("fixture metadata is %d bytes, want solc's 51", len(metadata))
+	}
+
+	conventional := withMetadata(body, metadata)
+	if footer := conventional[len(conventional)-2:]; !bytes.Equal(footer, []byte{0x00, 0x33}) {
+		t.Fatalf("fixture footer is %x, want the 51-byte exclusive encoding 0033", footer)
+	}
+
+	testCases := map[string]struct {
+		code       []byte
+		executable int
+	}{
+		"conventional metadata": {
+			code:       conventional,
+			executable: len(body),
+		},
+		"metadata without a map header": {
+			code: withMetadata(body, func() []byte {
+				broken := append([]byte{}, metadata...)
+				broken[0] = 0x18 // an unsigned integer, not a map
+				return broken
+			}()),
+			executable: len(body) + len(metadata) + 2,
+		},
+		"metadata without a solc key": {
+			code:       withMetadata(body, []byte{0xa1, 0x64, 'a', 'b', 'c', 'd'}),
+			executable: len(body) + 6 + 2,
+		},
+		"footer beyond the code": {
+			code:       append(append([]byte{}, body...), 0xff, 0xff),
+			executable: len(body) + 2,
+		},
+		"zero footer": {
+			code:       append(append([]byte{}, body...), 0x00, 0x00),
+			executable: len(body) + 2,
+		},
+		"too short to carry a footer": {
+			code:       []byte{0x00},
+			executable: 1,
+		},
+		"trailing data equal to the code length": {
+			code:       markerDispatchWithTrailingData(selector),
+			executable: 33,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			if got := executableCodeLength(test.code); got != test.executable {
+				t.Fatalf(
+					"executable length %d, want %d (code %d bytes)",
+					got,
+					test.executable,
+					len(test.code),
+				)
+			}
+		})
+	}
+}
+
+// TestHasDispatcherEntry pins the dispatch pattern: the compare is the entry
+// point. Every case here is a slice the walk has to classify without help from
+// a client or an ABI.
+func TestHasDispatcherEntry(t *testing.T) {
+	selector := reservationBuildSelector
+
+	// PUSH4 <selector> EQ, then a JUMPI: the dispatcher compare.
+	dispatch := []byte{0x60, 0x80, 0x60, 0x40, 0x52, push4Opcode}
+	dispatch = append(dispatch, selector...)
+	dispatch = append(dispatch, eqOpcode, 0x61, 0x01, 0x23, 0x57, 0x00)
+
+	// The same push with no compare.
+	constant := []byte{push4Opcode}
+	constant = append(constant, selector...)
+	constant = append(constant, 0x50, 0x00)
+
+	// The same push, with the compare outside the executable window.
+	truncated := []byte{push4Opcode}
+	truncated = append(truncated, selector...)
+
+	// PUSH4 whose immediate is cut short by the window.
+	short := []byte{0x60, 0x80, push4Opcode, selector[0], selector[1]}
+
+	// PUSH5 whose operand contains the selector and a following EQ byte.
+	preservedByWiderPush := []byte{0x64}
+	preservedByWiderPush = append(preservedByWiderPush, selector[:3]...)
+	preservedByWiderPush = append(preservedByWiderPush, 0x00, eqOpcode, 0x00)
+
+	testCases := map[string]struct {
+		code   []byte
+		expect bool
+	}{
+		"dispatcher compare":                {code: dispatch, expect: true},
+		"pushed constant without a compare": {code: constant},
+		"compare cut off by the window":     {code: truncated},
+		"truncated push immediate":          {code: short},
+		"selector inside a wider push":      {code: preservedByWiderPush},
+		"empty code":                        {code: nil},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			if got := hasDispatcherEntry(test.code, selector); got != test.expect {
+				t.Fatalf("dispatch %v, want %v for %x", got, test.expect, test.code)
+			}
+		})
 	}
 }
 

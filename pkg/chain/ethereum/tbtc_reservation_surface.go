@@ -71,12 +71,26 @@ var (
 // classify, and it refuses rather than guessing.
 const maxImplementationDepth = 4
 
-// EVM opcodes the dispatch walk distinguishes.
+// EVM opcodes the dispatch walk distinguishes. A dispatcher compares the
+// calldata selector with a pushed constant, so the compare is what turns the
+// constant into a callable entry point.
 const (
+	eqOpcode     = 0x14
 	push1Opcode  = 0x60
 	push4Opcode  = 0x63
 	push32Opcode = 0x7f
 )
+
+// The metadata map keys solc writes into the CBOR tail of every deployed
+// contract, as CBOR text-string encodings (one length byte, then the name).
+// "bzzr" is the pre-0.5 key family and "bzzr0"/"bzzr1" its numbered forms.
+var metadataKeys = [...][]byte{
+	{0x64, 'i', 'p', 'f', 's'},
+	{0x64, 'b', 'z', 'z', 'r'},
+	{0x65, 'b', 'z', 'z', 'r', '0'},
+	{0x65, 'b', 'z', 'z', 'r', '1'},
+	{0x64, 's', 'o', 'l', 'c'},
+}
 
 // reservationReadFailure classifies a failed reservation-parameters read.
 //
@@ -226,47 +240,85 @@ func (tc *TbtcChain) eip1967Slot(
 // PUSH immediate, in embedded data, or in the CBOR metadata tail solc appends
 // to every deployed contract, and none of those makes a function callable. The
 // walk therefore moves instruction by instruction, skipping the operands of
-// PUSH1..PUSH32, stops before the metadata tail, and only accepts a PUSH4
-// instruction whose immediate is the selector - the shape a compiler emits for
-// a dispatcher entry.
+// PUSH1..PUSH32, stops before the metadata tail - and only when that tail
+// parses as Solidity metadata - and accepts only PUSH4 <selector> immediately
+// followed by EQ, the compare a compiler emits at a dispatcher entry.
 func dispatchesReservationBuild(code []byte) bool {
 	return hasDispatcherEntry(code, reservationBuildSelector)
 }
 
-// hasDispatcherEntry reports whether code contains a PUSH4 instruction whose
-// immediate is selector, outside the metadata tail.
+// hasDispatcherEntry reports whether code dispatches on selector: a PUSH4
+// instruction whose immediate is the selector, immediately followed by EQ.
+//
+// The compare is what makes the constant an entry point. A bare PUSH4 - for
+// example PUSH4 <selector>; POP - is a pushed constant, and embedded data can
+// spell one too, so neither proves that a call can reach a function behind it.
 func hasDispatcherEntry(code, selector []byte) bool {
 	end := executableCodeLength(code)
 
 	for pc := 0; pc < end; pc++ {
-		switch op := code[pc]; {
-		case op == push4Opcode:
-			// A trailing, truncated PUSH4 cannot be a dispatch entry.
-			if pc+4 < end && bytes.Equal(code[pc+1:pc+5], selector) {
-				return true
-			}
-			pc += 4
-		case op >= push1Opcode && op <= push32Opcode:
-			pc += int(op-push1Opcode) + 1
+		op := code[pc]
+		if op < push1Opcode || op > push32Opcode {
+			continue
 		}
+
+		if op == push4Opcode &&
+			len(selector) == 4 &&
+			pc+4 < end &&
+			bytes.Equal(code[pc+1:pc+5], selector) &&
+			pc+5 < end &&
+			code[pc+5] == eqOpcode {
+			return true
+		}
+
+		pc += int(op-push1Opcode) + 1
 	}
 
 	return false
 }
 
 // executableCodeLength returns the length of runtime code without the CBOR
-// metadata tail solc appends to it. The final two bytes hold the tail's length,
-// including those two bytes; a value that cannot describe a tail leaves the
-// whole code executable.
+// metadata tail solc appends to it.
+//
+// The trailing two bytes hold the metadata payload's length, which excludes
+// those two bytes, so a conventional 51-byte metadata map ends in 0x0033. The
+// tail is only excluded when it parses as such a map: a contract's last two
+// bytes can describe anything, and trimming executable bytes because they
+// happen to look like a length would erase an entry point. Unrecognised input
+// keeps the whole code in the search window, where the worst case is a refusal.
 func executableCodeLength(code []byte) int {
-	if len(code) < 2 {
+	length, ok := metadataPayloadLength(code)
+	if !ok {
 		return len(code)
 	}
 
-	tail := int(code[len(code)-2])<<8 | int(code[len(code)-1])
-	if tail < 2 || tail > len(code) {
-		return len(code)
+	return len(code) - length - 2
+}
+
+// metadataPayloadLength returns the length of the CBOR metadata payload the
+// code ends with, and whether the ending parses as Solidity metadata at all.
+func metadataPayloadLength(code []byte) (int, bool) {
+	if len(code) < 3 {
+		return 0, false
 	}
 
-	return len(code) - tail
+	length := int(code[len(code)-2])<<8 | int(code[len(code)-1])
+	if length == 0 || length+2 > len(code) {
+		return 0, false
+	}
+
+	payload := code[len(code)-length-2 : len(code)-2]
+
+	// Solidity writes the metadata as a CBOR map of at most a handful of keys.
+	if payload[0] < 0xa1 || payload[0] > 0xa5 {
+		return 0, false
+	}
+
+	for _, key := range metadataKeys {
+		if bytes.Contains(payload, key) {
+			return length, true
+		}
+	}
+
+	return 0, false
 }
