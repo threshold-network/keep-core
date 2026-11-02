@@ -108,7 +108,7 @@ D31 is integrated on the reservations branches. Nothing in this section means a 
 
 The keep-core review line (an earlier keep-core review line) has no member-proof re-anchor binding. On that line the fallback would send a third-party request, which keeps the caps. Its `reservations-upgrade` branch is superseded by `reservations-epic` and must not be merged.
 
-`client.yml` pins `TBTC_V2_REF` to `72b891eecd8c0c843d9d6726d37eac76240b58cc` at the keep-core public head (`keep-core@e7f483601:.github/workflows/client.yml:226`), which is the tbtc-v2 commit that added the 730-day dissolution-delay bound. It is not the spec freeze: the freeze is the tbtc-v2 public head `b7aece4bf` (XR-G-2). The two are separate pins with separate jobs, and the CI pin moves when the workflow moves. The pin was `d1bf5bc281992885970f7c232cd9a66b7a6b5127` at `keep-core@931dcd63c:.github/workflows/client.yml:216`, and moved when #4371 bumped it on 2026-11-01.
+`client.yml` pins `TBTC_V2_REF` to `b7aece4bf06105edc082c5f28e1be91b35dde63a` at the keep-core public head (`keep-core@96530a787:.github/workflows/client.yml:213`), which is the spec freeze, the tbtc-v2 public head (XR-G-2). The CI pin and the spec freeze are separate pins with separate jobs, and the CI pin moves when the workflow moves; since keep-core#4377 on 2026-11-02 they name the same commit. The pin was `72b891eecd8c0c843d9d6726d37eac76240b58cc`, the tbtc-v2 commit that added the 730-day dissolution-delay bound, at `keep-core@e7f483601:.github/workflows/client.yml:226`, and `d1bf5bc281992885970f7c232cd9a66b7a6b5127` at `keep-core@931dcd63c:.github/workflows/client.yml:216`; #4371 moved it on 2026-11-01, and #4376 and #4377 moved it on 2026-11-02.
 
 ## D28: existing maintainer role plus watchdog alerts
 
