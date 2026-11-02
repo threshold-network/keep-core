@@ -345,3 +345,113 @@ func TestStrandingRecheckQueue_MutationSurvivors_CompactsAtHalfConsumed(t *testi
 		t.Fatal("expected the queue to be empty")
 	}
 }
+
+// strandingRecheckQueueTarget returns a distinct target per index.
+func strandingRecheckQueueTarget(i int) strandingRecheckTarget {
+	return strandingRecheckTarget{
+		walletPublicKeyHash: [20]byte{byte(i >> 8), byte(i)},
+	}
+}
+
+// TestStrandingRecheckQueue_MutationSurvivors_RequeueOfOneTargetKeepsStorageBounded
+// pins the queue's storage bound for the shape drainStrandingRechecks
+// produces on a failed or deferred check: the same target is popped and
+// pushed back again and again while the number of pending targets stays at
+// one. Every pop leaves the consumed prefix as long as the whole slice, so
+// only the ratio test can reclaim it. The backing array has to follow the
+// one pending target, not the number of retries the watcher has run.
+func TestStrandingRecheckQueue_MutationSurvivors_RequeueOfOneTargetKeepsStorageBounded(t *testing.T) {
+	const (
+		requeues = 10_000
+		maxLen   = 128
+		maxCap   = 256
+	)
+
+	target := strandingRecheckQueueTarget(1)
+
+	q := newStrandingRecheckQueue()
+	q.push(target)
+
+	for i := 0; i < requeues; i++ {
+		popped, ok := q.pop()
+		if !ok || popped != target {
+			t.Fatalf("requeue %d: expected the target back, got %v (ok=%v)", i, popped, ok)
+		}
+		q.push(popped)
+
+		if len(q.order) > maxLen || cap(q.order) > maxCap {
+			t.Fatalf(
+				"requeue %d: one pending target must not grow the backing "+
+					"slice with the number of retries, got len(order) %d "+
+					"(max %d), cap(order) %d (max %d)",
+				i,
+				len(q.order),
+				maxLen,
+				cap(q.order),
+				maxCap,
+			)
+		}
+	}
+
+	if q.len() != 1 || len(q.order)-q.head != 1 {
+		t.Fatalf(
+			"expected exactly one pending target, got len %d, live slots %d",
+			q.len(),
+			len(q.order)-q.head,
+		)
+	}
+}
+
+// TestStrandingRecheckQueue_MutationSurvivors_SteadyStateAfterBurstKeepsStorageBounded
+// pins the same bound for a fixed backlog that follows a burst: 128 targets
+// are queued at once, which moves the head well past the 64-entry floor as
+// soon as they are consumed, and then the watcher keeps popping the oldest
+// target and requeueing it behind the others. The pending set never changes,
+// so the backing array has to stay within a small multiple of the backlog
+// however many rounds run, and the targets keep coming out in FIFO order.
+func TestStrandingRecheckQueue_MutationSurvivors_SteadyStateAfterBurstKeepsStorageBounded(t *testing.T) {
+	const (
+		backlog = 128
+		rounds  = 10_000
+		maxLen  = 2 * backlog
+		maxCap  = 4 * backlog
+	)
+
+	q := newStrandingRecheckQueue()
+	for i := 0; i < backlog; i++ {
+		q.push(strandingRecheckQueueTarget(i))
+	}
+
+	for i := 0; i < rounds; i++ {
+		expected := strandingRecheckQueueTarget(i % backlog)
+
+		popped, ok := q.pop()
+		if !ok || popped != expected {
+			t.Fatalf("round %d: expected target %d, got %v (ok=%v)", i, i%backlog, popped, ok)
+		}
+		q.push(popped)
+
+		if len(q.order) > maxLen || cap(q.order) > maxCap {
+			t.Fatalf(
+				"round %d: a fixed backlog of %d must not grow the backing "+
+					"slice with the number of rounds, got len(order) %d "+
+					"(max %d), cap(order) %d (max %d)",
+				i,
+				backlog,
+				len(q.order),
+				maxLen,
+				cap(q.order),
+				maxCap,
+			)
+		}
+	}
+
+	if q.len() != backlog || len(q.order)-q.head != backlog {
+		t.Fatalf(
+			"expected %d pending targets, got len %d, live slots %d",
+			backlog,
+			q.len(),
+			len(q.order)-q.head,
+		)
+	}
+}
