@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -68,6 +69,12 @@ type ReservationsActivationVaultReader interface {
 	// reservation vault configured in the reservation parameters. It
 	// returns false with a nil error when no reservation vault is
 	// configured: reservations are then disabled on-chain.
+	//
+	// An implementation returns ErrReservationsSurfaceUnavailable, and
+	// nothing else, when it has positively established that the Bridge has
+	// no reservation surface at all (a deployment that predates the
+	// reservations upgrade). Every other failure must be an ordinary
+	// error: callers treat an unknown state as a reason not to sweep.
 	ReservationsVaultTrusted() (bool, error)
 }
 
@@ -219,4 +226,83 @@ func CollectReservationsActivationStatus(
 	}
 
 	return status, nil
+}
+
+// ErrReservationsSurfaceUnavailable reports that the Bridge provably has no
+// reservation surface: the deployed code, followed through any proxy
+// implementation pointer, carries none of the reservations build's dispatcher
+// entry points, so the contract cannot serve the reservation API at all. It is
+// the one failure of
+// ReservationsActivationVaultReader.ReservationsVaultTrusted that proves the
+// deployment predates reservations instead of leaving the on-chain
+// reservation state unknown; every reader that returns it must have
+// established that proof from the deployment itself, never from the shape of a
+// failed read, because a reservations-build Bridge can also produce an
+// execution revert with no returndata.
+var ErrReservationsSurfaceUnavailable = fmt.Errorf(
+	"the Bridge has no reservation surface: the deployment predates the " +
+		"reservations upgrade",
+)
+
+// ReservationsSweepGate reports whether a deposit sweep may proceed, given the
+// client's compiled activation window for the running network
+// (reservationsActive) and the chain's own reservation state.
+//
+// The sweep paths consult the reserved-deposit predicate (IsReservedDeposit)
+// only inside the activation window, because a Bridge deployed before the
+// reservation upgrade does not carry that predicate at all. That leaves a
+// hole: a release whose activation entry is missing, or whose entry has not
+// been reached, sweeps reserved deposits without ever asking. This gate closes
+// it by asking the chain rather than trusting the table:
+//
+//   - Window open: the per-deposit checks are authoritative and fail closed on
+//     their own, so the sweep is allowed.
+//   - Window closed, Bridge reports the reservation vault trusted:
+//     reservations are live on-chain while this client does not coordinate
+//     them, so the sweep is refused.
+//   - Window closed, Bridge reports no trusted vault: nothing on-chain is
+//     reserved, so the sweep is allowed.
+//   - Window closed, the reader returns ErrReservationsSurfaceUnavailable: the
+//     deployment provably predates reservations and therefore cannot hold a
+//     reserved deposit, so the sweep is allowed and the caller is told it is
+//     running against such a deployment.
+//   - Window closed, any other read failure: the reservation state is unknown,
+//     so the sweep is refused. A transient RPC failure must not be read as
+//     "reservations are not live": that would sweep without the reserved
+//     check exactly when the client cannot see the chain's state.
+//
+// The pre-reservations case is the only exception, and it is a positive
+// finding about the deployment, not an inference from a failed read. Refusing
+// it would halt every sweep protocol-wide for a client cut over before the
+// Bridge upgrade, which is the ordering hazard the M1 release plan carries.
+func ReservationsSweepGate(
+	reservationsActive bool,
+	vaultReader ReservationsActivationVaultReader,
+) (preReservationsBridge bool, err error) {
+	if reservationsActive {
+		return false, nil
+	}
+
+	trusted, trustedErr := vaultReader.ReservationsVaultTrusted()
+	if trustedErr != nil {
+		if errors.Is(trustedErr, ErrReservationsSurfaceUnavailable) {
+			return true, nil
+		}
+		return false, fmt.Errorf(
+			"cannot determine whether reservations are live on-chain, so "+
+				"the sweep cannot be cleared: [%w]",
+			trustedErr,
+		)
+	}
+
+	if trusted {
+		return false, fmt.Errorf(
+			"the Bridge trusts the reservation vault, so reservations are " +
+				"live on-chain, but reservations are not active in this " +
+				"client for this network; refusing to sweep, as a reserved " +
+				"deposit would otherwise be swept unchecked",
+		)
+	}
+
+	return false, nil
 }

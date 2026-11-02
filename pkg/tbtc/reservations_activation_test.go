@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -392,3 +393,106 @@ var errTest = errors.New("test error")
 // compile-time assertion that the test counter satisfies the interface the
 // production code reads the chain head through.
 var _ chain.BlockCounter = (*activationStatusTestChain)(nil)
+
+// TestReservationsSweepGate pins the reservations sweep gate's contract. The
+// gate answers one question for both sweep paths: may this client sweep while
+// the chain's reservation state is what it is?
+//
+//   - an open activation window means the reserved-deposit checks run and
+//     fail closed on their own, so the gate allows the sweep unconditionally;
+//   - a closed window plus a trusted reservation vault is the C-4 violation
+//     this gate exists for: reservations are live on-chain while the client
+//     believes they are not, so the sweep is refused;
+//   - a closed window plus an untrusted vault allows the sweep;
+//   - a closed window whose reservation state cannot be read refuses the
+//     sweep: a failed read is not evidence that reservations are not live;
+//   - a closed window on a Bridge that provably has no reservation surface
+//     allows the sweep, because such a deployment cannot hold a reserved
+//     deposit. That is the one exception, and it requires the reader to
+//     report ErrReservationsSurfaceUnavailable, which it does only on
+//     positive on-chain evidence. Without that exception a client cut over
+//     before the Bridge upgrade would halt every sweep protocol-wide.
+func TestReservationsSweepGate(t *testing.T) {
+	unavailableErr := fmt.Errorf(
+		"wrapped: %w",
+		ErrReservationsSurfaceUnavailable,
+	)
+
+	tests := map[string]struct {
+		reservationsActive bool
+		vault              *activationStatusTestVault
+		expectPreReserv    bool
+		expectErr          bool
+		expectErrMentions  string
+	}{
+		"open window, trusted vault": {
+			reservationsActive: true,
+			vault:              &activationStatusTestVault{trusted: true},
+		},
+		"open window, unreadable vault state": {
+			reservationsActive: true,
+			vault:              &activationStatusTestVault{err: errTest},
+		},
+		"closed window, trusted vault": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{trusted: true},
+			expectErr:          true,
+			expectErrMentions:  "trusts the reservation vault",
+		},
+		"closed window, untrusted vault": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{trusted: false},
+		},
+		"closed window, unreadable reservation state": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{err: errTest},
+			expectErr:          true,
+			expectErrMentions:  "cannot determine whether reservations",
+		},
+		"closed window, proven pre-reservations Bridge": {
+			reservationsActive: false,
+			vault:              &activationStatusTestVault{err: unavailableErr},
+			expectPreReserv:    true,
+		},
+		"closed window, pre-reservations sentinel wrapped in an ordinary error": {
+			reservationsActive: false,
+			vault: &activationStatusTestVault{
+				err: errors.New("reservation read failed"),
+			},
+			expectErr:         true,
+			expectErrMentions: "cannot determine whether reservations",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			preReservations, err := ReservationsSweepGate(
+				test.reservationsActive,
+				test.vault,
+			)
+
+			if preReservations != test.expectPreReserv {
+				t.Errorf(
+					"unexpected pre-reservations classification\nexpected: %v\nactual:   %v",
+					test.expectPreReserv,
+					preReservations,
+				)
+			}
+			if (err != nil) != test.expectErr {
+				t.Errorf(
+					"unexpected error presence\nexpected error: %v\nactual error:   %v",
+					test.expectErr,
+					err,
+				)
+			}
+			if test.expectErrMentions != "" &&
+				(err == nil || !strings.Contains(err.Error(), test.expectErrMentions)) {
+				t.Errorf(
+					"expected the error to mention %q, got: [%v]",
+					test.expectErrMentions,
+					err,
+				)
+			}
+		})
+	}
+}

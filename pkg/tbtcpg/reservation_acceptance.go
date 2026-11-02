@@ -1280,6 +1280,14 @@ func estimateReservationAcceptanceFee(
 	)
 }
 
+// depositTargetsReservationVault reports whether depositVault (a deposit's
+// revealed vault, nil for a vault-less deposit) matches reservationVault.
+//
+// Only the reservation acceptance path uses it: an incoming reveal must name
+// the reservation vault for the wallet to accept it as a reservation. It is
+// deliberately NOT a reserved-deposit filter for sweeps - a reserved deposit
+// stays reserved after a vault rotation, so the sweep paths ask
+// IsReservedDeposit instead.
 func depositTargetsReservationVault(
 	depositVault *chain.Address,
 	reservationVault chain.Address,

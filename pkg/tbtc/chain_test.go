@@ -80,6 +80,10 @@ type localChain struct {
 	reservationParamsMutex sync.Mutex
 	reservationParams      *ReservationParameters
 
+	reservationVaultTrustedMutex sync.Mutex
+	reservationVaultTrusted      bool
+	reservationVaultTrustedErr   error
+
 	pendingRedemptionRequestsMutex sync.Mutex
 	pendingRedemptionRequests      map[[32]byte]*RedemptionRequest
 
@@ -1551,6 +1555,38 @@ func (lc *localChain) setReservationParameters(params *ReservationParameters) {
 	defer lc.reservationParamsMutex.Unlock()
 
 	lc.reservationParams = params
+}
+
+// ReservationsVaultTrusted reports the value installed via
+// setReservationsVaultTrusted, or an error installed via
+// setReservationsVaultTrustedErr. The default is (false, nil): the Bridge
+// trusts no reservation vault, i.e. reservations are not live on-chain.
+func (lc *localChain) ReservationsVaultTrusted() (bool, error) {
+	lc.reservationVaultTrustedMutex.Lock()
+	defer lc.reservationVaultTrustedMutex.Unlock()
+
+	if lc.reservationVaultTrustedErr != nil {
+		return false, lc.reservationVaultTrustedErr
+	}
+	return lc.reservationVaultTrusted, nil
+}
+
+// setReservationsVaultTrusted makes ReservationsVaultTrusted report trusted.
+func (lc *localChain) setReservationsVaultTrusted(trusted bool) {
+	lc.reservationVaultTrustedMutex.Lock()
+	defer lc.reservationVaultTrustedMutex.Unlock()
+
+	lc.reservationVaultTrusted = trusted
+}
+
+// setReservationsVaultTrustedErr makes ReservationsVaultTrusted fail with
+// err, modeling a Bridge that does not carry the reservation surface at all
+// (a pre-reservations deployment) as well as a failing chain read.
+func (lc *localChain) setReservationsVaultTrustedErr(err error) {
+	lc.reservationVaultTrustedMutex.Lock()
+	defer lc.reservationVaultTrustedMutex.Unlock()
+
+	lc.reservationVaultTrustedErr = err
 }
 
 // ValidateReservationAnchorProposal returns the error previously installed

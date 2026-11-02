@@ -45,6 +45,21 @@ func (rl *rateLimiter) CodeAt(
 	return rl.EthereumClient.CodeAt(ctx, contract, blockNumber)
 }
 
+func (rl *rateLimiter) StorageAt(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockNumber *big.Int,
+) ([]byte, error) {
+	err := rl.Limiter.AcquirePermit()
+	if err != nil {
+		return nil, fmt.Errorf("cannot acquire rate limiter permit: [%v]", err)
+	}
+	defer rl.Limiter.ReleasePermit()
+
+	return rl.EthereumClient.StorageAt(ctx, account, key, blockNumber)
+}
+
 func (rl *rateLimiter) CallContract(
 	ctx context.Context,
 	call ethereum.CallMsg,

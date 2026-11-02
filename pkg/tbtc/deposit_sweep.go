@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ipfs/go-log/v2"
@@ -14,7 +13,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
@@ -387,11 +385,9 @@ func ValidateDepositSweepProposal(
 	// reservationsActive reports whether reservations were live at the
 	// coordination block for this proposal round, i.e.
 	// ReservationsActivationBlock(network) <= coordinationBlock. It
-	// must be derived from that comparison, not from whether
-	// ReservationParameters below happens to succeed - see
-	// ReservationsActivationBlock's doc comment. When false, the
-	// reserved-deposit filter below - including the ReservationParameters
-	// call it depends on - is skipped entirely.
+	// must be derived from that comparison, not from whether a
+	// reservation chain call below happens to succeed - see
+	// ReservationsActivationBlock's doc comment.
 	reservationsActive bool,
 	chain interface {
 		// PastDepositRevealedEvents fetches past deposit reveal events according
@@ -436,28 +432,25 @@ func ValidateDepositSweepProposal(
 			fundingOutputIndex uint32,
 		) *big.Int
 
-		// ReservationParameters gets the current on-chain values of the
-		// Bridge reservation parameters, including the reservation vault
-		// address used to cheaply pre-filter which deposits are worth an
-		// IsReservedDeposit call at all. Called once per validation
-		// (before this loop), not per deposit, and only when
-		// reservationsActive is true - see that parameter's doc comment.
-		// A failure here is a hard error: reservationsActive already
-		// established the feature is live for this network and block, so
-		// a failing call at that point is a genuine chain problem, not
-		// evidence the feature is inactive.
-		ReservationParameters() (*ReservationParameters, error)
-
 		// IsReservedDeposit returns true if the given deposit was revealed
 		// with the reservation vault address and is therefore a
 		// reservation rather than a default deposit. This is the
 		// follower-side counterpart to the leader-path reserved-deposit
 		// filter in the deposit-sweep coordination task: a follower must
-		// not co-sign a reserved-deposit sweep. Only called for deposits
-		// whose revealed vault matches the current reservation vault AND
-		// only once ReservationParameters above has been fetched
-		// successfully - see the call site.
+		// not co-sign a reserved-deposit sweep. Called for every deposit
+		// in the proposal, and only when reservationsActive is true - see
+		// that parameter's doc comment. A failure is a hard error: a
+		// reserved status the client cannot read must never be treated as
+		// "not reserved".
 		IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+		// ReservationsVaultTrusted reports whether the Bridge trusts the
+		// reservation vault, i.e. whether reservations are live on-chain.
+		// Consulted through ReservationsSweepGate when reservationsActive
+		// is false, so a client that does not believe reservations are
+		// live still refuses to sweep once the chain says they are. A
+		// Bridge deployed before the reservation upgrade cannot answer it.
+		ReservationsVaultTrusted() (bool, error)
 	},
 	btcChain bitcoin.Chain,
 ) ([]*Deposit, error) {
@@ -475,24 +468,28 @@ func ValidateDepositSweepProposal(
 		return nil, fmt.Errorf("proposal's reveal blocks list has a wrong length")
 	}
 
-	// Determine the reservation vault once per validation, not per
-	// deposit, and only when reservationsActive - see that parameter's
-	// doc comment for why gating on ReservationsActivationBlock instead
-	// of this call's success/failure matters. This does not weaken
-	// safety: the IsReservedDeposit call below, for any deposit the
-	// cheap vault-match prefilter flags as a candidate, still rejects
-	// the proposal outright on error rather than skipping - see its
-	// call site for why the two calls take opposite failure postures.
-	var reservationParams *ReservationParameters
-	if reservationsActive {
-		var reservationParamsErr error
-		reservationParams, reservationParamsErr = chain.ReservationParameters()
-		if reservationParamsErr != nil {
-			return nil, fmt.Errorf(
-				"cannot get reservation parameters: [%v]",
-				reservationParamsErr,
-			)
-		}
+	// Reservations sweep gate: the reserved-deposit check below only runs
+	// inside the activation window, so the chain's own reservation state
+	// decides whether a sweep is allowed at all when the window is closed.
+	// A refusal here means either that the Bridge already trusts the
+	// reservation vault while this client does not coordinate reservations,
+	// or that the reservation state cannot be determined; the only closed
+	// window that lets the sweep through without that state is a deployment
+	// that provably has no reservation surface.
+	preReservationsBridge, gateErr := ReservationsSweepGate(
+		reservationsActive,
+		chain,
+	)
+	if gateErr != nil {
+		return nil, fmt.Errorf("reservations sweep gate: [%v]", gateErr)
+	}
+	if preReservationsBridge {
+		validateProposalLogger.Warnf(
+			"the Bridge has no reservation surface (it predates the " +
+				"reservations upgrade), so it cannot hold a reserved " +
+				"deposit; sweeping on the basis of this client's " +
+				"activation window",
+		)
 	}
 
 	for i, depositKey := range proposal.DepositsKeys {
@@ -584,17 +581,18 @@ func ValidateDepositSweepProposal(
 			)
 		}
 
-		// Reuse the vault already carried by matchingEvent - fetched above
-		// for unrelated reasons - instead of an extra chain call, to cheaply
-		// pre-filter which deposits are worth an IsReservedDeposit call at
-		// all. Only consulted when reservationsActive (see that
-		// parameter's doc comment); skipped entirely otherwise so the
-		// feature's pre-activation state never triggers a chain call
-		// that would fail deterministically on a non-upgraded Bridge.
-		if reservationsActive && depositTargetsReservationVault(
-			matchingEvent.Vault,
-			reservationParams.ReservationVault,
-		) {
+		// Ask the chain for every candidate deposit rather than
+		// pre-filtering on the deposit's revealed vault: a reserved
+		// deposit stays reserved after the reservation vault rotates, so
+		// comparing the revealed vault with the *current* reservation
+		// vault misses exactly the deposits that must not be swept
+		// after a vault rotation. IsReservedDeposit is the predicate
+		// WalletProposalValidator enforces, so it is the only correct
+		// pre-filter here. Skipped entirely when reservationsActive is
+		// false, so the feature's pre-activation state never triggers a
+		// chain call that would fail deterministically on a
+		// non-upgraded Bridge.
+		if reservationsActive {
 			// Hard reject, like the protocol-minimum fee gate below: a
 			// follower must not sign a sweep that spends a reservation.
 			// Sweeping a reservation is irreversible, so a stalled sweep
@@ -872,22 +870,4 @@ func assembleDepositSweepTransaction(
 	})
 
 	return builder, nil
-}
-
-// depositTargetsReservationVault reports whether depositVault (a deposit's
-// revealed vault, nil for a vault-less deposit) matches reservationVault
-// (the current on-chain reservation vault address). Mirrors
-// tbtcpg.depositTargetsReservationVault - kept as a separate, unexported
-// copy since pkg/tbtc and pkg/tbtcpg share no reservation-helpers package.
-func depositTargetsReservationVault(
-	depositVault *chain.Address,
-	reservationVault chain.Address,
-) bool {
-	if depositVault == nil {
-		return false
-	}
-	return strings.EqualFold(
-		string(*depositVault),
-		string(reservationVault),
-	)
 }

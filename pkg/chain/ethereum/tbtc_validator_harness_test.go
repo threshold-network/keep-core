@@ -357,6 +357,15 @@ func (b *harnessBackend) CodeAt(
 	return b.state.GetCode(contract), nil
 }
 
+func (b *harnessBackend) StorageAt(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockNumber *big.Int,
+) ([]byte, error) {
+	return b.state.GetState(account, key).Bytes(), nil
+}
+
 func (b *harnessBackend) BalanceAt(
 	ctx context.Context,
 	account common.Address,

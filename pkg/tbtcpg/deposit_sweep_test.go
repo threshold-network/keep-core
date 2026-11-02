@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1080,13 +1081,19 @@ func TestFindDepositsToSweep_ExcludesReservedDeposits(t *testing.T) {
 	}
 }
 
-// TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck verifies that
-// findDeposits never consults IsReservedDeposit for a deposit whose
-// DepositRevealed event vault does not match the configured reservation
-// vault: such a deposit is swept normally even when the chain would report
-// it as reserved, because the cheap event.Vault pre-filter is expected to
-// exclude it from the reserved-deposit check entirely.
-func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
+// TestFindDepositsToSweep_NonMatchingVaultStillChecksReserved verifies that
+// findDeposits consults IsReservedDeposit for every candidate deposit,
+// including one whose DepositRevealed event vault does not match the current
+// reservation vault, and excludes it from the sweep when the chain reports it
+// as reserved.
+//
+// The revealed vault is not an authority on reservation status: a deposit
+// stays reserved after the reservation vault rotates, so a comparison against
+// the *current* vault address misses exactly the deposits that must not be
+// swept after a reservation vault rotation. The on-chain predicate is
+// the same one
+// WalletProposalValidator enforces, so it is the only correct pre-filter.
+func TestFindDepositsToSweep_NonMatchingVaultStillChecksReserved(t *testing.T) {
 	currentBlock := uint64(300000)
 	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
 	walletPublicKeyHash := hexToByte20(
@@ -1106,11 +1113,10 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 
 	otherVault := chain.Address("0xNotTheReservationVault1234567890abcdef12")
 
-	// The deposit's vault does not match the configured reservation
-	// vault, so the pre-filter must skip it without ever calling
-	// IsReservedDeposit. It is marked reserved anyway to prove that: if
-	// IsReservedDeposit were consulted and honored, this deposit would
-	// have been excluded from the sweep.
+	// The deposit is revealed to a vault that is not the configured
+	// reservation vault, i.e. exactly the shape a reserved deposit takes
+	// after a vault rotation, and the chain reports it as reserved. It
+	// must not be selected for sweeping.
 	depositHash := setupVaultGroupingDeposit(
 		t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
 		"9999999999999999999999999999999999999999999999999999999999999999",
@@ -1131,10 +1137,10 @@ func TestFindDepositsToSweep_NonMatchingVaultSkipsReservedCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(deposits) != 1 || deposits[0].FundingTxHash != depositHash {
+	if len(deposits) != 0 {
 		t.Fatalf(
-			"expected the non-matching-vault deposit %v to sweep "+
-				"normally, got %v",
+			"expected the reserved deposit %v to be excluded from the "+
+				"sweep despite its non-matching vault, got %v",
 			depositHash,
 			deposits,
 		)
@@ -1282,5 +1288,53 @@ func TestFindDeposits_IsReservedDepositError(t *testing.T) {
 	}
 	if deposits != nil {
 		t.Fatalf("expected no deposits on error, got: %v", deposits)
+	}
+}
+
+// TestProposeDepositsSweep_RefusesWhenReservationsLiveOnChainButInactive
+// exercises the leader side of the reservations sweep gate: a client whose
+// compiled
+// activation window for the network is still closed must not produce a sweep
+// proposal while the Bridge reports the reservation vault as trusted, because
+// the leader only consults the reserved-deposit predicate inside the window.
+// ProposeDepositsSweep runs tbtc.ValidateDepositSweepProposal, which carries
+// the gate, so the refusal is what protects the proposal the leader would
+// otherwise hand to the followers.
+func TestProposeDepositsSweep_RefusesWhenReservationsLiveOnChainButInactive(
+	t *testing.T,
+) {
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	tbtcChain.SetReservationsVaultTrusted(true)
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+
+	_, err := task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		hexToByte20("7670343fc00ccc2d0cd65360e6ad400697ea0fed"),
+		[]*tbtcpg.DepositReference{
+			{
+				FundingTxHash: hashFromString(
+					"9999999999999999999999999999999999999999999999999999999999999999",
+				),
+				FundingOutputIndex: 0,
+				RevealBlock:        290000,
+			},
+		},
+		// A non-zero fee skips the fee estimation path, keeping this
+		// test on the gate.
+		1000,
+		// reservationsActive: this client has no open window for the
+		// network yet.
+		false,
+	)
+	if err == nil {
+		t.Fatal(
+			"expected the leader to refuse a sweep while reservations are " +
+				"live on-chain and inactive in this client",
+		)
+	}
+	if !strings.Contains(err.Error(), "reservations") {
+		t.Errorf("expected error to mention reservations, got: [%v]", err)
 	}
 }

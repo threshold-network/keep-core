@@ -12,7 +12,9 @@ import (
 	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/internal/ethtest"
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
+	ethereumutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
@@ -20,6 +22,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/net/retransmission"
 	"github.com/keep-network/keep-core/pkg/net/watchtower"
 	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/tbtc"
 	"github.com/spf13/cobra"
 )
 
@@ -626,4 +629,135 @@ func caseOperatorKey(
 	}
 
 	return operatorPublicKey
+}
+
+// startTestBlockCounter is a chain.BlockCounter stub returning a fixed head.
+type startTestBlockCounter struct {
+	head uint64
+}
+
+func (c *startTestBlockCounter) CurrentBlock() (uint64, error) {
+	return c.head, nil
+}
+
+func (c *startTestBlockCounter) WaitForBlockHeight(uint64) error {
+	return nil
+}
+
+func (c *startTestBlockCounter) BlockHeightWaiter(uint64) (<-chan uint64, error) {
+	ch := make(chan uint64)
+	close(ch)
+	return ch, nil
+}
+
+func (c *startTestBlockCounter) WatchBlocks(context.Context) <-chan uint64 {
+	ch := make(chan uint64)
+	close(ch)
+	return ch
+}
+
+// startTestVaultReader is a tbtc.ReservationsActivationVaultReader stub
+// returning a fixed trust state.
+type startTestVaultReader struct {
+	trusted bool
+	err     error
+}
+
+func (r *startTestVaultReader) ReservationsVaultTrusted() (bool, error) {
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.trusted, nil
+}
+
+// TestVerifyReservationsActivation_C4ViolationIsFatal pins the operator-facing
+// half of the reservations sweep guard: a C-4 ordering violation - the
+// Bridge trusts the
+// reservation vault while this client's compiled activation block for the
+// network has not been chosen or has not been reached - must stop the node
+// from starting, not merely be logged. A node that keeps running in that state
+// coordinates reservations it believes are inactive while the chain accepts
+// reserved deposits.
+func TestVerifyReservationsActivation_C4ViolationIsFatal(t *testing.T) {
+	tests := map[string]struct {
+		blockCounter chain.BlockCounter
+		vaultReader  tbtc.ReservationsActivationVaultReader
+		network      ethereumutil.Network
+	}{
+		// reservationsActivationBlocks carries no entry for any
+		// network but the developer network in this build, so a live
+		// contract on Sepolia is the C-4 violation: reserved deposits
+		// can be accepted on-chain while this client never activates.
+		"contract live, no activation entry for the network": {
+			blockCounter: &startTestBlockCounter{head: 100},
+			vaultReader:  &startTestVaultReader{trusted: true},
+			network:      ethereumutil.Sepolia,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := verifyReservationsActivation(
+				test.blockCounter,
+				test.vaultReader,
+				test.network,
+			)
+			if err == nil {
+				t.Fatal(
+					"expected a C-4 activation ordering violation to be " +
+						"fatal",
+				)
+			}
+			if !strings.Contains(err.Error(), "C-4") {
+				t.Errorf(
+					"expected the error to name the C-4 gate, got: [%v]",
+					err,
+				)
+			}
+		})
+	}
+}
+
+// TestVerifyReservationsActivation_PendingActivationIsNotFatal covers the
+// half of the startup check that must not stop a node: either the on-chain
+// activation is simply still pending, or the reservation state cannot be read
+// at all because the Bridge predates the reservation surface. Refusing to
+// start in the unreadable case would turn the client cut-over that must
+// precede the Bridge upgrade into a total outage.
+func TestVerifyReservationsActivation_PendingActivationIsNotFatal(t *testing.T) {
+	tests := map[string]struct {
+		blockCounter chain.BlockCounter
+		vaultReader  tbtc.ReservationsActivationVaultReader
+		network      ethereumutil.Network
+	}{
+		"contract not live, activation entry missing": {
+			blockCounter: &startTestBlockCounter{head: 100},
+			vaultReader:  &startTestVaultReader{trusted: false},
+			network:      ethereumutil.Sepolia,
+		},
+		"reservation state unreadable (pre-reservations Bridge)": {
+			blockCounter: &startTestBlockCounter{head: 100},
+			vaultReader:  &startTestVaultReader{err: errors.New("execution reverted")},
+			network:      ethereumutil.Sepolia,
+		},
+		"Bridge proven to predate the reservation upgrade": {
+			blockCounter: &startTestBlockCounter{head: 100},
+			vaultReader: &startTestVaultReader{
+				err: tbtc.ErrReservationsSurfaceUnavailable,
+			},
+			network: ethereumutil.Sepolia,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := verifyReservationsActivation(
+				test.blockCounter,
+				test.vaultReader,
+				test.network,
+			); err != nil {
+				t.Fatalf("expected startup to proceed, got error: [%v]", err)
+			}
+		})
+	}
 }

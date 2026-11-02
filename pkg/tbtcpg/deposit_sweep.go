@@ -172,11 +172,10 @@ func findDeposits(
 	// reservationsActive reports whether reservations were live at the
 	// coordination block for this proposal round, i.e.
 	// tbtc.ReservationsActivationBlock(network) <= coordinationBlock. It
-	// must be derived from that comparison, not from whether
-	// ReservationParameters below happens to succeed - see
+	// must be derived from that comparison, not from whether a chain
+	// reservation call happens to succeed - see
 	// tbtc.ReservationsActivationBlock's doc comment. When false, the
-	// reserved-deposit filter below - including the ReservationParameters
-	// call it depends on - is skipped entirely.
+	// reserved-deposit filter below is skipped entirely.
 	reservationsActive bool,
 ) ([]*Deposit, error) {
 	taskLogger.Infof("reading revealed deposits from chain")
@@ -222,24 +221,6 @@ func findDeposits(
 	// Capture time now for computations.
 	timeNow := time.Now()
 
-	// Determine the reservation vault once, not per deposit, and only
-	// when reservationsActive - see that parameter's doc comment for why
-	// gating on tbtc.ReservationsActivationBlock instead of this call's
-	// success/failure matters. A failure here is a hard error:
-	// reservationsActive already established the feature is live for
-	// this network and block, so a failing call at that point is a
-	// genuine chain problem, not evidence the feature is inactive.
-	var reservationParams *tbtc.ReservationParameters
-	if reservationsActive {
-		reservationParams, err = chain.ReservationParameters()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot get reservation parameters: [%w]",
-				err,
-			)
-		}
-	}
-
 	result := make([]*Deposit, 0, resultSliceCapacity)
 	for _, event := range depositRevealedEvents {
 		if len(result) == cap(result) {
@@ -249,7 +230,16 @@ func findDeposits(
 		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
-		if reservationsActive && depositTargetsReservationVault(event.Vault, reservationParams.ReservationVault) {
+		// Ask the chain for every candidate deposit rather than
+		// pre-filtering on the deposit's revealed vault: a reserved
+		// deposit stays reserved after the reservation vault rotates, so
+		// comparing the revealed vault with the *current* reservation
+		// vault misses exactly the deposits that must not be swept
+		// after a vault rotation. IsReservedDeposit is the predicate
+		// WalletProposalValidator enforces. Skipped entirely when
+		// reservationsActive is false - see that parameter's doc comment
+		// - so a pre-reservations Bridge never receives the call.
+		if reservationsActive {
 			isReserved, err := chain.IsReservedDeposit(depositKey)
 			if err != nil {
 				return nil, fmt.Errorf(
