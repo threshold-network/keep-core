@@ -277,6 +277,22 @@ func (c *reservationFakeClient) setImplementation(
 	).Bytes()
 }
 
+// setSlot registers one storage word of a contract, which is how tests place
+// EIP-1967 implementation, admin and beacon pointers.
+func (c *reservationFakeClient) setSlot(
+	target common.Address,
+	slot common.Hash,
+	value []byte,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.storage[target] == nil {
+		c.storage[target] = make(map[common.Hash][]byte)
+	}
+	c.storage[target][slot] = value
+}
+
 // setStorageError registers the failure a storage read for one slot of one
 // contract produces.
 func (c *reservationFakeClient) setStorageError(
@@ -576,9 +592,17 @@ func (e *jsonRPCCallError) ErrorData() interface{} { return e.data }
 // The bytes around the selector stand for arbitrary dispatcher code, so the
 // classifier cannot be relying on the selector being the whole code.
 func reservationsBuildCode() []byte {
+	return dispatcherEntryCode(reservationBuildSelector)
+}
+
+// dispatcherEntryCode models a solc dispatcher entry: PUSH4 <selector>, EQ,
+// PUSH2 <destination>, JUMPI, in front of a STOP. The PUSH4 opcode is what
+// makes the selector an executable entry point rather than arbitrary bytes.
+func dispatcherEntryCode(selector []byte) []byte {
 	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
-	code = append(code, reservationBuildSelector...)
-	code = append(code, 0x14, 0x61, 0x01, 0x23, 0x57, 0x00)
+	code = append(code, 0x63) // PUSH4
+	code = append(code, selector...)
+	code = append(code, 0x14, 0x61, 0x01, 0x23, 0x57, 0x00) // EQ PUSH2 0x0123 JUMPI STOP
 	return code
 }
 
@@ -591,9 +615,43 @@ func preReservationsCode(t *testing.T) []byte {
 	bridgeABI := parseGenABI(t, tbtcabi.BridgeABI)
 	depositParameters := methodSelector(t, bridgeABI, "depositParameters")
 
+	return dispatcherEntryCode(depositParameters[:])
+}
+
+// pushDataOnlyCode models pre-reservations code that carries the
+// reservations-build selector only inside a PUSH immediate: PUSH5
+// 0x5157ec0a00, POP, STOP. The bytes are present but no call can reach them as
+// a dispatcher entry.
+func pushDataOnlyCode(selector []byte) []byte {
 	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52}
-	code = append(code, depositParameters[:]...)
-	code = append(code, 0x14, 0x61, 0x01, 0x23, 0x57, 0x00)
+	code = append(code, 0x64) // PUSH5
+	code = append(code, selector...)
+	code = append(code, 0x00, 0x50, 0x00) // 0x00 as the fifth operand, POP, STOP
+	return code
+}
+
+// metadataOnlyCode models pre-reservations code that carries the
+// reservations-build selector only inside the CBOR metadata tail solc appends
+// to every deployed contract, with the tail length in the final two bytes. The
+// selector sits in the ipfs hash byte string, where a real metadata blob keeps
+// arbitrary bytes; no call can reach it as a dispatcher entry.
+func metadataOnlyCode(selector []byte) []byte {
+	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x00}
+
+	ipfsHash := make([]byte, 34)
+	copy(ipfsHash[10:], selector)
+
+	tail := []byte{0xa2, 0x64, 'i', 'p', 'f', 's'} // map(2), key "ipfs"
+	tail = append(tail, 0x58, byte(len(ipfsHash))) // bytes(34)
+	tail = append(tail, ipfsHash...)
+	tail = append(tail, 0x64, 's', 'o', 'l', 'c') // key "solc"
+	tail = append(tail, 0x43, 0x00, 0x08, 0x11)   // bytes(3) version
+
+	length := len(tail) + 2
+	code := make([]byte, 0, len(body)+length)
+	code = append(code, body...)
+	code = append(code, tail...)
+	code = append(code, byte(length>>8), byte(length))
 	return code
 }
 
@@ -677,6 +735,91 @@ func TestReservationsVaultTrustedClassifiesReadFailures(t *testing.T) {
 			deploy: func(t *testing.T, client *reservationFakeClient) {
 				client.setCode(bridgeAddress, preReservationsCode(t))
 			},
+		},
+		"pre-reservations deployment: the selector appears only inside PUSH data": {
+			readErr:     emptyRevertErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(
+					bridgeAddress,
+					pushDataOnlyCode(reservationBuildSelector),
+				)
+			},
+		},
+		"pre-reservations deployment: the selector appears only in metadata": {
+			readErr:     emptyRevertErr,
+			expectPreM1: true,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(
+					bridgeAddress,
+					metadataOnlyCode(reservationBuildSelector),
+				)
+			},
+		},
+		"beacon proxy: the implementation resolves through a beacon": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setSlot(
+					bridgeAddress,
+					eip1967BeaconSlot,
+					common.HexToHash(
+						"0x00000000000000000000000000000000000000000000000000000000000000be",
+					).Bytes(),
+				)
+				client.setCode(implementationAddress, reservationsBuildCode())
+			},
+		},
+		"beacon proxy: the beacon slot itself is unreadable": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setStorageError(
+					bridgeAddress, eip1967BeaconSlot, transientErr,
+				)
+			},
+		},
+		"beacon proxy: the beacon slot is not a full word": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setSlot(
+					bridgeAddress, eip1967BeaconSlot, []byte{0x01, 0x02},
+				)
+			},
+		},
+		"proxy carrying an admin but no implementation": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setSlot(
+					bridgeAddress,
+					eip1967AdminSlot,
+					common.HexToHash(
+						"0x00000000000000000000000000000000000000000000000000000000000000ad",
+					).Bytes(),
+				)
+				client.setCode(implementationAddress, reservationsBuildCode())
+			},
+		},
+		"proxy carrying an admin alongside its implementation": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, []byte{0x60, 0x80, 0x60, 0x40})
+				client.setImplementation(bridgeAddress, implementationAddress)
+				client.setSlot(
+					bridgeAddress,
+					eip1967AdminSlot,
+					common.HexToHash(
+						"0x00000000000000000000000000000000000000000000000000000000000000ad",
+					).Bytes(),
+				)
+				client.setCode(
+					implementationAddress,
+					preReservationsCode(t),
+				)
+			},
+			expectPreM1: true,
 		},
 		"unreadable implementation code": {
 			readErr: emptyRevertErr,
@@ -857,23 +1000,45 @@ func TestReservationBuildSelector(t *testing.T) {
 	}
 }
 
-// TestEIP1967ImplementationSlot pins the slot address the classifier reads the
-// implementation pointer from, so a typo cannot silently point every
-// deployment read at some other word (which reads as zero: the classifier
-// would then stop at the proxy, find no selector in proxy code, and report
-// every reservations deployment as pre-reservations).
-func TestEIP1967ImplementationSlot(t *testing.T) {
-	// EIP-1967: bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1).
-	digest := crypto.Keccak256([]byte("eip1967.proxy.implementation"))
-	value := new(big.Int).SetBytes(digest)
-	value.Sub(value, big.NewInt(1))
+// TestEIP1967Slots pins the three proxy slots the classifier reads (EIP-1967:
+// bytes32(uint256(keccak256(name)) - 1)), so a typo cannot silently point a
+// read at some other word. Every one of them reads as zero when wrong, which
+// is the dangerous direction: a wrong implementation slot stops the walk at the
+// proxy and reports a reservations deployment as pre-reservations, and a wrong
+// beacon slot misses a beacon proxy that has no implementation pointer at all.
+func TestEIP1967Slots(t *testing.T) {
+	tests := map[string]struct {
+		name string
+		slot common.Hash
+	}{
+		"implementation": {
+			name: "eip1967.proxy.implementation",
+			slot: eip1967ImplementationSlot,
+		},
+		"admin": {
+			name: "eip1967.proxy.admin",
+			slot: eip1967AdminSlot,
+		},
+		"beacon": {
+			name: "eip1967.proxy.beacon",
+			slot: eip1967BeaconSlot,
+		},
+	}
 
-	expected := common.BytesToHash(value.Bytes())
-	if eip1967ImplementationSlot != expected {
-		t.Fatalf(
-			"implementation slot drift: classifier reads %s, EIP-1967 specifies %s",
-			eip1967ImplementationSlot.Hex(),
-			expected.Hex(),
-		)
+	for slotName, test := range tests {
+		t.Run(slotName, func(t *testing.T) {
+			value := new(big.Int).SetBytes(crypto.Keccak256([]byte(test.name)))
+			value.Sub(value, big.NewInt(1))
+
+			expected := common.BytesToHash(value.Bytes())
+			if test.slot != expected {
+				t.Fatalf(
+					"%s slot drift: classifier reads %s, EIP-1967 specifies %s",
+					slotName,
+					test.slot.Hex(),
+					expected.Hex(),
+				)
+			}
+		})
 	}
 }
