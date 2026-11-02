@@ -192,7 +192,7 @@ jobs:
     # job-level path gate, mirroring btcec-vendor-byte-identity's
     # rationale for not gating by path.
     #
-    # tbtc-v2 ref: pinned to commit e22841459 on the `reservations-upgrade`
+    # tbtc-v2 ref: pinned to commit b7aece4bf on the `reservations-upgrade`
     # integration branch, where the reservation contracts live (they are
     # not on tbtc-v2's `main`). A full commit hash is pinned rather than
     # a branch name because a branch can move after this repo's bindings,
@@ -202,27 +202,15 @@ jobs:
     # provenance note in testdata/walletproposalvalidator/regenerate.sh),
     # so bump both together.
     #
-    # The delta from the previous pin (72b891eec) is eight merges:
-    # tbtc-v2#1189, #1190, #1191, #1192, #1193, #1194, #1195 and
-    # #1196. Contract code changes in that range, and what it does to
-    # the four artifacts this job stages was measured, not assumed:
-    # `Bridge`, `ReservationRouter` and `WalletProposalValidator` compile
-    # to the same ABI and the same executable bytecode (solc's trailing
-    # CBOR metadata removed) as at the previous pin, because the changed
-    # `Reservation`, `ReservationProofs`, `Deposit` and `BridgeState`
-    # code reaches them through linked libraries. `ReservationVault`
-    # keeps its ABI (`tbtcVault()` is now a view that resolves the live
-    # TBTC vault from the TBTC token owner instead of an immutable) but
-    # its executable bytecode changes. No Go binding, vendored fragment
-    # or the vendored harness validator moves with this pin.
-    #
-    # `BridgeGovernance` gains `pendingReservationParametersUpdate()`
-    # in that range. It is not one of the artifacts this job stages and
-    # not one of the module's `required_contracts`, so the gate never
-    # reads it.
+    # The delta from the previous pin (e22841459) is one merge:
+    # tbtc-v2#1199. It adds a test file only
+    # (`solidity/test/deploy/99_deploy_rebate_staking_reservation_implementation.typeid.test.ts`)
+    # and changes no contract, deploy script or tooling, so the four
+    # artifacts this job stages, the Go bindings, the vendored fragments
+    # and the vendored harness validator are unchanged by this pin.
     runs-on: ubuntu-latest
     env:
-      TBTC_V2_REF: e228414592cf8a8cbfc5361fd71621e793acf024
+      TBTC_V2_REF: b7aece4bf06105edc082c5f28e1be91b35dde63a
     steps:
       - uses: actions/checkout@v4
 
