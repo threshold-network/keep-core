@@ -41,7 +41,7 @@ Equality passes the cooldown check; all other request guards still apply.
 The client uses chain time for the same deadline
 (`keep-core:pkg/tbtcpg/reservation_reanchor.go:472`).
 
-Test: `tbtc-v2@b7aece4bf:solidity/test/audit-poc/RequireBoundaryGuards.t.sol:61` ("test_reanchor_allowedExactlyAtCooldownEnd") (revert one second before, success at equality, permissionless caller); the Hardhat negative `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1706` ("rejects when source wallet is Live and call is not privileged") covers the inside-cooldown side; `keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime` (`keep-core@e7f483601:pkg/tbtcpg/reservation_reanchor_custody_test.go:265`). The archived `yarn test:audit-poc` run at the freeze head is green.
+Test: `tbtc-v2@b7aece4bf:solidity/test/audit-poc/RequireBoundaryGuards.t.sol:61` ("test_reanchor_allowedExactlyAtCooldownEnd") (revert one second before, success at equality, permissionless caller); the Hardhat negative `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1706` ("rejects when source wallet is Live and call is not privileged") covers the inside-cooldown side; `keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor_custody_test.go:265`). The archived `yarn test:audit-poc` run at the freeze head is green.
 
 Status: `holds`
 

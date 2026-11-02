@@ -170,7 +170,7 @@ Four invariants are enforced by construction and asserted by tests:
 moving-funds/moved-funds-sweep task list only when `reservationsEnabled` is true
 (`pkg/tbtcpg/tbtcpg.go:90-127`):
 
-- **`ReservationAcceptanceTask`** (`pkg/tbtcpg/reservation_acceptance.go`) consumes
+- **`ReservationAcceptanceTask`** (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go`) consumes
   the `Pending` `Acceptance` actions that the depositor created on-chain: it
   selects deposits whose current action is a `Pending` Acceptance (a deposit
   with no pending action is skipped, because its owner has not requested
@@ -193,7 +193,7 @@ moving-funds/moved-funds-sweep task list only when `reservationsEnabled` is true
   dispatched as a `ReservationAnchorProposal`. The task itself never calls
   `RequestReservationAcceptance` from the operator account: only the
   depositor may create the action on-chain, so the task merely consumes it.
-- **`ReservationReanchorTask`** (`pkg/tbtcpg/reservation_reanchor.go`) fires once a wallet enters
+- **`ReservationReanchorTask`** (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go`) fires once a wallet enters
   `StateMovingFunds`: for each reservation the wallet still custodies, it submits
   `RequestReservationReanchor` on the Bridge, which returns the transaction hash.
   The task records each submission in an in-memory per-reservation in-flight
@@ -225,12 +225,12 @@ moving-funds/moved-funds-sweep task list only when `reservationsEnabled` is true
   `Closing` source wallet exactly as readily as a `MovingFunds` one
   (`tbtc-v2@72b891eec:Reservation.sol:722-858`), and this task's own trigger accepts both states:
   it proceeds when the wallet is `StateMovingFunds` or `StateClosing`
-  (`keep-core@e7f483601:pkg/tbtcpg/reservation_reanchor.go:175-176`; the M1 pinned tip used `:172-173`).
+  (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:175-176`; the M1 pinned tip used `:172-173`).
   A `Closing` wallet still custodying reservations therefore has an automated
   re-anchor caller, and no manual, permissionless call is required (§6.3). The
   below-dust notification is narrower than the trigger: it fires only for a
   `StateMovingFunds` wallet, because a `Closing` wallet is already past the
-  moving-funds process (`keep-core@e7f483601:pkg/tbtcpg/reservation_reanchor.go:199`).
+  moving-funds process (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:199`).
 
 `pkg/tbtc/coordination.go` adds `ActionReservationAnchor`/`ActionReservationReanchor` to every
 wallet's per-window action checklist, unconditionally, once the coordination block reaches a
@@ -244,7 +244,7 @@ protocol fault.
 ### 3.2 Wallet-side execution
 
 A proposal that survives `WalletProposalValidator`'s checks is dispatched as a `walletAction`:
-`reservationAnchorAction`/`reservationReanchorAction` (`pkg/tbtc/reservation.go`) assemble the
+`reservationAnchorAction`/`reservationReanchorAction` (`keep-core@96530a787:pkg/tbtc/reservation.go`) assemble the
 1-input-1-output Bitcoin transaction (`AssembleReservationAnchorTransaction` /
 `AssembleReservationReanchorTransaction`), drive the threshold signing executor, broadcast it to
 Bitcoin, and monitor for confirmation/replacement.
@@ -276,7 +276,7 @@ ones the loop drops.
 ### 3.4 Watchers
 
 Three watchers, wired together by `spv.WireReservationWatchers`
-(`pkg/maintainer/spv/reservation_wiring.go`):
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go`):
 
 | Watcher | Watches | Calls |
 |---|---|---|
@@ -301,7 +301,7 @@ considered overdue as soon as `now >= timeoutAt` (the watcher skips it only whil
  log line; `reservations-epic` implements it as the counter
  `spv_reservation_watcher_deaths_total`, wired into both the client and
  maintainer watcher-startup paths; the recorder tolerates a typed-nil
- metrics recorder (`cmd/start.go` normalizes the `*clientinfo.PerformanceMetrics`
+ metrics recorder (`keep-core@96530a787:cmd/start.go` normalizes the `*clientinfo.PerformanceMetrics`
  pointer to a true nil interface before the call, and
  `recordReservationWatcherDeath` treats a typed-nil value as a disabled
  recorder), so a disabled client-info pipeline cannot panic the watcher
@@ -317,8 +317,8 @@ block when it falls within that window. The network is threaded through
 `WireReservationWatchers` parameter in the client.
 
 None of the three watchers extends to a `Closing` wallet: the stranding watcher's only trigger is
-`OnWalletClosed` (plus the equivalent startup/recheck scans in `reservation_wiring.go` and
-`reservation_action_timeout_watch.go`), so it never observes a `Closing` wallet crossing
+`OnWalletClosed` (plus the equivalent startup/recheck scans in `keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go` and
+`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go`), so it never observes a `Closing` wallet crossing
 `dissolutionEligibleAt`. The re-anchor side has the same shape: `ReservationReanchorTask` (§3.1)
 triggers only on `StateMovingFunds`, never `StateClosing`, even though `Reservation.sol` accepts a
 permissionless call for either source state (§6.3). Both gaps have a safe on-chain backstop —
@@ -338,7 +338,7 @@ request) — are exempt from the cap. Neither gap is launch-blocking, but neithe
 ### 3.5 Config flags
 
 - `Tbtc.ReservationsEnabled` (client `start` process) gates reservation proposal generation,
-  reservation watcher wiring from `cmd/start.go`, and reservation metrics registration. It does
+  reservation watcher wiring from `keep-core@96530a787:cmd/start.go`, and reservation metrics registration. It does
   **not** gate reservation action *execution*: once a network's activation block is reached, every
   wallet signer validates, co-signs, and broadcasts reservation proposals regardless of this flag
   (§4).

@@ -158,21 +158,21 @@ including #4274/#4276-#4280/#4324).
     `TestAssembleReservationTransactions_HappyPathShape`,
     `TestReservationAnchorAction_Execute`,
     `TestReservationReanchorAction_Execute`.
-  - `pkg/tbtcpg/reservation_acceptance_test.go` and
-    `reservation_reanchor_test.go` (task-level tests against the real
+  - `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance_test.go` and
+    `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor_test.go` (task-level tests against the real
     `newLocalBitcoinChain()` harness, plus dedicated metrics test files) —
     new since the 2026-08-19 survey, landed with the executor in #4274.
   - `pkg/maintainer/spv/reservation_acceptance_proof_test.go`,
     `reservation_reanchor_proof_test.go`,
-    `reservation_action_timeout_watch_test.go`,
+    `keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch_test.go`,
     `reservation_stale_deposit_watch_test.go`,
-    `reservation_stranding_watch_test.go`, `reservation_proof_loop_test.go`,
-    and `reservation_wiring_test.go` — also new since 2026-08-19, landed
+    `reservation_stranding_watch_test.go`, `keep-core@96530a787:pkg/maintainer/spv/reservation_proof_loop_test.go`,
+    and `keep-core@96530a787:pkg/maintainer/spv/reservation_wiring_test.go` — also new since 2026-08-19, landed
     with the watcher wiring in #4276.
-  - `pkg/chain/ethereum/tbtc_test.go` no longer asserts `"not supported
+  - `keep-core@96530a787:pkg/chain/ethereum/tbtc_test.go` no longer asserts `"not supported
     yet"` anywhere — the 5 previously-stubbed Ethereum methods the
     2026-08-19 survey found are now real bindings (20+ Reservation methods
-    in `pkg/chain/ethereum/tbtc.go`, with real ABI encode/decode helpers),
+    in `keep-core@96530a787:pkg/chain/ethereum/tbtc.go`, with real ABI encode/decode helpers),
     landed in #4274. `pkg/clientinfo/performance_test.go` still adds
     reservation action types to an expected-metrics list, unchanged.
 - **The real gap — closed, not open, as of #4274/#4278/#4279.** The
@@ -198,12 +198,12 @@ including #4274/#4276-#4280/#4324).
 The deferred direct-validator-test row (`m1-keep-core-readiness/01-gap-analysis.md`
 Minor row "no direct unit tests"; `03-delta-changes.md` S8 row, Story S8) is closed
 by a **go-ethereum in-memory EVM validator
-harness** (`pkg/chain/ethereum/tbtc_validator_harness_test.go`; Phase 2 work,
+harness** (`keep-core@96530a787:pkg/chain/ethereum/tbtc_validator_harness_test.go`; Phase 2 work,
 dedicated agent, I-7): it deploys
 the real, unmodified `WalletProposalValidator` into an in-memory go-ethereum
 EVM (`core/vm/runtime` over a single shared `StateDB`) backed by a stub
 Bridge, so the two real chain-calling wrappers in
-`pkg/chain/ethereum/tbtc.go` (contract call, error wrap, `valid == false`
+`keep-core@96530a787:pkg/chain/ethereum/tbtc.go` (contract call, error wrap, `valid == false`
 branch, and revert-reason propagation) get direct tests for the first time.
 The `core/vm/runtime` backend was chosen because `ethclient/simulated`
 could not be linked by the test binary on Go 1.24: it pulls in
@@ -254,7 +254,7 @@ does, or the test proves nothing about ordering.
    DONE (keep-core #4368). The `client-go-race` job now runs
    `go test -race -count=1 -timeout 30m` over `./pkg/tbtcpg/...`,
    `./pkg/maintainer/spv/...` and `./pkg/tbtc/...`
-   (`keep-core@e7f483601:.github/workflows/client.yml:632-667`), which is
+   (`keep-core@96530a787:.github/workflows/client.yml:619-654`), which is
    the scope the `keep-core.go.race` coverage freeze bar names. It is a
    separate job rather than a `-race` flag on the sharded suite, because the
    race detector multiplies the suite's runtime and the bar's scope is these

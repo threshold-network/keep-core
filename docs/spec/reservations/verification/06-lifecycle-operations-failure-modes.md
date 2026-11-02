@@ -70,7 +70,7 @@ affected positions (stranded); custodian operators are slashed.
 Automatic mitigation: the re-anchor task retries every window and
 skips filled targets to the next candidate
 (`keep-core` `TestReservationReanchorTask_CapRevertLeadsToNextCandidate`,
-`pkg/tbtcpg/reservation_reanchor_test.go:996`, at `f99ef96e3`). At
+`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor_test.go:1006`, at `f99ef96e3`). At
 `d40f6aadc`, when a fresh request carries a source-wallet member proof
 (`keep-core@d40f6aadc:pkg/tbtcpg/reservation_reanchor.go:262-290`) and no
 candidate has headroom, the task falls back to the least-loaded eligible

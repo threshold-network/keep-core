@@ -189,9 +189,9 @@ Closing check read dissolution eligibility only
 `:282-291`), so an early notification reverted and waited for a later pass.
 keep-core #4365, in `4ced1c839`, repairs both halves: the watcher dispatches all
 four admissible states
-(`keep-core@e7f483601:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`)
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`)
 and holds a `Closing` wallet until `closingStartedAt + walletClosingPeriod`
-(`keep-core@e7f483601:pkg/maintainer/spv/reservation_stranding_watch.go:379-392`).
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:379-392`).
 
 ### VF-11: the proven-anchor ledger
 
@@ -227,7 +227,7 @@ The SDK assembles the proof at `txProofDifficultyFactor()`
 test `typescript/test/services/reservations.test.ts:1017`).
 The generated keep-core binding carries the same four arguments and the
 selector `0x19821f16`
-(`keep-core@e7f483601:pkg/chain/ethereum/tbtc/gen/abi/ReservationRouter.go:895-911`);
+(`keep-core@96530a787:pkg/chain/ethereum/tbtc/gen/abi/ReservationRouter.go:895-911`);
 no production keep-core caller sends it, and the depositor is the only
 authorized caller (`msg.sender == deposit.depositor`).
 The proof is required at acceptance, not at reveal, so it does not by itself

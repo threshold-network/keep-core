@@ -31,7 +31,7 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
   settled by the same Bitcoin transaction, the generation the maintainer
   proves is the newest `Pending` one, which the client sorts first, submits
   alone for the key and claims on success
-  (`keep-core@e7f483601:pkg/maintainer/spv/reservation_proof_loop.go:875-888`,
+  (`keep-core@96530a787:pkg/maintainer/spv/reservation_proof_loop.go:875-888`,
   `:1193-1195`, `:1275-1277`), and the older `TimedOut` generation that this
   settlement leaves behind can then never settle, because the position's
   anchor has moved away from the source anchor that generation recorded
@@ -127,7 +127,7 @@ taken on 2026-10-29 and the code does not change.
 - **Client check on a Closing wallet.** The keep-core stranding watcher gates a
   `Closing` wallet on both conditions. The dispatch sets the
   dissolution-eligible requirement for `Live` and `Closing`
-  (`keep-core@e7f483601:pkg/maintainer/spv/reservation_stranding_watch.go:232-234`),
+  (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:232-234`),
   the loop compares the chain head with `DissolutionEligibleAt` (`:356-368`), and
   a `Closing` wallet additionally has to be past
   `closingStartedAt + walletClosingPeriod` (`:379-392`), so the client no longer
@@ -204,7 +204,7 @@ taken on 2026-10-29 and the code does not change.
   This is a deployment requirement, not an unconditional contract invariant.
 - **Why.** Prevents activation before clients can coordinate signed anchors.
   It does not replace vault-credit provenance validation or guarantee SPV availability.
-- **Test.** `TestReservationsActivationBlock_SanityCheck` (`keep-core@e7f483601:pkg/tbtc/coordination_test.go:1667`) pins that `Mainnet` and `Unknown` have no entry and therefore never activate; lab scenario H-1 `resv-activation-order` PASS (7,191 s, run `20261029t204323z-piotrroslani-b12c`) gates the deploy-order half, reading the vault-trust event block against B and the head before it.
+- **Test.** `TestReservationsActivationBlock_SanityCheck` (`keep-core@96530a787:pkg/tbtc/coordination_test.go:1667`) pins that `Mainnet` and `Unknown` have no entry and therefore never activate; lab scenario H-1 `resv-activation-order` PASS (7,191 s, run `20261029t204323z-piotrroslani-b12c`) gates the deploy-order half, reading the vault-trust event block against B and the head before it.
 - **Status.** `holds` for the client lookup behavior and the deploy-order gate as the lab scenario exercises it. The residual is that the activation block B is still unchosen, so the ceremony gate ran with a lab-chosen B.
 - **Outstanding prerequisite (owner undecided, due before activation).** The
   activation block B is not yet chosen, `feeReserveTarget` is not yet seeded, and the

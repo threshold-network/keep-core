@@ -45,7 +45,7 @@ rotations."* That sentence is present unchanged both in the M1 code that ships
 full-feature stack this document otherwise analyzes (`Reservation.sol:897-1014`,
 `feat/utxo-reservation-partial-redemption` tip) — the line numbers differ only because unrelated code
 earlier in the file differs between the two refs. The identical intent is also documented client-side,
-in keep-core's `pkg/tbtc/reservation.go:372-373` (`AssembleReservationReanchorTransaction`: "Used
+in keep-core's `keep-core@96530a787:pkg/tbtc/reservation.go:396-397` (`AssembleReservationReanchorTransaction`: "Used
 during wallet migration so reservations never pin retiring wallets."). Either way, the mechanism moves
 a live reservation's anchor from a `MovingFunds` source wallet to any other `Live` wallet,
 permissionlessly. The remaining question is whether "any other `Live` wallet" can be a FROST wallet as
@@ -126,7 +126,7 @@ small, precise patch, not a data-model redesign.
 
 ### 2.3 Does keep-core's reservation wallet-action code need FROST-specific work?
 
-**Yes, real work.** Reservation transaction assembly in `keep-core` (`pkg/tbtc/reservation.go`,
+**Yes, real work.** Reservation transaction assembly in `keep-core` (`keep-core@96530a787:pkg/tbtc/reservation.go`,
 exercised by
 `TestAssembleReservedRedemptionTransaction`/`TestAssembleReservationDissolutionTransaction`) calls
 `pkg/bitcoin`'s `TransactionBuilder.AddPublicKeyHashInput` (P2WPKH-specific) and an ECDSA-specific

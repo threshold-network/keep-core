@@ -3,7 +3,7 @@
 Status: implemented in the M1 code (`reservations-upgrade` @ `9f8f5ef1`) — not yet merged to
 `dev`/`main`, not audited, not deployed. This document verifies `notifyReservationStranded` and
 its accounting (`strandReservation`, `releaseAcceptanceCapacity`) against that code, plus
-`pkg/maintainer/spv/reservation_stranding_watch.go` in keep-core (`reservations-epic` @
+`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go` in keep-core (`reservations-epic` @
 `f66f11240`) for the executor side. Under the Decision in `README.md` (2026-08-21) it is the
 reservation feature's terminal path and the **accepted** fallback (terminal except that a
 settleable proof of a timed-out re-anchor restores the position, §1) — the emergency-exit
@@ -194,7 +194,7 @@ silently decided.
 `../feature-spec.md`'s executor-monitoring bullets (lines ~928-941) already assign the duty to
 watch `Terminated` wallets still custodying un-stranded reservations and call
 `notifyReservationStranded` for each. keep-core already implements it:
-`pkg/maintainer/spv/reservation_stranding_watch.go`'s `reservationStrandingWatcher`, wired to
+`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go`'s `reservationStrandingWatcher`, wired to
 wallet close/termination events, walks a wallet's custodied reservations
 (`checkReservationStrandingForWallet`) and forwards a stranding notification for every one still
 `Active`, retrying transient RPC failures up to three times.
@@ -204,7 +204,7 @@ gap for `Closing`-past-`dissolutionEligibleAt` wallets" row) is closed in the cl
 #4365.** The watcher dispatches by wallet state: `Closed` and `Terminated` notify outright, a `Closing`
 wallet notifies once `now >= reservation.dissolutionEligibleAt` and the closing period has ended, and a
 `Live` wallet notifies once `now >= reservation.dissolutionEligibleAt`
-(`pkg/maintainer/spv/reservation_stranding_watch.go:155-176`, gates at `:356-366` and `:380-390`).
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-176`, gates at `:356-366` and `:380-390`).
 What remains is reach rather than a missing branch: no chain event marks a term's expiry, so the `Live`
 form runs on the startup catch-up scan and on the action-timeout watcher's recheck queue, and the
 permissionless calls (`notifyReservationStranded`, `requestReservationReanchor`) stay the backstop for
@@ -216,7 +216,7 @@ implementation.
 `../feature-spec.md` already specifies exactly this timing: "On `Live -> MovingFunds`, re-anchor
 every open reservation to a Live target... it must initiate re-anchor promptly on
 `WalletMovingFunds(walletPubKeyHash)`, not wait for an expiry signal" (lines ~919-927). keep-core
-already implements it: `pkg/tbtcpg/reservation_reanchor.go`'s `ReservationReanchorTask` is
+already implements it: `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go`'s `ReservationReanchorTask` is
 triggered once a wallet enters `StateMovingFunds` (or falls below the moving-funds dust
 threshold) and, for every reservation the wallet still custodies, picks a Live target and
 assembles a re-anchor transaction. There is no remaining gap; this subsection is retained only as

@@ -18,7 +18,7 @@ read it and which of those m1 deletes.
 | `vault.md` | `ReservationVault.sol` | Its "M1 vault surface" section: the 7 entry points + constructor M1 actually ships (`reservations-upgrade`@`9f8f5ef1`), with access/classification and the in-kind fee economy as implemented. Everything below that section is the pre-Option-B, pre-minimisation full-vault design (662 lines), kept as the reference for M2's new vault deployment, not a description of M1 |
 | `touchpoints.md` | Non-reservation Bridge files | The integration seams a rewrite loses most easily, because they do not live in reservation files |
 | `pr-map.md` | Measured git state of the eight PRs | Per-PR diffstat, the three branches behind their bases, and the `#1102` fold's actual reach |
-| `keep-core.md` | keep-core PR #4238 (superseded; see #4282 / `reservations-epic`) | What PR #4238's own branch has in isolation. For the executor #4238 lacked, see the fragment's Status vs M1 code banner: it was built on `reservations-epic` (`pkg/tbtcpg/reservation_{acceptance,reanchor}.go`, `pkg/chain/ethereum/tbtc.go`, `pkg/maintainer/spv/reservation_*.go`), not on #4238's own branch |
+| `keep-core.md` | keep-core PR #4238 (superseded; see #4282 / `reservations-epic`) | What PR #4238's own branch has in isolation. For the executor #4238 lacked, see the fragment's Status vs M1 code banner: it was built on `reservations-epic` (`pkg/tbtcpg/reservation_{acceptance,reanchor}.go`, `keep-core@96530a787:pkg/chain/ethereum/tbtc.go`, `pkg/maintainer/spv/reservation_*.go`), not on #4238's own branch |
 
 ## Provenance and caveats
 

@@ -118,7 +118,7 @@ Wallet operator watchers remain in place.
 An independent proof submitter still needs SPV-maintainer authorization.
 Permissionless cleanup transactions need a funded caller, not a wallet signing quorum.
 
-The published head `keep-core@e7f483601` carries `keep-core@e7f483601:reservation_keeper_observer.go`, `keep-core@e7f483601:reservation_keeper_risk.go` and `reservation_params_feasibility.go`, so the D28 watchdogs are in the public release.
+The published head `keep-core@e7f483601` carries `keep-core@96530a787:reservation_keeper_observer.go`, `keep-core@96530a787:reservation_keeper_risk.go` and `reservation_params_feasibility.go`, so the D28 watchdogs are in the public release.
 
 At keep-core `9c4e1b221`, enabling `Maintainer.Spv.ReservationProofsEnabled` starts the existing proof loops and watcher wiring
 (`keep-core@9c4e1b221:pkg/maintainer/spv/spv.go:86-135`).

@@ -1002,12 +1002,12 @@ work landed separately: `#4274` "feat(tbtc): wire reservation executors and
 watchers" **MERGED 2026-09-03** into `reservations-epic`, followed by
 `#4276`, `#4277`, `#4278`, `#4279`, `#4280`, `#4284` (all merged 2026-09-03)
 and `#4324` (merged 2026-09-28). At `reservations-epic` @ `f66f11240`
-keep-core **has a real executor**: `pkg/tbtcpg/reservation_acceptance.go`
-and `reservation_reanchor.go` (coordination-proposal tasks with wallet-cap
+keep-core **has a real executor**: `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go`
+and `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go` (coordination-proposal tasks with wallet-cap
 validation), `pkg/maintainer/spv/reservation_proof_loop.go` +
-`reservation_wiring.go` + `reservation_action_timeout_watch.go` +
-`reservation_stranding_watch.go` (real SPV proof submission and
-monitoring), real Ethereum bindings in `pkg/chain/ethereum/tbtc.go`
+`keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go` + `keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go` +
+`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go` (real SPV proof submission and
+monitoring), real Ethereum bindings in `keep-core@96530a787:pkg/chain/ethereum/tbtc.go`
 (`GetReservation`/`GetReservationAction`/`ReservationParameters` call the
 `reservationRouter` abigen binding, not error stubs), and real protobuf
 messages (`ReservationAnchorProposal`, `ReservationReanchorProposal` in
@@ -1024,7 +1024,7 @@ was previously wrong in a way that concealed the two-phase constructs —
 see `milestone-inventory.md` C-8). `#4238` was a standalone draft, gated on
 the tbtc-v2 Bridge ABI being published, with Ethereum bindings and
 coordination-executor wiring deliberately deferred to a follow-up:
-- `pkg/tbtc/reservation.go` (new, 729 lines): `Reservation` /
+- `keep-core@96530a787:pkg/tbtc/reservation.go` (new, 729 lines): `Reservation` /
   `ReservationStatus` / `ReservationParameters` types; four
   `CoordinationProposal` implementations — `ReservationAnchorProposal`
   (`:181`), `ReservedRedemptionProposal` (`:233`),
@@ -1038,14 +1038,14 @@ coordination-executor wiring deliberately deferred to a follow-up:
   `ActionReservedRedemption` (7), `ActionReservationReanchor` (8),
   `ActionReservationDissolution` (9) — appended, not inserted, to preserve
   serialized compatibility (positional decoding at `:56-63`).
-- `pkg/tbtc/chain.go`: seven new `TbtcChain` interface methods —
+- `keep-core@96530a787:pkg/tbtc/chain.go`: seven new `TbtcChain` interface methods —
   `GetReservation` (`:432`), `GetReservationAction(reservationKey,
   requestNonce)` (`:437`), `ReservationParameters` (`:444`),
   `ValidateReservationAnchorProposal` (`:449`),
   `ValidateReservedRedemptionProposal` (`:461`),
   `ValidateReservationReanchorProposal` (`:469`),
   `ValidateReservationDissolutionProposal` (`:477`), all seven then
-  **stubbed** in `pkg/chain/ethereum/tbtc.go`, each returning a descriptive
+  **stubbed** in `keep-core@96530a787:pkg/chain/ethereum/tbtc.go`, each returning a descriptive
   error (`:2415-2499`) — this is the state `#4274` replaced with real
   bindings (above).
 - Modeled #1088-era transaction shapes only: whole redemption, no partial
@@ -1370,10 +1370,10 @@ updated 2026-09-28):
    required "a second, currently-unwritten keep-core PR." That PR was
    written and merged: `#4274` "wire reservation executors and watchers"
    **MERGED 2026-09-03** into `reservations-epic`, adding a real
-   coordination executor (`pkg/tbtcpg/reservation_acceptance.go`,
-   `reservation_reanchor.go`), real SPV proof-submission/monitoring loops
+   coordination executor (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go`,
+   `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go`), real SPV proof-submission/monitoring loops
    (`pkg/maintainer/spv/reservation_*`), real Ethereum bindings
-   (`pkg/chain/ethereum/tbtc.go`), and real protobuf messages
+   (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go`), and real protobuf messages
    (`pkg/tbtc/gen/pb/message.proto`) — none of it stubbed. Its transaction
    shapes still predate the renewal/backing/partial-redemption redesigns
    (this doc's full-feature scope), which remains a genuine gap. See §13

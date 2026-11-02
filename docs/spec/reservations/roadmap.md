@@ -251,7 +251,7 @@ in question.
 ### 0.8 A retiring wallet's last exit — automated by keep-core's re-anchor executor
 
 **Current answer:** the below-dust report is automated, not a manual duty.
-keep-core's `ReservationReanchorTask` (`pkg/tbtcpg/reservation_reanchor.go`,
+keep-core's `ReservationReanchorTask` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go`,
 `reservations-epic` @ `f66f11240`) already calls
 `notifyMovingFundsBelowDustIfEligible` once a drained `MovingFunds` wallet's
 reservation count reaches zero, which submits `NotifyMovingFundsBelowDust`
@@ -315,7 +315,7 @@ Two consequences:
    a retiring wallet, something must call `notifyMovingFundsBelowDust` or
    the wallet sits in `MovingFunds` indefinitely - not blocked, just
    unattended. `ReservationReanchorTask.Run` now does this itself
-   (`pkg/tbtcpg/reservation_reanchor.go:664-720`) immediately after the
+   (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:664-720`) immediately after the
    count-draining re-anchor that made it possible, so it needs no separate
    duty-list entry (§5 item 5).
 2. **The genuine deadlock is saturation-specific.** If no free slot exists,
@@ -743,7 +743,7 @@ point to leave unwired and no slashing vector to arm (§0.6).
 4. **Parameter and activation wiring** — §1.4 values, the deploy-inert
    switch, and governance runbook steps.
 5. **Executor duty: re-anchor on rotation — already implemented, not a
-   remaining gap.** `pkg/tbtcpg/reservation_reanchor.go`'s
+   remaining gap.** `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go`'s
    `ReservationReanchorTask` (keep-core `reservations-epic` @ `f66f11240`,
    wired by `#4274`, merged 2026-09-03) drains a `MovingFunds` wallet's
    reservations via re-anchor proposals, prompted by the wallet entering
