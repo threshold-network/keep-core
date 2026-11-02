@@ -1,0 +1,2175 @@
+INFO:Slither-Mutate:Starting mutation campaign in contracts/vault/ReservationVault.sol
+INFO:Slither-Mutate:Preparing to mutate contracts:
+- ReservationVault
+INFO:Slither-Mutate:Timing tests..
+INFO:Slither-Mutate:Test suite passes in 53 seconds, commencing mutation campaign with a timeout of 160 seconds
+
+ERROR:ContractSolcParsing:Impossible to generate IR for BitcoinTx.extractPubKeyHash (contracts/bridge/BitcoinTx.sol#337-384):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Deposit._revealDeposit (contracts/bridge/Deposit.sol#198-421):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.submitFraudChallenge (contracts/bridge/Fraud.sol#134-199):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.resolveFraudChallenge (contracts/bridge/Fraud.sol#324-347):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.notifyFraudChallengeDefeatTimeout (contracts/bridge/Fraud.sol#383-436):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Fraud.extractSighashType (contracts/bridge/Fraud.sol#568-574):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for Redemption.requestRedemption (contracts/bridge/Redemption.sol#483-639):
+ 'NoneType' object has no attribute 'parameters'
+INFO:Slither-Mutate:Mutating contract ReservationVault
+INFO:Slither-Mutate:Targeting functions: ['receiveBalanceIncrease', 'financeInKindFee', 'repayInKindFeeDebt', 'updateFeeReserveTarget', 'sweepFees', 'updateInitiationFee', 'receiveBalanceApproval', '_burnFromReserve']
+INFO:Slither-Mutate:Including modifiers: ['onlyOwner', 'onlyBank']
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 103: 'require(msg.sender == address(bank), "Caller is not the Bank")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.11s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/vault/ReservationVault.sol:164:25:
+stderr:     |
+stderr: 164 |     ) external override revert() {
+stderr:     |                         ^^^^^^
+INFO:Slither-Mutate:[RR] Line 164: 'onlyBank' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.56s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:172:13:
+stderr:     |
+stderr: 172 |             totalSat += depositedAmounts[i];
+stderr:     |             ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:177:49:
+stderr:     |
+stderr: 177 |         bank.approveBalance(address(tbtcVault), totalSat);
+stderr:     |                                                 ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:178:24:
+stderr:     |
+stderr: 178 |         tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER);
+stderr:     |                        ^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 170: 'uint256 totalSat = 0' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 83.55ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ';' but got identifier
+stderr:    --> contracts/vault/ReservationVault.sol:175:9:
+stderr:     |
+stderr: 175 |         bank.approveBalance(address(tbtcVault), totalSat);
+stderr:     |         ^^^^
+INFO:Slither-Mutate:[RR] Line 171: 'for (uint256 i = 0; i < depositedAmounts.length; i++) {
+            totalSat += depositedAmounts[i];
+        }' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.51s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:171:24:
+stderr:     |
+stderr: 171 |         for (revert(); i < depositedAmounts.length; i++) {
+stderr:     |                        ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:171:53:
+stderr:     |
+stderr: 171 |         for (revert(); i < depositedAmounts.length; i++) {
+stderr:     |                                                     ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:172:42:
+stderr:     |
+stderr: 172 |             totalSat += depositedAmounts[i];
+stderr:     |                                          ^
+INFO:Slither-Mutate:[RR] Line 171: 'uint256 i = 0' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 201.37ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7407): Type tuple() is not implicitly convertible to expected type bool.
+stderr:    --> contracts/vault/ReservationVault.sol:171:29:
+stderr:     |
+stderr: 171 |         for (uint256 i = 0; revert(); i++) {
+stderr:     |                             ^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 171: 'i < depositedAmounts.length' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 171: 'i++' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 172: 'totalSat += depositedAmounts[i]' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 177: 'bank.approveBalance(address(tbtcVault), totalSat)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 178: 'tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 83.47ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ';' but got '}'
+stderr:    --> contracts/vault/ReservationVault.sol:185:5:
+stderr:     |
+stderr: 185 |     }
+stderr:     |     ^
+INFO:Slither-Mutate:[RR] Line 180: 'for (uint256 i = 0; i < depositors.length; i++) {
+            uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER;
+            uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS;
+
+            IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee);
+
+            // slither-disable-next-line reentrancy-events
+            emit ReservationCreditProcessed(
+                depositors[i],
+                depositedAmounts[i],
+                fee
+            );
+        }' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.04s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:180:24:
+stderr:     |
+stderr: 180 |         for (revert(); i < depositors.length; i++) {
+stderr:     |                        ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:180:47:
+stderr:     |
+stderr: 180 |         for (revert(); i < depositors.length; i++) {
+stderr:     |                                               ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:181:50:
+stderr:     |
+stderr: 181 |             uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER;
+stderr:     |                                                  ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:184:55:
+stderr:     |
+stderr: 184 |             IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee);
+stderr:     |                                                       ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:188:28:
+stderr:     |
+stderr: 188 |                 depositors[i],
+stderr:     |                            ^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:189:34:
+stderr:     |
+stderr: 189 |                 depositedAmounts[i],
+stderr:     |                                  ^
+INFO:Slither-Mutate:[RR] Line 180: 'uint256 i = 0' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 212.09ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7407): Type tuple() is not implicitly convertible to expected type bool.
+stderr:    --> contracts/vault/ReservationVault.sol:180:29:
+stderr:     |
+stderr: 180 |         for (uint256 i = 0; revert(); i++) {
+stderr:     |                             ^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 180: 'i < depositors.length' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 180: 'i++' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.19s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:182:28:
+stderr:     |
+stderr: 182 |             uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS;
+stderr:     |                            ^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:184:59:
+stderr:     |
+stderr: 184 |             IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee);
+stderr:     |                                                           ^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 181: 'uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.03s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:184:71:
+stderr:     |
+stderr: 184 |             IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee);
+stderr:     |                                                                       ^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:190:17:
+stderr:     |
+stderr: 190 |                 fee
+stderr:     |                 ^^^
+INFO:Slither-Mutate:[RR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 184: 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 187: 'emit ReservationCreditProcessed(
+                depositors[i],
+                depositedAmounts[i],
+                fee
+            )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 216: 'require(msg.sender == address(bridge), "Caller is not the Bridge")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 69.04ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ';' but got '}'
+stderr:    --> contracts/vault/ReservationVault.sol:220:9:
+stderr:     |
+stderr: 220 |         }
+stderr:     |         ^
+INFO:Slither-Mutate:[RR] Line 219: 'return;' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.14s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:224:40:
+stderr:     |
+stderr: 224 |         uint64 shortfallSat = feeSat - coverableSat;
+stderr:     |                                        ^^^^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 222: 'uint64 coverableSat = _burnFromReserve(feeSat)' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.07s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:225:13:
+stderr:     |
+stderr: 225 |         if (shortfallSat > 0) {
+stderr:     |             ^^^^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:229:33:
+stderr:     |
+stderr: 229 |             inKindFeeDebtSat += shortfallSat;
+stderr:     |                                 ^^^^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:233:40:
+stderr:     |
+stderr: 233 |         emit InKindFeeFinanced(feeSat, shortfallSat);
+stderr:     |                                        ^^^^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 224: 'uint64 shortfallSat = feeSat - coverableSat' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 229: 'inKindFeeDebtSat += shortfallSat' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 233: 'emit InKindFeeFinanced(feeSat, shortfallSat)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.32s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:247:37:
+stderr:     |
+stderr: 247 |         uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER;
+stderr:     |                                     ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:255:30:
+stderr:     |
+stderr: 255 |         bank.decreaseBalance(repaySat);
+stderr:     |                              ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:260:29:
+stderr:     |
+stderr: 260 |         inKindFeeDebtSat -= repaySat;
+stderr:     |                             ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:263:46:
+stderr:     |
+stderr: 263 |         emit InKindFeeDebtRepaid(msg.sender, repaySat);
+stderr:     |                                              ^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 245: 'uint64 repaySat = uint64(
+            Math.min(uint256(amountSat), uint256(inKindFeeDebtSat))
+        )' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.17s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:253:13:
+stderr:     |
+stderr: 253 |             repayTbtc
+stderr:     |             ^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:255:69:
+stderr:     |
+stderr: 255 |         IERC20(tbtcToken).safeIncreaseAllowance(address(tbtcVault), repayTbtc);
+stderr:     |                                                                     ^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:256:26:
+stderr:     |
+stderr: 256 |         tbtcVault.unmint(repayTbtc);
+stderr:     |                          ^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 249: 'uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 250: 'IERC20(tbtcToken).safeTransferFrom(
+            msg.sender,
+            address(this),
+            repayTbtc
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 255: 'IERC20(tbtcToken).safeIncreaseAllowance(address(tbtcVault), repayTbtc)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 256: 'tbtcVault.unmint(repayTbtc)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 257: 'bank.decreaseBalance(repaySat)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 262: 'inKindFeeDebtSat -= repaySat' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 265: 'emit InKindFeeDebtRepaid(msg.sender, repaySat)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.27s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/vault/ReservationVault.sol:280:9:
+stderr:     |
+stderr: 280 |         revert()
+stderr:     |         ^^^^^^
+INFO:Slither-Mutate:[RR] Line 280: 'onlyOwner' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 282: 'feeReserveTarget = _feeReserveTarget' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 283: 'emit FeeReserveTargetUpdated(_feeReserveTarget)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.64s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/vault/ReservationVault.sol:302:52:
+stderr:     |
+stderr: 302 |     function sweepFees(address recipient) external revert() {
+stderr:     |                                                    ^^^^^^
+INFO:Slither-Mutate:[RR] Line 302: 'onlyOwner' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 303: 'require(recipient != address(0), "Recipient must not be zero")' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.33s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:307:17:
+stderr:     |
+stderr: 307 |             if (repaidSat > 0) {
+stderr:     |                 ^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:309:37:
+stderr:     |
+stderr: 309 |                 inKindFeeDebtSat -= repaidSat;
+stderr:     |                                     ^^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:311:57:
+stderr:     |
+stderr: 311 |                 emit InKindFeeDebtRepaid(address(this), repaidSat);
+stderr:     |                                                         ^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 306: 'uint64 repaidSat = _burnFromReserve(inKindFeeDebtSat)' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 309: 'inKindFeeDebtSat -= repaidSat' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 311: 'emit InKindFeeDebtRepaid(address(this), repaidSat)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 4.72s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:316:13:
+stderr:     |
+stderr: 316 |         if (balance <= feeReserveTarget) {
+stderr:     |             ^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:320:26:
+stderr:     |
+stderr: 320 |         uint256 amount = balance - feeReserveTarget;
+stderr:     |                          ^^^^^^^
+INFO:Slither-Mutate:[RR] Line 315: 'uint256 balance = tbtcToken.balanceOf(address(this))' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 510.15ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ';' but got '}'
+stderr:    --> contracts/vault/ReservationVault.sol:318:9:
+stderr:     |
+stderr: 318 |         }
+stderr:     |         ^
+INFO:Slither-Mutate:[RR] Line 317: 'return;' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 4.10s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:321:51:
+stderr:     |
+stderr: 321 |         IERC20(tbtcToken).safeTransfer(recipient, amount);
+stderr:     |                                                   ^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:323:35:
+stderr:     |
+stderr: 323 |         emit FeesSwept(recipient, amount);
+stderr:     |                                   ^^^^^^
+INFO:Slither-Mutate:[RR] Line 320: 'uint256 amount = balance - feeReserveTarget' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 321: 'IERC20(tbtcToken).safeTransfer(recipient, amount)' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 323: 'emit FeesSwept(recipient, amount)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.46s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7920): Identifier not found or not unique.
+stderr:    --> contracts/vault/ReservationVault.sol:335:69:
+stderr:     |
+stderr: 335 |     function updateInitiationFee(uint16 _initiationFeeBps) external revert() {
+stderr:     |                                                                     ^^^^^^
+INFO:Slither-Mutate:[RR] Line 335: 'onlyOwner' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 341: 'initiationFeeBps = _initiationFeeBps' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[RR] Line 343: 'emit FeesUpdated(_initiationFeeBps)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 2.41s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:365:42:
+stderr:     |
+stderr: 365 |             Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+stderr:     |                                          ^^^^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 363: 'uint256 reserveTbtc = tbtcToken.balanceOf(address(this))' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[RR] Line 364: 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+        )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 1.43s
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:372:17:
+stderr:     |
+stderr: 372 |                 burnTbtc
+stderr:     |                 ^^^^^^^^
+stderr: 
+stderr: Error (7576): Undeclared identifier.
+stderr:    --> contracts/vault/ReservationVault.sol:374:30:
+stderr:     |
+stderr: 374 |             tbtcVault.unmint(burnTbtc);
+stderr:     |                              ^^^^^^^^
+INFO:Slither-Mutate:[RR] Line 369: 'uint256 burnTbtc = uint256(burnedSat) * SATOSHI_MULTIPLIER' ==> 'revert()' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 370: 'IERC20(tbtcToken).safeIncreaseAllowance(
+                address(tbtcVault),
+                burnTbtc
+            )' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 374: 'tbtcVault.unmint(burnTbtc)' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 375: 'bank.decreaseBalance(burnedSat)' ==> 'revert()' --> CAUGHT
+INFO:Slither-Mutate:Mutator RR found 34 caught revert mutants (out of 34 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 172: 'totalSat += depositedAmounts[i]' ==> 'totalSat /= depositedAmounts[i]' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 172: 'totalSat += depositedAmounts[i]' ==> 'totalSat *= depositedAmounts[i]' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[AOR] Line 172: 'totalSat += depositedAmounts[i]' ==> 'totalSat -= depositedAmounts[i]' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[AOR] Line 172: 'totalSat += depositedAmounts[i]' ==> 'totalSat %= depositedAmounts[i]' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:Tests took too long, consider increasing the timeout
+INFO:Slither-Mutate:[AOR] Line 178: 'tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER)' ==> 'tbtcVault.mint(totalSat + SATOSHI_MULTIPLIER)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 178: 'tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER)' ==> 'tbtcVault.mint(totalSat / SATOSHI_MULTIPLIER)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 178: 'tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER)' ==> 'tbtcVault.mint(totalSat - SATOSHI_MULTIPLIER)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 178: 'tbtcVault.mint(totalSat * SATOSHI_MULTIPLIER)' ==> 'tbtcVault.mint(totalSat % SATOSHI_MULTIPLIER)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 181: 'uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER' ==> 'uint256 grossTbtc = depositedAmounts[i] + SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 181: 'uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER' ==> 'uint256 grossTbtc = depositedAmounts[i] / SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 181: 'uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER' ==> 'uint256 grossTbtc = depositedAmounts[i] - SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 181: 'uint256 grossTbtc = depositedAmounts[i] * SATOSHI_MULTIPLIER' ==> 'uint256 grossTbtc = depositedAmounts[i] % SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc + initiationFeeBps) / BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc / initiationFeeBps) / BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc - initiationFeeBps) / BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc % initiationFeeBps) / BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc * initiationFeeBps) + BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc * initiationFeeBps) * BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc * initiationFeeBps) - BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 182: 'uint256 fee = (grossTbtc * initiationFeeBps) / BASIS_POINTS' ==> 'uint256 fee = (grossTbtc * initiationFeeBps) % BASIS_POINTS' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 184: 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee)' ==> 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc + fee)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 184: 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee)' ==> 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc / fee)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 184: 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee)' ==> 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc * fee)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 184: 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc - fee)' ==> 'IERC20(tbtcToken).safeTransfer(depositors[i], grossTbtc % fee)' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 224: 'uint64 shortfallSat = feeSat - coverableSat' ==> 'uint64 shortfallSat = feeSat + coverableSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 224: 'uint64 shortfallSat = feeSat - coverableSat' ==> 'uint64 shortfallSat = feeSat / coverableSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 224: 'uint64 shortfallSat = feeSat - coverableSat' ==> 'uint64 shortfallSat = feeSat * coverableSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 224: 'uint64 shortfallSat = feeSat - coverableSat' ==> 'uint64 shortfallSat = feeSat % coverableSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 229: 'inKindFeeDebtSat += shortfallSat' ==> 'inKindFeeDebtSat /= shortfallSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 229: 'inKindFeeDebtSat += shortfallSat' ==> 'inKindFeeDebtSat *= shortfallSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 229: 'inKindFeeDebtSat += shortfallSat' ==> 'inKindFeeDebtSat -= shortfallSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 229: 'inKindFeeDebtSat += shortfallSat' ==> 'inKindFeeDebtSat %= shortfallSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 249: 'uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER' ==> 'uint256 repayTbtc = uint256(repaySat) + SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 249: 'uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER' ==> 'uint256 repayTbtc = uint256(repaySat) / SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 249: 'uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER' ==> 'uint256 repayTbtc = uint256(repaySat) - SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 249: 'uint256 repayTbtc = uint256(repaySat) * SATOSHI_MULTIPLIER' ==> 'uint256 repayTbtc = uint256(repaySat) % SATOSHI_MULTIPLIER' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 262: 'inKindFeeDebtSat -= repaySat' ==> 'inKindFeeDebtSat += repaySat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 262: 'inKindFeeDebtSat -= repaySat' ==> 'inKindFeeDebtSat /= repaySat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 262: 'inKindFeeDebtSat -= repaySat' ==> 'inKindFeeDebtSat *= repaySat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 262: 'inKindFeeDebtSat -= repaySat' ==> 'inKindFeeDebtSat %= repaySat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 309: 'inKindFeeDebtSat -= repaidSat' ==> 'inKindFeeDebtSat += repaidSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 309: 'inKindFeeDebtSat -= repaidSat' ==> 'inKindFeeDebtSat /= repaidSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 309: 'inKindFeeDebtSat -= repaidSat' ==> 'inKindFeeDebtSat *= repaidSat' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 309: 'inKindFeeDebtSat -= repaidSat' ==> 'inKindFeeDebtSat %= repaidSat' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 320: 'uint256 amount = balance - feeReserveTarget' ==> 'uint256 amount = balance + feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 83.73ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 320: 'uint256 amount = balance - feeReserveTarget' ==> 'uint256 amount = balance / feeReserveTarget' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 79.99ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 320: 'uint256 amount = balance - feeReserveTarget' ==> 'uint256 amount = balance * feeReserveTarget' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 74.98ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 320: 'uint256 amount = balance - feeReserveTarget' ==> 'uint256 amount = balance % feeReserveTarget' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 85.00ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 364: 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+        )' ==> 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc + SATOSHI_MULTIPLIER)
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 76.46ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 364: 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+        )' ==> 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc * SATOSHI_MULTIPLIER)
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 87.45ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[AOR] Line 364: 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+        )' ==> 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc - SATOSHI_MULTIPLIER)
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 212.04ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[AOR] Line 364: 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc / SATOSHI_MULTIPLIER)
+        )' ==> 'burnedSat = uint64(
+            Math.min(uint256(amountSat), reserveTbtc % SATOSHI_MULTIPLIER)
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 263.61ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[AOR] Line 369: 'uint256 burnTbtc = uint256(burnedSat) * SATOSHI_MULTIPLIER' ==> 'uint256 burnTbtc = uint256(burnedSat) + SATOSHI_MULTIPLIER' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 226.40ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[AOR] Line 369: 'uint256 burnTbtc = uint256(burnedSat) * SATOSHI_MULTIPLIER' ==> 'uint256 burnTbtc = uint256(burnedSat) / SATOSHI_MULTIPLIER' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 208.89ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[AOR] Line 369: 'uint256 burnTbtc = uint256(burnedSat) * SATOSHI_MULTIPLIER' ==> 'uint256 burnTbtc = uint256(burnedSat) - SATOSHI_MULTIPLIER' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 196.63ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[AOR] Line 369: 'uint256 burnTbtc = uint256(burnedSat) * SATOSHI_MULTIPLIER' ==> 'uint256 burnTbtc = uint256(burnedSat) % SATOSHI_MULTIPLIER' --> COMPILATION FAILURE
+INFO:Slither-Mutate:Mutator AOR found 44 caught tweak mutants (out of 45 that compile)
+INFO:Slither-Mutate:Running total: found 44 caught tweak mutants (out of 45 that compile)
+INFO:Slither-Mutate:Mutator LOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 44 caught tweak mutants (out of 45 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 243.84ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:165:9:
+stderr:     |
+stderr: 165 |         require(require(depositors.length < 0, "No depositors specified"), "No depositors specified");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'require(depositors.length < 0, "No depositors specified")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 200.66ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:165:9:
+stderr:     |
+stderr: 165 |         require(require(depositors.length > 0, "No depositors specified"), "No depositors specified");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'require(depositors.length > 0, "No depositors specified")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 204.39ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:165:9:
+stderr:     |
+stderr: 165 |         require(require(depositors.length <= 0, "No depositors specified"), "No depositors specified");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'require(depositors.length <= 0, "No depositors specified")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 221.20ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:165:9:
+stderr:     |
+stderr: 165 |         require(require(depositors.length >= 0, "No depositors specified"), "No depositors specified");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'require(depositors.length >= 0, "No depositors specified")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 198.02ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:165:9:
+stderr:     |
+stderr: 165 |         require(require(depositors.length == 0, "No depositors specified"), "No depositors specified");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 165: 'require(depositors.length != 0, "No depositors specified")' ==> 'require(depositors.length == 0, "No depositors specified")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 180.44ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:166:9:
+stderr:     |
+stderr: 166 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'require(
+            depositors.length < depositedAmounts.length,
+            "Arrays must have the same length"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 182.01ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:166:9:
+stderr:     |
+stderr: 166 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'require(
+            depositors.length > depositedAmounts.length,
+            "Arrays must have the same length"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 200.00ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:166:9:
+stderr:     |
+stderr: 166 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'require(
+            depositors.length <= depositedAmounts.length,
+            "Arrays must have the same length"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 203.57ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:166:9:
+stderr:     |
+stderr: 166 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'require(
+            depositors.length >= depositedAmounts.length,
+            "Arrays must have the same length"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 271.85ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:166:9:
+stderr:     |
+stderr: 166 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 166: 'require(
+            depositors.length == depositedAmounts.length,
+            "Arrays must have the same length"
+        )' ==> 'require(
+            depositors.length != depositedAmounts.length,
+            "Arrays must have the same length"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 171: 'i < depositedAmounts.length' ==> 'i > depositedAmounts.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 171: 'i < depositedAmounts.length' ==> 'i <= depositedAmounts.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 171: 'i < depositedAmounts.length' ==> 'i >= depositedAmounts.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 171: 'i < depositedAmounts.length' ==> 'i == depositedAmounts.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 171: 'i < depositedAmounts.length' ==> 'i != depositedAmounts.length' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 180: 'i < depositors.length' ==> 'i > depositors.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 180: 'i < depositors.length' ==> 'i <= depositors.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 180: 'i < depositors.length' ==> 'i >= depositors.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 180: 'i < depositors.length' ==> 'i == depositors.length' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 180: 'i < depositors.length' ==> 'i != depositors.length' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 218: 'feeSat == 0' ==> 'feeSat < 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 218: 'feeSat == 0' ==> 'feeSat > 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 218: 'feeSat == 0' ==> 'feeSat <= 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 218: 'feeSat == 0' ==> 'feeSat >= 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 218: 'feeSat == 0' ==> 'feeSat != 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 225: 'shortfallSat > 0' ==> 'shortfallSat < 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 225: 'shortfallSat > 0' ==> 'shortfallSat <= 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 225: 'shortfallSat > 0' ==> 'shortfallSat >= 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 225: 'shortfallSat > 0' ==> 'shortfallSat == 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 225: 'shortfallSat > 0' ==> 'shortfallSat != 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 167.76ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:242:9:
+stderr:     |
+stderr: 242 |         require(require(inKindFeeDebtSat < 0, "No debt to repay"), "No debt to repay");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'require(inKindFeeDebtSat < 0, "No debt to repay")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 154.55ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:242:9:
+stderr:     |
+stderr: 242 |         require(require(inKindFeeDebtSat <= 0, "No debt to repay"), "No debt to repay");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'require(inKindFeeDebtSat <= 0, "No debt to repay")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 158.72ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:242:9:
+stderr:     |
+stderr: 242 |         require(require(inKindFeeDebtSat >= 0, "No debt to repay"), "No debt to repay");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'require(inKindFeeDebtSat >= 0, "No debt to repay")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 158.27ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:242:9:
+stderr:     |
+stderr: 242 |         require(require(inKindFeeDebtSat == 0, "No debt to repay"), "No debt to repay");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'require(inKindFeeDebtSat == 0, "No debt to repay")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 173.74ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:242:9:
+stderr:     |
+stderr: 242 |         require(require(inKindFeeDebtSat != 0, "No debt to repay"), "No debt to repay");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 242: 'require(inKindFeeDebtSat > 0, "No debt to repay")' ==> 'require(inKindFeeDebtSat != 0, "No debt to repay")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 159.84ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:243:9:
+stderr:     |
+stderr: 243 |         require(require(amountSat < 0, "Amount must not be zero"), "Amount must not be zero");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'require(amountSat < 0, "Amount must not be zero")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 164.66ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:243:9:
+stderr:     |
+stderr: 243 |         require(require(amountSat <= 0, "Amount must not be zero"), "Amount must not be zero");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'require(amountSat <= 0, "Amount must not be zero")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 159.27ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:243:9:
+stderr:     |
+stderr: 243 |         require(require(amountSat >= 0, "Amount must not be zero"), "Amount must not be zero");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'require(amountSat >= 0, "Amount must not be zero")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 159.69ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:243:9:
+stderr:     |
+stderr: 243 |         require(require(amountSat == 0, "Amount must not be zero"), "Amount must not be zero");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'require(amountSat == 0, "Amount must not be zero")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 163.06ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:243:9:
+stderr:     |
+stderr: 243 |         require(require(amountSat != 0, "Amount must not be zero"), "Amount must not be zero");
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 243: 'require(amountSat > 0, "Amount must not be zero")' ==> 'require(amountSat != 0, "Amount must not be zero")' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 305: 'inKindFeeDebtSat > 0' ==> 'inKindFeeDebtSat < 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 305: 'inKindFeeDebtSat > 0' ==> 'inKindFeeDebtSat <= 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 305: 'inKindFeeDebtSat > 0' ==> 'inKindFeeDebtSat >= 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 305: 'inKindFeeDebtSat > 0' ==> 'inKindFeeDebtSat == 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 305: 'inKindFeeDebtSat > 0' ==> 'inKindFeeDebtSat != 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 307: 'repaidSat > 0' ==> 'repaidSat < 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 307: 'repaidSat > 0' ==> 'repaidSat <= 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 307: 'repaidSat > 0' ==> 'repaidSat >= 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 307: 'repaidSat > 0' ==> 'repaidSat == 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 307: 'repaidSat > 0' ==> 'repaidSat != 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 316: 'balance <= feeReserveTarget' ==> 'balance < feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 316: 'balance <= feeReserveTarget' ==> 'balance > feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 316: 'balance <= feeReserveTarget' ==> 'balance >= feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 316: 'balance <= feeReserveTarget' ==> 'balance == feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 316: 'balance <= feeReserveTarget' ==> 'balance != feeReserveTarget' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 263.43ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:336:9:
+stderr:     |
+stderr: 336 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'require(
+            _initiationFeeBps < MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 219.43ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:336:9:
+stderr:     |
+stderr: 336 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'require(
+            _initiationFeeBps > MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 241.03ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:336:9:
+stderr:     |
+stderr: 336 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'require(
+            _initiationFeeBps >= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 247.41ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:336:9:
+stderr:     |
+stderr: 336 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'require(
+            _initiationFeeBps == MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 78 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 320.16ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Warning (8760): This declaration has the same name as another declaration.
+stderr:     --> contracts/bridge/Bridge.sol:1611:29:
+stderr:      |
+stderr: 1611 |     function updateTreasury(address treasury) external onlyGovernance {
+stderr:      |                             ^^^^^^^^^^^^^^^^
+stderr: Note: The other declaration is here:
+stderr:     --> contracts/bridge/Bridge.sol:2009:5:
+stderr:      |
+stderr: 2009 |     function treasury() external view returns (address) {
+stderr:      |     ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Error (9322): No matching declaration found after argument-dependent lookup.
+stderr:    --> contracts/vault/ReservationVault.sol:336:9:
+stderr:     |
+stderr: 336 |         require(
+stderr:     |         ^^^^^^^
+stderr: Note: Candidate: function require(bool)
+stderr: Note: Candidate: function require(bool, string memory)
+INFO:Slither-Mutate:[ROR] Line 336: 'require(
+            _initiationFeeBps <= MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' ==> 'require(
+            _initiationFeeBps != MAX_FEE_BASIS_POINTS,
+            "Fee exceeds the maximum"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 368: 'burnedSat > 0' ==> 'burnedSat < 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 368: 'burnedSat > 0' ==> 'burnedSat <= 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 368: 'burnedSat > 0' ==> 'burnedSat >= 0' --> UNCAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 368: 'burnedSat > 0' ==> 'burnedSat == 0' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[ROR] Line 368: 'burnedSat > 0' ==> 'burnedSat != 0' --> UNCAUGHT
+INFO:Slither-Mutate:Mutator ROR found 28 caught tweak mutants (out of 40 that compile)
+INFO:Slither-Mutate:Running total: found 72 caught tweak mutants (out of 85 that compile)
+INFO:Slither-Mutate:Done mutating ReservationVault.
+INFO:Slither-Mutate:Revert mutants: 34 caught of 34 (100.0% caught)
+INFO:Slither-Mutate:Zero Comment mutants analyzed
+INFO:Slither-Mutate:Tweak mutants: 72 caught of 85 (84.7% caught)
+INFO:Slither-Mutate:Finished mutation testing assessment of 'contracts/vault/ReservationVault.sol' in 2 hours
+
+VAULT_EXIT=0

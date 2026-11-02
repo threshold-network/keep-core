@@ -5,24 +5,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"math"
 	"math/big"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-test/deep"
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+	"golang.org/x/exp/slices"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	netlocal "github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -174,7 +178,214 @@ func TestWatchCoordinationWindows(t *testing.T) {
 	expectWindow(1800)
 }
 
-func TestCoordinationExecutor_Coordinate(t *testing.T) {
+// coordinationOperatorFixture bundles the per-operator state
+// needed to run coordinationExecutor.coordinate as an independent
+// in-process simulated node, its own local chain fake plus a broadcast
+// channel shared with its peers the same way pkg/tbtc/node wires a real operator.
+type coordinationOperatorFixture struct {
+	chain              Chain
+	address            chain.Address
+	channel            net.BroadcastChannel
+	waitForBlockHeight func(ctx context.Context, blockHeight uint64) error
+}
+
+// newCoordinationOperator builds one simulated operator shared by
+// every coordinationExecutor.coordinate integration test in this file: a
+// deterministic keypair (so leader election is reproducible across runs), a
+// local chain fake wired to that keypair, and a broadcast channel joined to a
+// local network shared by every operator in the same test so they exchange
+// real coordinationMessage wire traffic. channelName need not be unique
+// across test invocations: this registers a t.Cleanup that calls
+// netlocal.ReleaseBroadcastChannel(channelName), which cancels that
+// specific channel's retransmission ticker and clears the registry, so a
+// later invocation reusing the same name starts from an empty registry regardless
+// of whether an earlier invocation's leader was still retransmitting.
+// channelName is passed as t.Name() purely so a leaked broadcast is easy to
+// attribute to its source test.
+func newCoordinationOperator(
+	t *testing.T,
+	privateKey int64,
+	coordinationBlock uint64,
+	channelName string,
+) *coordinationOperatorFixture {
+	t.Helper()
+
+	privateKeyBigInt := big.NewInt(privateKey)
+	x, y := local_v1.DefaultCurve.ScalarBaseMult(privateKeyBigInt.Bytes())
+
+	localChain := ConnectWithKey(
+		&operator.PrivateKey{
+			PublicKey: operator.PublicKey{
+				Curve: operator.Secp256k1,
+				X:     x,
+				Y:     y,
+			},
+			D: privateKeyBigInt,
+		},
+		100*time.Millisecond,
+	)
+
+	localChain.setBlockHashByNumber(
+		coordinationBlock-32,
+		"1422996cbcbc38fc924a46f4df5f9064279d3ab43396e58386dac9b87440d64f",
+	)
+
+	operatorAddress, err := localChain.operatorAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, operatorPublicKey, err := localChain.OperatorKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broadcastChannel, err := netlocal.ConnectWithKey(operatorPublicKey).
+		BroadcastChannelFor(channelName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel(channelName) })
+
+	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
+		return &coordinationMessage{}
+	})
+
+	waitForBlockHeight := func(ctx context.Context, blockHeight uint64) error {
+		blockCounter, err := localChain.BlockCounter()
+		if err != nil {
+			return err
+		}
+
+		// The local chain fake's block counter always starts at 0
+		// regardless of coordinationBlock (see local_v1.BlockCounter),
+		// but every caller here only ever asks to wait for a height
+		// derived as coordinationBlock + a fixed small offset (e.g.
+		// window.activePhaseEndBlock()). Waiting on the raw absolute
+		// height would take the fake's block-rate multiplied by
+		// coordinationBlock itself - days of wall-clock time for the
+		// mainnet-scale coordinationBlock values these tests use -
+		// leaking the leader's goroutine and this waiter registration
+		// for the life of the test binary, since coordinate() only
+		// cancels this context on failure, not on success. Translating
+		// to the counter's own relative frame makes the wait actually
+		// reachable in a few seconds instead.
+		wait, err := blockCounter.BlockHeightWaiter(blockHeight - coordinationBlock)
+		if err != nil {
+			return err
+		}
+
+		select {
+		case <-wait:
+		case <-ctx.Done():
+		}
+
+		return nil
+	}
+
+	return &coordinationOperatorFixture{
+		chain:              localChain,
+		address:            operatorAddress,
+		channel:            broadcastChannel,
+		waitForBlockHeight: waitForBlockHeight,
+	}
+}
+
+// coordinationReport captures one simulated operator's outcome
+// from a single coordination round.
+type coordinationReport struct {
+	operatorIndex int
+	result        *coordinationResult
+	err           error
+}
+
+// runCoordinationRound runs coordinationExecutor.coordinate
+// concurrently for every given operator against the same window - one
+// goroutine per operator, sharing one proposalGenerator, membershipValidator,
+// and protocolLatch across all three (the leader is the only goroutine that
+// calls Generate; the latch is a shared, mutex-guarded execution counter,
+// safe to share precisely because it does not serialize or order the
+// goroutines -- the trailing protocolLatch.IsExecuting() == false assertion
+// in each caller verifies all three balanced their Lock/Unlock) the same
+// way a real node would have each operator drive its own executor in a
+// separate process. If recorders is non-nil, executor i gets recorders[i],
+// so a caller can check which operator counted a proposal. Fails the test
+// if not every operator reports within the 30-second deadline.
+func runCoordinationRound(
+	t *testing.T,
+	operators []*coordinationOperatorFixture,
+	coordinatedWallet wallet,
+	proposalGenerator CoordinationProposalGenerator,
+	membershipValidator *group.MembershipValidator,
+	protocolLatch *generator.ProtocolLatch,
+	window *coordinationWindow,
+	recorders []*countingMetricsRecorder,
+) []*coordinationReport {
+	t.Helper()
+
+	reportChan := make(chan *coordinationReport, len(operators))
+
+	for i, currentOperator := range operators {
+		go func(operatorIndex int, op *coordinationOperatorFixture) {
+			executor := newCoordinationExecutor(
+				op.chain,
+				ethereum.Developer,
+				coordinatedWallet,
+				coordinatedWallet.membersByOperator(op.address),
+				op.address,
+				proposalGenerator,
+				op.channel,
+				membershipValidator,
+				protocolLatch,
+				op.waitForBlockHeight,
+			)
+			if recorders != nil {
+				executor.setMetricsRecorder(recorders[operatorIndex-1])
+			}
+
+			result, err := executor.coordinate(window)
+
+			reportChan <- &coordinationReport{
+				operatorIndex: operatorIndex,
+				result:        result,
+				err:           err,
+			}
+		}(i+1, currentOperator)
+	}
+
+	deadline := time.After(30 * time.Second)
+	reports := make([]*coordinationReport, 0, len(operators))
+	for len(reports) < len(operators) {
+		select {
+		case report := <-reportChan:
+			reports = append(reports, report)
+		case <-deadline:
+			t.Fatalf(
+				"timed out waiting for coordination reports; got %d of %d",
+				len(reports),
+				len(operators),
+			)
+		}
+	}
+
+	return reports
+}
+
+// newCoordinationWallet returns the 3-operator wallet fixture
+// shared by every coordinationExecutor.coordinate integration test in this
+// file: same wallet public key hash and operator-to-member-index layout, so
+// leader election (operator2 wins) is identical across all of them - the
+// seed depends only on the wallet public key hash and the safe-block hash
+// newCoordinationOperator injects at coordinationBlock-32 (both
+// identical across every caller here), not on the raw coordinationBlock
+// value itself, so this holds regardless of which block a given caller
+// passes.
+func newCoordinationWallet(
+	t *testing.T,
+	operators []*coordinationOperatorFixture,
+) (wallet, [20]byte) {
+	t.Helper()
+
 	// Uncompressed public key corresponding to the 20-byte public key hash:
 	// aa768412ceed10bd423c025542ca90071f9fb62d.
 	publicKeyHex, err := hex.DecodeString(
@@ -193,97 +404,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 	var publicKeyHash [20]byte
 	copy(publicKeyHash[:], buffer)
 
-	parseScript := func(script string) bitcoin.Script {
-		parsed, err := hex.DecodeString(script)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		return parsed
-	}
-
-	coordinationBlock := uint64(900)
-
-	type operatorFixture struct {
-		chain              Chain
-		address            chain.Address
-		channel            net.BroadcastChannel
-		waitForBlockHeight func(ctx context.Context, blockHeight uint64) error
-	}
-
-	generateOperator := func(privateKey int64) *operatorFixture {
-		// Generate operators with deterministic addresses that don't change
-		// between test runs. This is required to assert the leader selection.
-		privateKeyBigInt := big.NewInt(privateKey)
-		x, y := local_v1.DefaultCurve.ScalarBaseMult(privateKeyBigInt.Bytes())
-
-		localChain := ConnectWithKey(
-			&operator.PrivateKey{
-				PublicKey: operator.PublicKey{
-					Curve: operator.Secp256k1,
-					X:     x,
-					Y:     y,
-				},
-				D: privateKeyBigInt,
-			},
-			100*time.Millisecond,
-		)
-
-		localChain.setBlockHashByNumber(
-			coordinationBlock-32,
-			"1422996cbcbc38fc924a46f4df5f9064279d3ab43396e58386dac9b87440d64f",
-		)
-
-		operatorAddress, err := localChain.operatorAddress()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		_, operatorPublicKey, err := localChain.OperatorKeyPair()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		broadcastChannel, err := netlocal.ConnectWithKey(operatorPublicKey).
-			BroadcastChannelFor("test")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
-			return &coordinationMessage{}
-		})
-
-		waitForBlockHeight := func(ctx context.Context, blockHeight uint64) error {
-			blockCounter, err := localChain.BlockCounter()
-			if err != nil {
-				return err
-			}
-
-			wait, err := blockCounter.BlockHeightWaiter(blockHeight)
-			if err != nil {
-				return err
-			}
-
-			select {
-			case <-wait:
-			case <-ctx.Done():
-			}
-
-			return nil
-		}
-
-		return &operatorFixture{
-			chain:              localChain,
-			address:            operatorAddress,
-			channel:            broadcastChannel,
-			waitForBlockHeight: waitForBlockHeight,
-		}
-	}
-
-	operator1 := generateOperator(1)
-	operator2 := generateOperator(2)
-	operator3 := generateOperator(3)
+	operator1, operator2, operator3 := operators[0], operators[1], operators[2]
 
 	coordinatedWallet := wallet{
 		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
@@ -300,6 +421,32 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 			operator1.address,
 		},
 	}
+
+	return coordinatedWallet, publicKeyHash
+}
+
+func TestCoordinationExecutor_Coordinate(t *testing.T) {
+	coordinationBlock := uint64(900)
+
+	parseScript := func(script string) bitcoin.Script {
+		parsed, err := hex.DecodeString(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return parsed
+	}
+
+	channelName := t.Name()
+
+	operator1 := newCoordinationOperator(t, 1, coordinationBlock, channelName)
+	operator2 := newCoordinationOperator(t, 2, coordinationBlock, channelName)
+	operator3 := newCoordinationOperator(t, 3, coordinationBlock, channelName)
+	operators := []*coordinationOperatorFixture{
+		operator1, operator2, operator3,
+	}
+
+	coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
 
 	proposalGenerator := newMockCoordinationProposalGenerator(
 		func(
@@ -331,29 +478,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 
 	protocolLatch := generator.NewProtocolLatch()
 
-	generateExecutor := func(operator *operatorFixture) *coordinationExecutor {
-		return newCoordinationExecutor(
-			operator.chain,
-			coordinatedWallet,
-			coordinatedWallet.membersByOperator(operator.address),
-			operator.address,
-			proposalGenerator,
-			operator.channel,
-			membershipValidator,
-			protocolLatch,
-			operator.waitForBlockHeight,
-		)
-	}
-
 	window := newCoordinationWindow(coordinationBlock)
-
-	type report struct {
-		operatorIndex int
-		result        *coordinationResult
-		err           error
-	}
-
-	reportChan := make(chan *report, 3)
 
 	// One recorder per executor: only the leader may count a proposal.
 	recorders := []*countingMetricsRecorder{
@@ -362,44 +487,16 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 		newCountingMetricsRecorder(),
 	}
 
-	for i, currentOperator := range []*operatorFixture{
-		operator1,
-		operator2,
-		operator3,
-	} {
-		executor := generateExecutor(currentOperator)
-		executor.setMetricsRecorder(recorders[i])
-
-		go func(operatorIndex int, executor *coordinationExecutor) {
-			result, err := executor.coordinate(window)
-
-			reportChan <- &report{
-				operatorIndex: operatorIndex,
-				result:        result,
-				err:           err,
-			}
-		}(i+1, executor)
-	}
-
-	reports := make([]*report, 0)
-loop:
-	//lint:ignore S1000 for-select is used as the channel is not closed by senders.
-	for {
-		select {
-		case r := <-reportChan:
-			reports = append(reports, r)
-
-			if len(reports) == 3 {
-				break loop
-			}
-		}
-	}
-
-	slices.SortFunc(reports, func(i, j *report) int {
-		return i.operatorIndex - j.operatorIndex
-	})
-
-	testutils.AssertIntsEqual(t, "reports count", 3, len(reports))
+	reports := runCoordinationRound(
+		t,
+		operators,
+		coordinatedWallet,
+		proposalGenerator,
+		membershipValidator,
+		protocolLatch,
+		window,
+		recorders,
+	)
 
 	expectedResult := &coordinationResult{
 		wallet: coordinatedWallet,
@@ -415,32 +512,22 @@ loop:
 		faults: nil,
 	}
 
-	expectedReports := []*report{
-		{
-			operatorIndex: 1,
-			result:        expectedResult,
-			err:           nil,
-		},
-		{
-			operatorIndex: 2,
-			result:        expectedResult,
-			err:           nil,
-		},
-		{
-			operatorIndex: 3,
-			result:        expectedResult,
-			err:           nil,
-		},
-	}
-	if !reflect.DeepEqual(expectedReports, reports) {
-		t.Errorf(
-			"unexpected reports:\n"+
-				"expected: %v\n"+
-				"actual:   %v",
-			expectedReports,
-			reports,
-		)
-
+	for _, report := range reports {
+		if report.err != nil {
+			t.Fatalf(
+				"operator %d: unexpected error: %v",
+				report.operatorIndex,
+				report.err,
+			)
+		}
+		if !reflect.DeepEqual(expectedResult, report.result) {
+			t.Errorf(
+				"operator %d: unexpected result:\nexpected: %+v\nactual:   %+v",
+				report.operatorIndex,
+				expectedResult,
+				report.result,
+			)
+		}
 	}
 
 	testutils.AssertBoolsEqual(
@@ -460,6 +547,399 @@ loop:
 			t.Errorf("operator%d leader noop proposals: expected 0, got %v", i+1, got)
 		}
 	}
+}
+
+// TestCoordinationExecutor_Coordinate_ReservationProposals is the
+// multi-signer simulated integration test for the reservation anchor and
+// re-anchor proposals: it scales
+// TestCoordinationExecutor_Coordinate's 3-operator, real-broadcast-channel,
+// real-leader-election harness to the two reservation proposal types,
+// proving the leader/follower coordination round-trip (checklist generation
+// -> leader election -> broadcast -> follower validation -> convergence)
+// that no mocked unit test in pkg/tbtcpg can cover, since those call
+// task.Run(request) directly and never go through
+// coordinationExecutor.coordinate. The protobuf wire format for both
+// proposal types and the checklist activation gate each already have their
+// own dedicated coverage elsewhere in this file and in marshaling_test.go;
+// this test's unduplicated value is proving the two compose correctly
+// through a real coordinate() round-trip.
+//
+// This test requires ActionReservationAnchor/ActionReservationReanchor to
+// actually appear in getActionsChecklist's output; without it, every
+// operator's checklist search below falls through to NoopProposal.
+func TestCoordinationExecutor_Coordinate_ReservationProposals(t *testing.T) {
+	// coordinationBlock is an arbitrary block number; every executor
+	// below is constructed with ethereum.Developer (activation block 0,
+	// see runCoordinationRound), so the reservation actions checklist
+	// gate is satisfied at any height here and this value proves
+	// nothing about the gate itself (see
+	// TestCoordinationExecutor_GetActionsChecklist_Reservations for
+	// dedicated gate coverage).
+	coordinationBlock := uint64(900)
+
+	tests := map[string]struct {
+		matchingAction    WalletActionType
+		generatedProposal CoordinationProposal
+		expectedProposal  CoordinationProposal
+	}{
+		"anchor": {
+			matchingAction: ActionReservationAnchor,
+			generatedProposal: &ReservationAnchorProposal{
+				DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02, 0x03},
+				DepositFundingOutputIndex: 1,
+				RequestNonce:              7,
+				AnchorTxFee:               big.NewInt(1500),
+			},
+			expectedProposal: &ReservationAnchorProposal{
+				DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02, 0x03},
+				DepositFundingOutputIndex: 1,
+				RequestNonce:              7,
+				AnchorTxFee:               big.NewInt(1500),
+			},
+		},
+		"reanchor": {
+			matchingAction: ActionReservationReanchor,
+			generatedProposal: &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(424242),
+				RequestNonce:              4,
+				TargetWalletPublicKeyHash: [20]byte{0xf8, 0x7e, 0xb7},
+				ReanchorTxFee:             big.NewInt(1200),
+			},
+			expectedProposal: &ReservationReanchorProposal{
+				ReservationKey:            big.NewInt(424242),
+				RequestNonce:              4,
+				TargetWalletPublicKeyHash: [20]byte{0xf8, 0x7e, 0xb7},
+				ReanchorTxFee:             big.NewInt(1200),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			channelName := t.Name()
+
+			operator1 := newCoordinationOperator(t, 1, coordinationBlock, channelName)
+			operator2 := newCoordinationOperator(t, 2, coordinationBlock, channelName)
+			operator3 := newCoordinationOperator(t, 3, coordinationBlock, channelName)
+			operators := []*coordinationOperatorFixture{
+				operator1, operator2, operator3,
+			}
+
+			coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
+
+			proposalGenerator := newMockCoordinationProposalGenerator(
+				func(
+					walletPublicKeyHash [20]byte,
+					actionsChecklist []WalletActionType,
+					_ uint,
+				) (CoordinationProposal, error) {
+					for _, action := range actionsChecklist {
+						if walletPublicKeyHash == publicKeyHash && action == test.matchingAction {
+							return test.generatedProposal, nil
+						}
+					}
+
+					return &NoopProposal{}, nil
+				},
+			)
+
+			membershipValidator := group.NewMembershipValidator(
+				&testutils.MockLogger{},
+				coordinatedWallet.signingGroupOperators,
+				Connect().Signing(),
+			)
+
+			protocolLatch := generator.NewProtocolLatch()
+
+			window := newCoordinationWindow(coordinationBlock)
+
+			reports := runCoordinationRound(
+				t,
+				operators,
+				coordinatedWallet,
+				proposalGenerator,
+				membershipValidator,
+				protocolLatch,
+				window,
+				nil,
+			)
+
+			expectedResult := &coordinationResult{
+				wallet:   coordinatedWallet,
+				window:   window,
+				leader:   operator2.address,
+				proposal: test.expectedProposal,
+				faults:   nil,
+			}
+
+			for _, report := range reports {
+				if report.err != nil {
+					t.Fatalf(
+						"operator %d: unexpected error: %v",
+						report.operatorIndex,
+						report.err,
+					)
+				}
+				if !reflect.DeepEqual(expectedResult, report.result) {
+					t.Errorf(
+						"operator %d: unexpected result:\nexpected: %+v\nactual:   %+v",
+						report.operatorIndex,
+						expectedResult,
+						report.result,
+					)
+				}
+			}
+
+			testutils.AssertBoolsEqual(
+				t,
+				"protocol latch state",
+				false,
+				protocolLatch.IsExecuting(),
+			)
+		})
+	}
+}
+
+// TestCoordinationExecutor_Coordinate_ReservationChainedLifecycle drives a
+// single reservation through two consecutive coordination windows on the
+// shared 3-operator, real-broadcast-channel, real-leader-election harness:
+// in window N the generator (as the leader sees it) offers a
+// ReservationAnchorProposal for the reservation and all three operators
+// converge on it; in window N+1 the generator's state has advanced past the
+// accepted anchor, so the same reservation is offered as a
+// ReservationReanchorProposal and all three converge again. The generator
+// state is advanced only after window N's coordination result is observed,
+// mirroring how a real proposal generator would treat an accepted
+// reservation anchor as the prerequisite for offering a re-anchor. The test
+// additionally proves the two proposals refer to the same reservation: the
+// window N+1 ReservationReanchorProposal carries the same ReservationKey
+// (the m1 deposit key the real anchor action would derive from the window N
+// anchor's funding outpoint) as the one reserved in window N.
+func TestCoordinationExecutor_Coordinate_ReservationChainedLifecycle(
+	t *testing.T,
+) {
+	// 900 and 1800 are consecutive coordination windows, both at the
+	// multiples of coordinationFrequencyBlocks coordinate() accepts
+	// (window.index() != 0). Every executor below is constructed with
+	// ethereum.Developer (activation block 0, see runCoordinationRound),
+	// so the reservation actions checklist gate is satisfied at either
+	// height.
+	windowN := newCoordinationWindow(900)
+	windowN1 := newCoordinationWindow(1800)
+
+	channelName := t.Name()
+
+	operator1 := newCoordinationOperator(t, 1, windowN.coordinationBlock, channelName)
+	operator2 := newCoordinationOperator(t, 2, windowN.coordinationBlock, channelName)
+	operator3 := newCoordinationOperator(t, 3, windowN.coordinationBlock, channelName)
+	operators := []*coordinationOperatorFixture{
+		operator1, operator2, operator3,
+	}
+
+	coordinatedWallet, publicKeyHash := newCoordinationWallet(t, operators)
+
+	// The seed in window N+1 is derived from the safe-block hash at
+	// windowN1.coordinationBlock-32, which newCoordinationOperator has not
+	// seeded; without it every operator's coordinate() would fail at
+	// getSeed. The wallet's key hash and this safe-block hash are identical
+	// across every operator in this file, so the derived seed - and hence
+	// the elected leader - is identical on all of them, independent of the
+	// coordinationBlock value.
+	for _, currentOperator := range operators {
+		localChain, ok := currentOperator.chain.(*localChain)
+		if !ok {
+			t.Fatal("operator chain fixture is not a localChain")
+		}
+		localChain.setBlockHashByNumber(
+			windowN1.coordinationBlock-32,
+			"1522996cbcbc38fc924a46f4df5f9064279d3ab43396e58386dac9b87440d64f",
+		)
+	}
+
+	anchorProposal := &ReservationAnchorProposal{
+		DepositFundingTxHash:      bitcoin.Hash{0x01, 0x02, 0x03},
+		DepositFundingOutputIndex: 1,
+		RequestNonce:              7,
+		AnchorTxFee:               big.NewInt(1500),
+	}
+
+	// The m1 identity: a reservation key is its deposit's key, so the
+	// re-anchor must point back to the very same deposit (and hence the
+	// same reservation) the window N anchor reserved. BuildDepositKey is
+	// on the Chain interface, so no type assertion is needed.
+	reservationKey := operator1.chain.BuildDepositKey(
+		anchorProposal.DepositFundingTxHash,
+		anchorProposal.DepositFundingOutputIndex,
+	)
+
+	reanchorProposal := &ReservationReanchorProposal{
+		ReservationKey:            reservationKey,
+		RequestNonce:              8,
+		TargetWalletPublicKeyHash: [20]byte{0xf8, 0x7e, 0xb7},
+		ReanchorTxFee:             big.NewInt(1200),
+	}
+
+	// Stateful generator: before window N's result is observed it offers
+	// the anchor; once window N has run (advancing the generator's state,
+	// the way a real proposal generator would treat an accepted anchor as
+	// the prerequisite for a re-anchor) it offers the re-anchor for the
+	// same reservation instead. The advancement is synchronized with an
+	// atomic, so the generator is safe to share across the three
+	// concurrent leader-routine goroutines that coordinate() spawns, the
+	// same way the harness shares proposalGenerator across every operator.
+	var generatorAdvanced atomic.Bool
+	generatorAdvanced.Store(false)
+
+	proposalGenerator := newMockCoordinationProposalGenerator(
+		func(
+			walletPublicKeyHash [20]byte,
+			actionsChecklist []WalletActionType,
+			_ uint,
+		) (CoordinationProposal, error) {
+			for _, action := range actionsChecklist {
+				if walletPublicKeyHash != publicKeyHash {
+					continue
+				}
+
+				switch {
+				case generatorAdvanced.Load() &&
+					action == ActionReservationReanchor:
+					return reanchorProposal, nil
+				case !generatorAdvanced.Load() &&
+					action == ActionReservationAnchor:
+					return anchorProposal, nil
+				}
+			}
+
+			return &NoopProposal{}, nil
+		},
+	)
+
+	membershipValidator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		coordinatedWallet.signingGroupOperators,
+		Connect().Signing(),
+	)
+
+	protocolLatch := generator.NewProtocolLatch()
+	// leaderForWindow computes the coordinator leader a given operator would
+	// elect for a given window, through the real getSeed/getLeader path.
+	// The seed depends only on the wallet's public key hash and the
+	// safe-block hash the operator's chain fake has been seeded with, so
+	// the leader is identical across every operator for a fixed window;
+	// it need not equal operator2 (the seed here is not fixed to the one
+	// that makes operator2 win, as in TestCoordinationExecutor_Coordinate).
+	leaderForWindow := func(window *coordinationWindow) chain.Address {
+		t.Helper()
+
+		executor := &coordinationExecutor{
+			chain:             operator1.chain,
+			coordinatedWallet: coordinatedWallet,
+		}
+
+		seed, err := executor.getSeed(window.coordinationBlock)
+		if err != nil {
+			t.Fatalf(
+				"failed to compute seed for window [%v]: %v",
+				window.coordinationBlock,
+				err,
+			)
+		}
+
+		return executor.getLeader(seed)
+	}
+
+	runWindow := func(
+		window *coordinationWindow,
+		expectedProposal CoordinationProposal,
+	) []*coordinationReport {
+		t.Helper()
+
+		reports := runCoordinationRound(
+			t,
+			operators,
+			coordinatedWallet,
+			proposalGenerator,
+			membershipValidator,
+			protocolLatch,
+			window,
+			nil,
+		)
+
+		expectedLeader := leaderForWindow(window)
+
+		for _, report := range reports {
+			if report.err != nil {
+				t.Fatalf(
+					"operator %d: unexpected error: %v",
+					report.operatorIndex,
+					report.err,
+				)
+			}
+			if len(report.result.faults) != 0 {
+				t.Fatalf(
+					"operator %d: unexpected faults: %v",
+					report.operatorIndex,
+					report.result.faults,
+				)
+			}
+
+			expectedResult := &coordinationResult{
+				wallet:   coordinatedWallet,
+				window:   window,
+				leader:   expectedLeader,
+				proposal: expectedProposal,
+				faults:   nil,
+			}
+
+			if !reflect.DeepEqual(expectedResult, report.result) {
+				t.Errorf(
+					"operator %d: unexpected result:\n"+
+						"expected: %+v\nactual:   %+v",
+					report.operatorIndex,
+					expectedResult,
+					report.result,
+				)
+			}
+		}
+
+		return reports
+	}
+
+	// Window N: the anchor is offered, all three operators converge on it
+	// with the same leader and no faults.
+	runWindow(windowN, anchorProposal)
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state after window N",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+
+	// Window N's result has been observed: advance the generator's state
+	// so the next window sees the reservation past its accepted anchor.
+	generatorAdvanced.Store(true)
+
+	// Window N+1: the re-anchor for the same reservation is offered, all
+	// three operators converge on it with the same leader and no faults.
+	runWindow(windowN1, reanchorProposal)
+
+	testutils.AssertBoolsEqual(
+		t,
+		"protocol latch state after window N+1",
+		false,
+		protocolLatch.IsExecuting(),
+	)
+
+	// The re-anchor's ReservationKey must be the very key the window N
+	// anchor reserved - the same reservation identity across both windows.
+	testutils.AssertBigIntsEqual(
+		t,
+		"re-anchor reservation key",
+		reservationKey,
+		reanchorProposal.ReservationKey,
+	)
 }
 
 func TestCoordinationExecutor_GetSeed(t *testing.T) {
@@ -552,11 +1032,15 @@ func TestCoordinationExecutor_GetLeader(t *testing.T) {
 }
 
 func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
-	// All test cases below exercise the pre-activation code path because
-	// their coordination blocks are below
-	// DepositSweepEveryWindowActivationBlock. In this mode, all three
-	// actions (DepositSweep, MovedFundsSweep, MovingFunds) are gated to
-	// every 4th coordination window.
+	// All test cases below exercise the pre-activation code path. Reservation
+	// activation is per-network: this test sets ethereumNetwork to Mainnet,
+	// for which ReservationsActivationBlock returns math.MaxUint64, so no
+	// real block height activates reservations here. Reservation actions
+	// therefore never appear in any expectedChecklist below; see
+	// TestCoordinationExecutor_GetActionsChecklist_Reservations for the
+	// activation-block gate itself. In this mode DepositSweep,
+	// MovedFundsSweep, and MovingFunds are all gated to every 4th
+	// coordination window.
 	tests := map[string]struct {
 		coordinationBlock uint64
 		expectedChecklist []WalletActionType
@@ -585,8 +1069,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 2700,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 4): all actions present. Heartbeat randomly
-		// selected for this specific seed.
+		// 4th-window (window 4): sweep/moving-funds actions present.
+		// Heartbeat randomly selected for this specific seed.
 		"block 3600": {
 			coordinationBlock: 3600,
 			expectedChecklist: []WalletActionType{
@@ -609,7 +1093,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 6300,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 8): all actions present except heartbeat.
+		// 4th-window (window 8): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 7200": {
 			coordinationBlock: 7200,
 			expectedChecklist: []WalletActionType{
@@ -631,7 +1116,8 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 			coordinationBlock: 9900,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 12): all actions present except heartbeat.
+		// 4th-window (window 12): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 10800": {
 			coordinationBlock: 10800,
 			expectedChecklist: []WalletActionType{
@@ -647,15 +1133,14 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 		"block 12600": {
 			coordinationBlock: 12600,
-			expectedChecklist: []WalletActionType{
-				ActionRedemption,
-			},
+			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
 		"block 13500": {
 			coordinationBlock: 13500,
 			expectedChecklist: []WalletActionType{ActionRedemption},
 		},
-		// 4th-window (window 16): all actions present except heartbeat.
+		// 4th-window (window 16): sweep/moving-funds actions present,
+		// no heartbeat for this seed.
 		"block 14400": {
 			coordinationBlock: 14400,
 			expectedChecklist: []WalletActionType{
@@ -667,7 +1152,12 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 		},
 	}
 
-	executor := &coordinationExecutor{}
+	// Verify that the activation block constant is accessible and typed
+	// as uint64. This is a compile-time assertion placed outside the test
+	// loop since it does not vary per subtest.
+	var _ uint64 = DepositSweepEveryWindowActivationBlock
+
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
 
 	for testName, test := range tests {
 		t.Run(
@@ -700,9 +1190,10 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 // TestCoordinationExecutor_GetActionsChecklist_PostActivation verifies
 // post-activation behavior where DepositSweep and MovedFundsSweep appear
 // on every coordination window, MovingFunds remains gated to every 4th
-// window, and ActionRedemption is always at index 0. Safety invariants
-// are explicitly asserted beyond simple checklist comparison to guard
-// against regressions that a full-list deep-equal alone might miss.
+// window, and Redemption leads the checklist. Safety invariants are
+// explicitly asserted beyond
+// simple checklist comparison to guard against regressions that a
+// full-list deep-equal alone might miss.
 //
 // All coordination blocks used here are above
 // DepositSweepEveryWindowActivationBlock to exercise the post-activation
@@ -713,7 +1204,7 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		expectedChecklist []WalletActionType
 		is4thWindow       bool
 	}{
-		// Non-4th window (window 27289): DepositSweep and
+		// Non-4th window (window 27289): Redemption leads,
 		// MovedFundsSweep present, MovingFunds absent.
 		"post-activation non-4th window 27289": {
 			coordinationBlock: 24560100,
@@ -764,8 +1255,8 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 			is4thWindow: false,
 		},
 		// Non-4th window (window 27310) with heartbeat triggered by
-		// seed, verifying heartbeat works independently of the 4th-
-		// window gate.
+		// seed, verifying heartbeat works independently of the
+		// 4th-window gate and stays last in the checklist.
 		"post-activation non-4th window 27310 with heartbeat": {
 			coordinationBlock: 24579000,
 			expectedChecklist: []WalletActionType{
@@ -804,7 +1295,11 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 		},
 	}
 
-	executor := &coordinationExecutor{}
+	// Compile-time assertion: DepositSweepEveryWindowActivationBlock must
+	// be typed as uint64.
+	var _ uint64 = DepositSweepEveryWindowActivationBlock
+
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
 
 	for testName, test := range tests {
 		t.Run(
@@ -844,6 +1339,7 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 				assertPostActivationSafety(
 					t,
 					checklist,
+					window.index(),
 					test.is4thWindow,
 				)
 				assertChecklistOrdering(t, checklist)
@@ -852,31 +1348,319 @@ func TestCoordinationExecutor_GetActionsChecklist_PostActivation(t *testing.T) {
 	}
 }
 
+// TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActivation
+// verifies the membership of the checklist on both sides of the activation
+// block and across the 4th-window gate. The membership is what the rollout
+// depends on: followers reject a proposal for an action they do not allow
+// with FaultLeaderMistake, so an unexpected member would break coordination
+// between operators that disagree on the activation state.
+//
+// For every window in a range crossing the activation block, the set must
+// equal:
+//   - post-activation: {Redemption, DepositSweep, MovedFundsSweep}
+//     union {MovingFunds if windowIndex%4==0} union {Heartbeat if drawn}
+//   - pre-activation: {Redemption} union
+//     {DepositSweep, MovedFundsSweep, MovingFunds if windowIndex%4==0}
+//     union {Heartbeat if drawn}
+//
+// Membership must not change without a coordinated activation block because
+// followers reject proposals for actions they do not allow with
+// FaultLeaderMistake.
+func TestCoordinationExecutor_GetActionsChecklist_MembershipInvarianceAcrossActivation(t *testing.T) {
+	executor := &coordinationExecutor{ethereumNetwork: ethereum.Mainnet}
+
+	// The activation block 24559289 falls inside window 27288 (starting
+	// block 24559200, still pre-activation); window 27289 (starting
+	// block 24560100) is post-activation. Cover windows 27285-27292 so
+	// the range crosses the activation boundary.
+	firstWindow := uint64(27285)
+	const numWindows = 8
+
+	for i := uint64(0); i < numWindows; i++ {
+		windowIndex := firstWindow + i
+		coordinationBlock := windowIndex * coordinationFrequencyBlocks
+
+		window := newCoordinationWindow(coordinationBlock)
+
+		seed := sha256.Sum256(
+			big.NewInt(int64(window.coordinationBlock) + 2).Bytes(),
+		)
+
+		checklist := executor.getActionsChecklist(
+			window.index(),
+			seed,
+			coordinationBlock,
+		)
+
+		if checklist == nil {
+			t.Fatalf(
+				"window %d: expected non-nil checklist",
+				windowIndex,
+			)
+		}
+
+		// Expected membership set for this window.
+		expected := map[WalletActionType]bool{
+			ActionRedemption: true,
+		}
+
+		if coordinationBlock >= DepositSweepEveryWindowActivationBlock {
+			// Post-activation: DepositSweep and MovedFundsSweep are
+			// present on every window; MovingFunds stays %4-gated.
+			expected[ActionDepositSweep] = true
+			expected[ActionMovedFundsSweep] = true
+
+			if windowIndex%4 == 0 {
+				expected[ActionMovingFunds] = true
+			}
+		} else if windowIndex%4 == 0 {
+			// Pre-activation: all three extras are %4-gated together.
+			expected[ActionDepositSweep] = true
+			expected[ActionMovedFundsSweep] = true
+			expected[ActionMovingFunds] = true
+		}
+
+		// Heartbeat is appended (deterministically) only when the draw
+		// succeeds; if present, it is part of the expected set.
+		if slices.Contains(checklist, ActionHeartbeat) {
+			expected[ActionHeartbeat] = true
+		}
+
+		// Every checklist action must be an expected member.
+		for _, action := range checklist {
+			if !expected[action] {
+				t.Errorf(
+					"window %d: unexpected action %s in checklist %v",
+					windowIndex,
+					action,
+					checklist,
+				)
+			}
+
+			delete(expected, action)
+		}
+
+		// Every expected member must be present.
+		for action := range expected {
+			t.Errorf(
+				"window %d: expected action %s in checklist %v",
+				windowIndex,
+				action,
+				checklist,
+			)
+		}
+	}
+}
+
+// TestCoordinationExecutor_GetActionsChecklist_Reservations verifies the
+// reservation actions checklist gate depends solely on the activation
+// block, never on the frequency window or a local per-operator
+// configuration flag - see coordinationExecutor.getActionsChecklist's
+// comment for why: a follower gating checklist validation on its own
+// local flag would wrongly fault an honest leader whenever the two
+// operators' local configs diverge.
+func TestCoordinationExecutor_GetActionsChecklist_Reservations(t *testing.T) {
+	tests := map[string]struct {
+		network                    ethereum.Network
+		coordinationBlock          uint64
+		windowIndex                uint64
+		expectedReservationActions []WalletActionType
+	}{
+		// Mainnet has no entry in reservationsActivationBlocks and falls
+		// through to math.MaxUint64 (never activates). Any real block
+		// height is below MaxUint64, so reservation actions must never
+		// appear on mainnet until a real rollout height is set.
+		"mainnet never activates (fallthrough)": {
+			network:                    ethereum.Mainnet,
+			coordinationBlock:          26500000,
+			windowIndex:                4,
+			expectedReservationActions: nil,
+		},
+		// ethereum.Developer activates immediately at block 0, so
+		// reservation actions appear on every window.
+		"developer at activation, non-4th window": {
+			network:                    ethereum.Developer,
+			coordinationBlock:          0,
+			windowIndex:                5,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
+		},
+		"developer at activation, 4th window": {
+			network:                    ethereum.Developer,
+			coordinationBlock:          0,
+			windowIndex:                4,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
+		},
+		// ethereum.Unknown is the zero value used for an unset or
+		// unrecognized network and must fail closed exactly like
+		// mainnet, never like ethereum.Developer, even though it is
+		// also Go's zero value for coordinationExecutor.ethereumNetwork.
+		"unknown network never activates (fails closed)": {
+			network:                    ethereum.Unknown,
+			coordinationBlock:          26500000,
+			windowIndex:                4,
+			expectedReservationActions: nil,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			executor := &coordinationExecutor{ethereumNetwork: test.network}
+
+			// We don't care about the seed for this test, as it only affects
+			// the ActionHeartbeat which is not the focus here.
+			seed := [32]byte{}
+
+			checklist := executor.getActionsChecklist(
+				test.windowIndex,
+				seed,
+				test.coordinationBlock,
+			)
+
+			// We only care about reservation actions.
+			var actualReservationActions []WalletActionType
+			for _, action := range checklist {
+				if action == ActionReservationAnchor || action == ActionReservationReanchor {
+					actualReservationActions = append(actualReservationActions, action)
+				}
+			}
+
+			if diff := deep.Equal(actualReservationActions, test.expectedReservationActions); diff != nil {
+				t.Errorf("reservation actions mismatch: %v", diff)
+			}
+		})
+	}
+}
+
+// TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock
+// verifies the inclusive comparison coordinationBlock >=
+// ReservationsActivationBlock at the exact activation block for a network
+// with a non-zero activation block. Since reservationsActivationBlocks is
+// empty in production (no network has been assigned a rollout height yet),
+// this test temporarily inserts an entry for ethereum.Sepolia to exercise
+// the boundary.
+func TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock(t *testing.T) {
+	// Set up a temporary activation block for Sepolia and clean up.
+	const activationBlock = 1000
+	reservationsActivationBlocks[ethereum.Sepolia] = activationBlock
+	t.Cleanup(func() { delete(reservationsActivationBlocks, ethereum.Sepolia) })
+
+	tests := map[string]struct {
+		coordinationBlock          uint64
+		windowIndex                uint64
+		expectedReservationActions []WalletActionType
+	}{
+		"coordination block exactly at activation block": {
+			coordinationBlock:          activationBlock,
+			windowIndex:                5,
+			expectedReservationActions: []WalletActionType{ActionReservationAnchor, ActionReservationReanchor},
+		},
+		// Negative control: one block before activation must not include
+		// reservation actions, proving the inclusive comparison is what
+		// gates the actions.
+		"coordination block one before activation block": {
+			coordinationBlock:          activationBlock - 1,
+			windowIndex:                5,
+			expectedReservationActions: nil,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			executor := &coordinationExecutor{ethereumNetwork: ethereum.Sepolia}
+
+			seed := [32]byte{}
+
+			checklist := executor.getActionsChecklist(
+				test.windowIndex,
+				seed,
+				test.coordinationBlock,
+			)
+
+			var actualReservationActions []WalletActionType
+			for _, action := range checklist {
+				if action == ActionReservationAnchor || action == ActionReservationReanchor { // ubs:ignore
+					actualReservationActions = append(actualReservationActions, action)
+				}
+			}
+
+			if diff := deep.Equal(actualReservationActions, test.expectedReservationActions); diff != nil {
+				t.Errorf("reservation actions mismatch: %v", diff)
+			}
+		})
+	}
+}
+
+func TestReservationsActivationBlock_SanityCheck(t *testing.T) {
+	// Mainnet must have no entry in reservationsActivationBlocks so that
+	// ReservationsActivationBlock returns math.MaxUint64 (never activates)
+	// until a real rollout height is chosen. A placeholder value here would
+	// be a silently-live landmine: a real height and an invented one are
+	// indistinguishable at runtime.
+	if _, ok := reservationsActivationBlocks[ethereum.Mainnet]; ok {
+		t.Error("reservationsActivationBlocks must not contain a mainnet entry " +
+			"until a real rollout height is chosen; remove the placeholder and " +
+			"let it fall through to math.MaxUint64")
+	}
+	if got := ReservationsActivationBlock(ethereum.Mainnet); got != math.MaxUint64 {
+		t.Errorf(
+			"ReservationsActivationBlock(ethereum.Mainnet) = %d, want %d",
+			got,
+			uint64(math.MaxUint64),
+		)
+	}
+	// ethereum.Unknown is the zero value of ethereum.Network - anything
+	// that fails to explicitly set a network (an unset config field, a
+	// struct literal that forgets the field) lands here. It must fail
+	// closed like every other unrecognized network, never like
+	// ethereum.Developer, which is the only network that activates
+	// immediately.
+	if got := ReservationsActivationBlock(ethereum.Unknown); got != math.MaxUint64 {
+		t.Errorf(
+			"ReservationsActivationBlock(ethereum.Unknown) = %d, want %d",
+			got,
+			uint64(math.MaxUint64),
+		)
+	}
+	if got := ReservationsActivationBlock(ethereum.Developer); got != 0 {
+		t.Errorf(
+			"ReservationsActivationBlock(ethereum.Developer) = %d, want 0",
+			got,
+		)
+	}
+}
+
 // assertPostActivationSafety verifies the safety invariants that must hold
 // for every non-nil post-activation checklist:
-//   - ActionRedemption is at index 0.
-//   - ActionDepositSweep is present.
+//   - ActionRedemption is at index 0 and ActionDepositSweep at index 1.
 //   - ActionMovedFundsSweep is present.
 //   - ActionMovingFunds is absent on non-4th windows.
 func assertPostActivationSafety(
 	t *testing.T,
 	checklist []WalletActionType,
+	windowIndex uint64,
 	is4thWindow bool,
 ) {
 	t.Helper()
 
-	if checklist[0] != ActionRedemption {
-		t.Errorf(
-			"ActionRedemption must be at index 0, got %s",
-			checklist[0],
+	if len(checklist) < 3 {
+		t.Fatalf(
+			"post-activation checklist must have at least 3 actions, got %v",
+			checklist,
 		)
 	}
 
-	if !slices.Contains(checklist, ActionDepositSweep) {
-		t.Error(
-			"ActionDepositSweep must be present " +
-				"in every post-activation window",
-		)
+	expectedLead := []WalletActionType{ActionRedemption, ActionDepositSweep}
+
+	for i, expected := range expectedLead {
+		if checklist[i] != expected {
+			t.Errorf(
+				"%s must be at index %d on window %d, got %s",
+				expected,
+				i,
+				windowIndex,
+				checklist[i],
+			)
+		}
 	}
 
 	if !slices.Contains(checklist, ActionMovedFundsSweep) {
@@ -896,10 +1680,11 @@ func assertPostActivationSafety(
 	}
 }
 
-// assertChecklistOrdering verifies that actions appear in canonical priority
-// order: Redemption < DepositSweep < MovedFundsSweep < MovingFunds <
-// Heartbeat. Each consecutive pair of actions must have strictly increasing
-// priority values.
+// assertChecklistOrdering verifies that actions appear in the canonical
+// post-activation priority order: Redemption < DepositSweep <
+// MovedFundsSweep < MovingFunds < ReservationAnchor < ReservationReanchor <
+// Heartbeat. Each consecutive pair of actions must have strictly
+// increasing priority values.
 func assertChecklistOrdering(
 	t *testing.T,
 	checklist []WalletActionType,
@@ -907,11 +1692,13 @@ func assertChecklistOrdering(
 	t.Helper()
 
 	actionPriority := map[WalletActionType]int{
-		ActionRedemption:      0,
-		ActionDepositSweep:    1,
-		ActionMovedFundsSweep: 2,
-		ActionMovingFunds:     3,
-		ActionHeartbeat:       4,
+		ActionRedemption:          0,
+		ActionDepositSweep:        1,
+		ActionMovedFundsSweep:     2,
+		ActionMovingFunds:         3,
+		ActionReservationAnchor:   4,
+		ActionReservationReanchor: 5,
+		ActionHeartbeat:           6,
 	}
 
 	for i := 1; i < len(checklist); i++ {
@@ -1001,6 +1788,7 @@ func TestCoordinationExecutor_ExecuteLeaderRoutine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test") })
 
 	broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 		return &coordinationMessage{}
@@ -1210,6 +1998,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test") })
 
 		broadcastChannel.SetUnmarshaler(func() net.TaggedUnmarshaler {
 			return &coordinationMessage{}
@@ -1507,6 +2296,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine_WithIdleLeader(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { netlocal.ReleaseBroadcastChannel("test-idle") })
 
 	executor := &coordinationExecutor{
 		// Set only relevant fields.

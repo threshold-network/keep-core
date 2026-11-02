@@ -1,0 +1,370 @@
+[1m[32m⇾[0m[0m Reading the configuration file at: [1mmedusa-reservations-liveness.json[0m
+⇾ Compiling targets with crytic-compile
+⇾ Running command:
+crytic-compile . --export-format solc --export-dir cache_forge/medusa-reservations-liveness/crytic-export --foundry-compile-all
+⇾ Finished compiling targets in 1m51s
+⇾ artifacts: Medusa is running against a new set of build artifacts
+⇾ Running with a timeout of 360 seconds
+⇾ Setting up test chain
+⇾ Finished setting up test chain
+⇾ Creating corpus...
+⇾ Initializing corpus...
+⇾ Fuzzing with 4 workers
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_walletCountersMatchOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckAtTheReanchorFloor()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_activeCountMatchesOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_creditsMatchSettlements()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_aPossibleHandOffIsNeverRefused()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_capsHoldAfterEveryRequest()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_totalAmountMatchesOpenPositions()
+⇾ fuzz: elapsed:       0s, calls:          0 (     0/sec), seq/s:      0, branches:    275, corpus:     0, failures: 0/0, gas/s:            0
+⇾ Finished running call sequences in the corpus in 1s
+⇾ corpus: health: 0%, sequences: 283 (0 valid, 279 invalid)
+⇾ fuzz: elapsed:       3s, calls:         61 (    20/sec), seq/s:     94, branches:    978, corpus:    25, failures: 0/283, gas/s:      1171946
+⇾ fuzz: elapsed:       6s, calls:        494 (   144/sec), seq/s:      0, branches:   1686, corpus:    48, failures: 0/286, gas/s:      8498439
+⇾ fuzz: elapsed:       9s, calls:        969 (   157/sec), seq/s:      1, branches:   1750, corpus:    61, failures: 0/291, gas/s:      9125694
+⇾ fuzz: elapsed:      12s, calls:       1681 (   237/sec), seq/s:      1, branches:   1831, corpus:    67, failures: 0/297, gas/s:     13311087
+⇾ fuzz: elapsed:      15s, calls:       2378 (   232/sec), seq/s:      2, branches:   1838, corpus:    70, failures: 0/304, gas/s:     12853586
+⇾ fuzz: elapsed:      18s, calls:       3102 (   241/sec), seq/s:      2, branches:   1844, corpus:    72, failures: 0/311, gas/s:     12916046
+⇾ fuzz: elapsed:      21s, calls:       3824 (   240/sec), seq/s:      2, branches:   1845, corpus:    73, failures: 0/318, gas/s:     13449468
+⇾ fuzz: elapsed:      24s, calls:       4413 (   196/sec), seq/s:      2, branches:   1886, corpus:    76, failures: 0/325, gas/s:     10775544
+⇾ fuzz: elapsed:      27s, calls:       5238 (   274/sec), seq/s:      2, branches:   1886, corpus:    76, failures: 0/333, gas/s:     15978784
+⇾ fuzz: elapsed:      30s, calls:       6004 (   255/sec), seq/s:      2, branches:   1903, corpus:    78, failures: 0/340, gas/s:     14586580
+⇾ fuzz: elapsed:      33s, calls:       6884 (   293/sec), seq/s:      2, branches:   1969, corpus:    81, failures: 0/349, gas/s:     16817425
+⇾ fuzz: elapsed:      36s, calls:       7837 (   317/sec), seq/s:      3, branches:   1990, corpus:    84, failures: 0/359, gas/s:     17718131
+⇾ fuzz: elapsed:      39s, calls:       8573 (   245/sec), seq/s:      2, branches:   1990, corpus:    84, failures: 0/366, gas/s:     14647530
+⇾ fuzz: elapsed:      42s, calls:       9375 (   267/sec), seq/s:      2, branches:   1994, corpus:    85, failures: 0/375, gas/s:     14595337
+⇾ fuzz: elapsed:      45s, calls:      10480 (   368/sec), seq/s:      3, branches:   1994, corpus:    85, failures: 0/385, gas/s:     20146561
+⇾ fuzz: elapsed:      48s, calls:      11434 (   317/sec), seq/s:      2, branches:   1994, corpus:    85, failures: 0/394, gas/s:     17331539
+⇾ fuzz: elapsed:      51s, calls:      12209 (   258/sec), seq/s:      2, branches:   1998, corpus:    87, failures: 0/403, gas/s:     15160785
+⇾ fuzz: elapsed:      54s, calls:      13192 (   327/sec), seq/s:      3, branches:   2014, corpus:    90, failures: 0/413, gas/s:     18028222
+⇾ fuzz: elapsed:      57s, calls:      14001 (   269/sec), seq/s:      2, branches:   2014, corpus:    90, failures: 0/421, gas/s:     15587847
+⇾ fuzz: elapsed:    1m00s, calls:      14955 (   317/sec), seq/s:      2, branches:   2090, corpus:    94, failures: 0/430, gas/s:     17812142
+⇾ fuzz: elapsed:    1m03s, calls:      15847 (   296/sec), seq/s:      3, branches:   2090, corpus:    94, failures: 0/440, gas/s:     16755391
+⇾ fuzz: elapsed:    1m06s, calls:      16880 (   343/sec), seq/s:      2, branches:   2090, corpus:    94, failures: 0/449, gas/s:     18472260
+⇾ fuzz: elapsed:    1m09s, calls:      17670 (   263/sec), seq/s:      2, branches:   2090, corpus:    94, failures: 0/458, gas/s:     16079517
+⇾ fuzz: elapsed:    1m12s, calls:      18576 (   301/sec), seq/s:      2, branches:   2092, corpus:    95, failures: 0/466, gas/s:     17372343
+⇾ fuzz: elapsed:    1m15s, calls:      19514 (   312/sec), seq/s:      3, branches:   2097, corpus:    96, failures: 0/476, gas/s:     16883571
+⇾ [Worker 2] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds() with 26 call(s)
+⇾ fuzz: elapsed:    1m18s, calls:      20247 (   244/sec), seq/s:      2, branches:   2117, corpus:    97, failures: 0/484, gas/s:     14097079
+⇾ fuzz: elapsed:    1m21s, calls:      20714 (   155/sec), seq/s:      1, branches:   2119, corpus:    98, failures: 0/489, gas/s:      9200094
+⇾ fuzz: elapsed:    1m24s, calls:      21320 (   201/sec), seq/s:      1, branches:   2119, corpus:    98, failures: 0/495, gas/s:     11490529
+⇾ fuzz: elapsed:    1m27s, calls:      21926 (   201/sec), seq/s:      1, branches:   2119, corpus:    98, failures: 0/501, gas/s:     11244415
+⇾ fuzz: elapsed:    1m30s, calls:      22207 (    93/sec), seq/s:      0, branches:   2132, corpus:   100, failures: 0/503, gas/s:      6001924
+⇾ fuzz: elapsed:    1m33s, calls:      22868 (   220/sec), seq/s:      2, branches:   2132, corpus:   100, failures: 0/511, gas/s:     12409643
+⇾ fuzz: elapsed:    1m36s, calls:      23517 (   216/sec), seq/s:      1, branches:   2132, corpus:   100, failures: 0/517, gas/s:     12748155
+⇾ fuzz: elapsed:    1m39s, calls:      24076 (   186/sec), seq/s:      1, branches:   2136, corpus:   101, failures: 0/522, gas/s:     10816141
+⇾ fuzz: elapsed:    1m42s, calls:      24867 (   263/sec), seq/s:      2, branches:   2136, corpus:   101, failures: 0/531, gas/s:     13757286
+⇾ fuzz: elapsed:    1m45s, calls:      25456 (   196/sec), seq/s:      1, branches:   2136, corpus:   101, failures: 0/536, gas/s:     11602504
+⇾ [Worker 2] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:    1m48s, calls:      26064 (   202/sec), seq/s:      1, branches:   2136, corpus:   101, failures: 0/542, gas/s:     11910531
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()
+Test for method "ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(93812707792961593723621478323915456658546288319617363342586413995377333, 12446610943941758, 1029350) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(3618452320488455679029157522539902235674421921268439028841072908620637374766) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(2870700169551792952668984556789403862470774401483788940390221558444527709, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+4) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(113092015427889010372654909375256847071158935771769624360661715093032853472, 17932567502651610, 2904152204482) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+5) ReservationLivenessHandler.tryHandOff(uint256,uint256)(14474011370423082020643961986556330940896279850778272410779323288578404397198, 55218183600232992844439848207478850738390381358279674416848477619865644) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.tryHandOff(uint256,uint256)(14474011370423082020643961986556330940896279850778272410779323288578404397198, 55218183600232992844439848207478850738390381358279674416848477619865644) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000178d21000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000178d21000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=352e2389c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c30402853900000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [proxy call] <unresolved proxy> -> Reservation.<unresolved method>(msg_data=2ecd14360000000000000000000000000000000000000000000000000000000000000000c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c3040285390000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, code=0x119516b4805E8310061F57161dD17d471069a8FB, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+			 => [event] ReservationReanchorRequested(88797771472269036721836711663406159724222821311283846665156024043181548143929, 2, 0000000000000000000000000000000000001001, 0000000000000000000000000000000000001000, 10000)
+			 => [return]
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [return (false)]
+
+⇾ fuzz: elapsed:    1m51s, calls:      26897 (   277/sec), seq/s:      2, branches:   2136, corpus:   101, failures: 1/550, gas/s:     16043755
+⇾ fuzz: elapsed:    1m54s, calls:      27699 (   267/sec), seq/s:      2, branches:   2139, corpus:   102, failures: 1/558, gas/s:     15221956
+⇾ fuzz: elapsed:    1m57s, calls:      28809 (   369/sec), seq/s:      3, branches:   2139, corpus:   103, failures: 1/569, gas/s:     20446100
+⇾ fuzz: elapsed:    2m00s, calls:      29607 (   265/sec), seq/s:      2, branches:   2139, corpus:   103, failures: 1/578, gas/s:     15825798
+⇾ fuzz: elapsed:    2m03s, calls:      30510 (   300/sec), seq/s:      2, branches:   2141, corpus:   104, failures: 1/586, gas/s:     17852138
+⇾ fuzz: elapsed:    2m06s, calls:      31592 (   360/sec), seq/s:      3, branches:   2141, corpus:   104, failures: 1/597, gas/s:     21028212
+⇾ fuzz: elapsed:    2m09s, calls:      32619 (   342/sec), seq/s:      3, branches:   2244, corpus:   105, failures: 1/607, gas/s:     19573624
+⇾ fuzz: elapsed:    2m12s, calls:      33737 (   372/sec), seq/s:      3, branches:   2250, corpus:   106, failures: 1/619, gas/s:     21238632
+⇾ fuzz: elapsed:    2m15s, calls:      34794 (   352/sec), seq/s:      3, branches:   2250, corpus:   107, failures: 1/629, gas/s:     19531728
+⇾ fuzz: elapsed:    2m18s, calls:      35820 (   341/sec), seq/s:      3, branches:   2250, corpus:   107, failures: 1/639, gas/s:     19880845
+⇾ fuzz: elapsed:    2m21s, calls:      36800 (   326/sec), seq/s:      3, branches:   2250, corpus:   107, failures: 1/649, gas/s:     18621428
+⇾ fuzz: elapsed:    2m24s, calls:      37955 (   384/sec), seq/s:      3, branches:   2264, corpus:   109, failures: 1/661, gas/s:     22124779
+⇾ fuzz: elapsed:    2m27s, calls:      39171 (   405/sec), seq/s:      3, branches:   2264, corpus:   109, failures: 1/673, gas/s:     23158703
+⇾ fuzz: elapsed:    2m30s, calls:      40259 (   362/sec), seq/s:      3, branches:   2264, corpus:   109, failures: 1/684, gas/s:     20144582
+⇾ fuzz: elapsed:    2m33s, calls:      41323 (   354/sec), seq/s:      3, branches:   2285, corpus:   110, failures: 1/694, gas/s:     20616406
+⇾ fuzz: elapsed:    2m36s, calls:      42275 (   317/sec), seq/s:      3, branches:   2285, corpus:   110, failures: 1/704, gas/s:     18180401
+⇾ fuzz: elapsed:    2m39s, calls:      43383 (   369/sec), seq/s:      3, branches:   2285, corpus:   110, failures: 1/716, gas/s:     20371233
+⇾ fuzz: elapsed:    2m42s, calls:      44336 (   317/sec), seq/s:      2, branches:   2285, corpus:   110, failures: 1/725, gas/s:     17849212
+⇾ fuzz: elapsed:    2m45s, calls:      45466 (   376/sec), seq/s:      3, branches:   2285, corpus:   110, failures: 1/736, gas/s:     21753289
+⇾ [Worker 1] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit() with 65 call(s)
+⇾ fuzz: elapsed:    2m48s, calls:      46212 (   248/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/744, gas/s:     13346538
+⇾ fuzz: elapsed:    2m51s, calls:      47035 (   274/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/753, gas/s:     15670209
+⇾ fuzz: elapsed:    2m54s, calls:      47799 (   254/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/760, gas/s:     14813633
+⇾ fuzz: elapsed:    2m57s, calls:      48601 (   267/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/768, gas/s:     15248792
+⇾ fuzz: elapsed:    3m00s, calls:      49625 (   341/sec), seq/s:      3, branches:   2311, corpus:   113, failures: 1/778, gas/s:     17625490
+⇾ fuzz: elapsed:    3m03s, calls:      50490 (   288/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/787, gas/s:     16474067
+⇾ fuzz: elapsed:    3m06s, calls:      51223 (   244/sec), seq/s:      2, branches:   2311, corpus:   113, failures: 1/795, gas/s:     13860629
+⇾ fuzz: elapsed:    3m09s, calls:      52111 (   295/sec), seq/s:      2, branches:   2316, corpus:   116, failures: 1/803, gas/s:     16225250
+⇾ fuzz: elapsed:    3m12s, calls:      52829 (   239/sec), seq/s:      2, branches:   2316, corpus:   116, failures: 1/810, gas/s:     14245381
+⇾ fuzz: elapsed:    3m15s, calls:      53647 (   272/sec), seq/s:      2, branches:   2316, corpus:   116, failures: 1/819, gas/s:     14891524
+⇾ [Worker 1] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:    3m18s, calls:      54337 (   229/sec), seq/s:      2, branches:   2316, corpus:   116, failures: 1/826, gas/s:     13855588
+⇾ fuzz: elapsed:    3m21s, calls:      55194 (   285/sec), seq/s:      2, branches:   2316, corpus:   116, failures: 1/835, gas/s:     16133815
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+Test for method "ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.advanceWallet(uint256,bool)(706988090168152998581417601062701239068507715278239582338055437618375344, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+2) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(452312848583269602249412678170816844173294088787326504852896095044287255545, 156985669074467, 2070844429) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+3) ReservationLivenessHandler.requestAcceptance(uint256)(1545991181681086094878930817527737419521380179826884976464804892761431482) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+4) ReservationLivenessHandler.advanceWallet(uint256,bool)(79615030298196500301939748985604387622938127675619128427034085529808949696214, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+5) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(282469578187398263100034556020899638080795562803461291983629, 212106, 34076111518910348) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(1471433995015425374971029973435044820721091877758800006910289088236374862635, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(7297868268337688146774171028126503605363864963738182268380389238066371906877, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(7297868268337688146774171028126503605363864963738182268380389238066371906877, false) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000000002) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000199e77000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000199e77000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ [Worker 1] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget() with 65 call(s)
+⇾ fuzz: elapsed:    3m24s, calls:      56040 (   281/sec), seq/s:      2, branches:   2318, corpus:   117, failures: 2/843, gas/s:     16030230
+⇾ fuzz: elapsed:    3m27s, calls:      56872 (   277/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/851, gas/s:     15527620
+⇾ fuzz: elapsed:    3m30s, calls:      57696 (   274/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/859, gas/s:     15768503
+⇾ fuzz: elapsed:    3m33s, calls:      58534 (   279/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/867, gas/s:     15853468
+⇾ fuzz: elapsed:    3m36s, calls:      59322 (   262/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/876, gas/s:     14557700
+⇾ fuzz: elapsed:    3m39s, calls:      60141 (   272/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/884, gas/s:     15804458
+⇾ fuzz: elapsed:    3m42s, calls:      60833 (   230/sec), seq/s:      1, branches:   2324, corpus:   118, failures: 2/890, gas/s:     13347485
+⇾ fuzz: elapsed:    3m45s, calls:      61550 (   238/sec), seq/s:      2, branches:   2324, corpus:   118, failures: 2/898, gas/s:     13311334
+⇾ fuzz: elapsed:    3m48s, calls:      62176 (   208/sec), seq/s:      1, branches:   2324, corpus:   118, failures: 2/904, gas/s:     12517066
+⇾ fuzz: elapsed:    3m51s, calls:      62819 (   214/sec), seq/s:      1, branches:   2324, corpus:   118, failures: 2/910, gas/s:     12176421
+⇾ fuzz: elapsed:    3m54s, calls:      63415 (   198/sec), seq/s:      1, branches:   2324, corpus:   118, failures: 2/916, gas/s:     11538954
+⇾ [Worker 1] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:    3m57s, calls:      64117 (   233/sec), seq/s:      2, branches:   2331, corpus:   119, failures: 2/923, gas/s:     14278660
+⇾ fuzz: elapsed:    4m00s, calls:      64995 (   292/sec), seq/s:      2, branches:   2331, corpus:   119, failures: 2/932, gas/s:     16990513
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+Test for method "ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(0, 2449060234353915714, 12778881) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(1435563240206154765929888561031562245085685792607945293191081719379435925) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(165898595999229043309350453443478409714889663904078867724318850252319568074, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+4) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(1325135298635210264588795037611833470868999844920126605566422504751261069, 35629262670130917, 279373815629330256) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+5) ReservationLivenessHandler.advanceWallet(uint256,bool)(25782274999370337479985813793451040180009521811624468674790156330873071404549, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(9814760794120563153807245820224410487096809404135964316753260965449123862735, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(62584640399363442929924104381689905447515987039732721595252054112629493899356, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(62584640399363442929924104381689905447515987039732721595252054112629493899356, false) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000172fdc000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000172fdc000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ fuzz: elapsed:    4m03s, calls:      66316 (   440/sec), seq/s:      3, branches:   2331, corpus:   119, failures: 3/944, gas/s:     23135330
+⇾ fuzz: elapsed:    4m06s, calls:      67518 (   400/sec), seq/s:      4, branches:   2334, corpus:   120, failures: 3/957, gas/s:     22717990
+⇾ fuzz: elapsed:    4m10s, calls:      68766 (   415/sec), seq/s:      3, branches:   2334, corpus:   120, failures: 3/969, gas/s:     24062870
+⇾ fuzz: elapsed:    4m13s, calls:      69910 (   381/sec), seq/s:      3, branches:   2334, corpus:   120, failures: 3/981, gas/s:     22003691
+⇾ fuzz: elapsed:    4m16s, calls:      71296 (   460/sec), seq/s:      4, branches:   2346, corpus:   121, failures: 3/994, gas/s:     25898102
+⇾ fuzz: elapsed:    4m19s, calls:      72382 (   361/sec), seq/s:      3, branches:   2352, corpus:   123, failures: 3/1006, gas/s:     21115156
+⇾ fuzz: elapsed:    4m22s, calls:      73545 (   387/sec), seq/s:      3, branches:   2352, corpus:   123, failures: 3/1017, gas/s:     21957847
+⇾ fuzz: elapsed:    4m25s, calls:      74907 (   453/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1031, gas/s:     25429704
+⇾ fuzz: elapsed:    4m28s, calls:      76099 (   396/sec), seq/s:      3, branches:   2352, corpus:   123, failures: 3/1042, gas/s:     22944467
+⇾ fuzz: elapsed:    4m31s, calls:      77248 (   382/sec), seq/s:      3, branches:   2352, corpus:   123, failures: 3/1054, gas/s:     22648277
+⇾ fuzz: elapsed:    4m34s, calls:      78825 (   525/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1069, gas/s:     29529876
+⇾ fuzz: elapsed:    4m37s, calls:      80188 (   454/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1083, gas/s:     25742911
+⇾ fuzz: elapsed:    4m40s, calls:      81417 (   409/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1096, gas/s:     23896301
+⇾ fuzz: elapsed:    4m43s, calls:      82903 (   495/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1111, gas/s:     28894746
+⇾ fuzz: elapsed:    4m46s, calls:      84166 (   420/sec), seq/s:      3, branches:   2352, corpus:   123, failures: 3/1123, gas/s:     24914182
+⇾ fuzz: elapsed:    4m49s, calls:      85619 (   484/sec), seq/s:      4, branches:   2352, corpus:   123, failures: 3/1137, gas/s:     27350582
+⇾ fuzz: elapsed:    4m52s, calls:      87230 (   536/sec), seq/s:      5, branches:   2355, corpus:   124, failures: 3/1154, gas/s:     29415189
+⇾ fuzz: elapsed:    4m55s, calls:      89039 (   602/sec), seq/s:      5, branches:   2400, corpus:   126, failures: 3/1171, gas/s:     34523637
+⇾ fuzz: elapsed:    4m58s, calls:      90730 (   563/sec), seq/s:      5, branches:   2400, corpus:   126, failures: 3/1188, gas/s:     33296865
+⇾ fuzz: elapsed:    5m01s, calls:      92058 (   442/sec), seq/s:      4, branches:   2406, corpus:   127, failures: 3/1202, gas/s:     25974694
+⇾ Pruned 6 corpus items in 2.779240161s. Total pruned this run: 6
+⇾ fuzz: elapsed:    5m04s, calls:      92966 (   302/sec), seq/s:      2, branches:   2406, corpus:   121, failures: 3/1211, gas/s:     18376260
+⇾ fuzz: elapsed:    5m07s, calls:      94042 (   358/sec), seq/s:      3, branches:   2406, corpus:   121, failures: 3/1223, gas/s:     21483287
+⇾ fuzz: elapsed:    5m10s, calls:      95219 (   392/sec), seq/s:      3, branches:   2406, corpus:   121, failures: 3/1234, gas/s:     23072492
+⇾ fuzz: elapsed:    5m13s, calls:      96427 (   402/sec), seq/s:      3, branches:   2406, corpus:   121, failures: 3/1246, gas/s:     22951930
+⇾ fuzz: elapsed:    5m16s, calls:      97528 (   366/sec), seq/s:      3, branches:   2409, corpus:   122, failures: 3/1257, gas/s:     21532782
+⇾ fuzz: elapsed:    5m19s, calls:      99000 (   490/sec), seq/s:      4, branches:   2413, corpus:   123, failures: 3/1272, gas/s:     26914071
+⇾ fuzz: elapsed:    5m22s, calls:     100263 (   420/sec), seq/s:      3, branches:   2413, corpus:   123, failures: 3/1283, gas/s:     24742873
+⇾ fuzz: elapsed:    5m25s, calls:     101762 (   499/sec), seq/s:      5, branches:   2413, corpus:   123, failures: 3/1299, gas/s:     29106171
+⇾ fuzz: elapsed:    5m28s, calls:     103390 (   542/sec), seq/s:      5, branches:   2413, corpus:   123, failures: 3/1316, gas/s:     29329601
+⇾ fuzz: elapsed:    5m31s, calls:     104850 (   486/sec), seq/s:      4, branches:   2413, corpus:   123, failures: 3/1330, gas/s:     27194517
+⇾ fuzz: elapsed:    5m34s, calls:     106028 (   392/sec), seq/s:      3, branches:   2418, corpus:   124, failures: 3/1342, gas/s:     27270575
+⇾ fuzz: elapsed:    5m37s, calls:     107503 (   491/sec), seq/s:      4, branches:   2418, corpus:   124, failures: 3/1357, gas/s:     27504785
+⇾ fuzz: elapsed:    5m40s, calls:     108947 (   480/sec), seq/s:      4, branches:   2418, corpus:   124, failures: 3/1371, gas/s:     28106413
+⇾ fuzz: elapsed:    5m43s, calls:     110214 (   422/sec), seq/s:      3, branches:   2418, corpus:   124, failures: 3/1383, gas/s:     24156696
+⇾ fuzz: elapsed:    5m46s, calls:     111801 (   528/sec), seq/s:      5, branches:   2418, corpus:   124, failures: 3/1400, gas/s:     29615468
+⇾ fuzz: elapsed:    5m49s, calls:     113257 (   485/sec), seq/s:      4, branches:   2418, corpus:   124, failures: 3/1414, gas/s:     27491226
+⇾ fuzz: elapsed:    5m52s, calls:     114759 (   500/sec), seq/s:      4, branches:   2418, corpus:   124, failures: 3/1429, gas/s:     29186228
+⇾ fuzz: elapsed:    5m55s, calls:     116380 (   540/sec), seq/s:      5, branches:   2418, corpus:   124, failures: 3/1445, gas/s:     31281289
+⇾ fuzz: elapsed:    5m58s, calls:     118023 (   547/sec), seq/s:      5, branches:   2418, corpus:   124, failures: 3/1462, gas/s:     31042268
+⇾ Fuzzer stopped, test results follow below ...
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_aPossibleHandOffIsNeverRefused()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_activeCountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_capsHoldAfterEveryRequest()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_creditsMatchSettlements()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckAtTheReanchorFloor()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_totalAmountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_walletCountersMatchOpenPositions()
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()
+Test for method "ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(93812707792961593723621478323915456658546288319617363342586413995377333, 12446610943941758, 1029350) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(3618452320488455679029157522539902235674421921268439028841072908620637374766) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(2870700169551792952668984556789403862470774401483788940390221558444527709, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+4) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(113092015427889010372654909375256847071158935771769624360661715093032853472, 17932567502651610, 2904152204482) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+5) ReservationLivenessHandler.tryHandOff(uint256,uint256)(14474011370423082020643961986556330940896279850778272410779323288578404397198, 55218183600232992844439848207478850738390381358279674416848477619865644) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.tryHandOff(uint256,uint256)(14474011370423082020643961986556330940896279850778272410779323288578404397198, 55218183600232992844439848207478850738390381358279674416848477619865644) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000178d21000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000178d21000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=352e2389c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c30402853900000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [proxy call] <unresolved proxy> -> Reservation.<unresolved method>(msg_data=2ecd14360000000000000000000000000000000000000000000000000000000000000000c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c3040285390000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, code=0x119516b4805E8310061F57161dD17d471069a8FB, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+			 => [event] ReservationReanchorRequested(88797771472269036721836711663406159724222821311283846665156024043181548143929, 2, 0000000000000000000000000000000000001001, 0000000000000000000000000000000000001000, 10000)
+			 => [return]
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_canaryTryHandOffNeverSucceeds()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [return (false)]
+
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+Test for method "ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.advanceWallet(uint256,bool)(706988090168152998581417601062701239068507715278239582338055437618375344, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+2) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(452312848583269602249412678170816844173294088787326504852896095044287255545, 156985669074467, 2070844429) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+3) ReservationLivenessHandler.requestAcceptance(uint256)(1545991181681086094878930817527737419521380179826884976464804892761431482) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+4) ReservationLivenessHandler.advanceWallet(uint256,bool)(79615030298196500301939748985604387622938127675619128427034085529808949696214, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+5) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(282469578187398263100034556020899638080795562803461291983629, 212106, 34076111518910348) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(1471433995015425374971029973435044820721091877758800006910289088236374862635, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(7297868268337688146774171028126503605363864963738182268380389238066371906877, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(7297868268337688146774171028126503605363864963738182268380389238066371906877, false) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000000002) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000199e77000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000199e77000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+Test for method "ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(0, 2449060234353915714, 12778881) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(1435563240206154765929888561031562245085685792607945293191081719379435925) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(165898595999229043309350453443478409714889663904078867724318850252319568074, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+4) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(1325135298635210264588795037611833470868999844920126605566422504751261069, 35629262670130917, 279373815629330256) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+5) ReservationLivenessHandler.advanceWallet(uint256,bool)(25782274999370337479985813793451040180009521811624468674790156330873071404549, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(9814760794120563153807245820224410487096809404135964316753260965449123862735, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(62584640399363442929924104381689905447515987039732721595252054112629493899356, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(62584640399363442929924104381689905447515987039732721595252054112629493899356, false) (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=0, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()() (addr=0xE959e4134654c40C3e35B012445af0B9854f472B, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=000000000000000000000000e959e4134654c40c3e35b012445af0b9854f472b0000000000000000000000000000000000000000000000000000000000172fdc000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000172fdc000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0xEA77c860d7640b71ae2d483baE7936dCd4a0caF6, value=<nil>, sender=0xE959e4134654c40C3e35B012445af0B9854f472B)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ Test summary: 11 test(s) passed, 3 test(s) failed
+⇾ html report(s) saved to: cache_forge/medusa-reservations-liveness/corpus/coverage/coverage_report.html
+⇾ lcov report(s) saved to: cache_forge/medusa-reservations-liveness/corpus/coverage/lcov.info

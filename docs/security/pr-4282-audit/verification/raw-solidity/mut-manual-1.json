@@ -1,0 +1,116 @@
+{
+ "R02": {
+  "name": "R02 floor: > -> >=",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 148
+ },
+ "R04": {
+  "name": "R04 reanchor floor: drops minAmount",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 134
+ },
+ "R06": {
+  "name": "R06 skip: non-Live source only (third party skips)",
+  "verdict": "KILLED",
+  "note": "4 failing",
+  "seconds": 138
+ },
+ "R08": {
+  "name": "R08 skip: count cap never skipped",
+  "verdict": "KILLED",
+  "note": "5 failing",
+  "seconds": 141
+ },
+ "R10": {
+  "name": "R10 count cap: <= -> <",
+  "verdict": "KILLED",
+  "note": "8 failing",
+  "seconds": 159
+ },
+ "R12": {
+  "name": "R12 privilege: governance not privileged",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 172
+ },
+ "R14": {
+  "name": "R14 privilege: maintainer not privileged",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 167
+ },
+ "R16": {
+  "name": "R16 member proof failure does not revert",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 155
+ },
+ "R18": {
+  "name": "R18 cooldown applies to nobody",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 208
+ },
+ "R20": {
+  "name": "R20 reserve: <= -> <",
+  "verdict": "KILLED",
+  "note": "4 failing",
+  "seconds": 314
+ },
+ "R22": {
+  "name": "R22 reserve: > -> >=",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 285
+ },
+ "R24": {
+  "name": "R24 caps: zero reserve accepted",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 275
+ },
+ "R26": {
+  "name": "R26 custody add: count += 2",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 298
+ },
+ "R28": {
+  "name": "R28 custody remove: count not reduced",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 314
+ },
+ "P01": {
+  "name": "P01 acceptance settle: custody not added",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 426
+ },
+ "P03": {
+  "name": "P03 reanchor settle: old custody not removed",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 350
+ },
+ "P05": {
+  "name": "P05 settle: Closing wallet strands at once",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 283
+ },
+ "P07": {
+  "name": "P07 settle: Closed wallet not stranded",
+  "verdict": "KILLED",
+  "note": "4 failing",
+  "seconds": 221
+ },
+ "W02": {
+  "name": "W02 wrapper: output index ignored in key",
+  "verdict": "SURVIVED",
+  "note": "250 passing",
+  "seconds": 243
+ }
+}

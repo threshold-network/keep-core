@@ -1,0 +1,125 @@
+// Manual mutation harness for the ReservationRouter view getters.
+// usage: node mutate-getters.cjs <worktree> <shardIndex> <shardCount> <outJson>
+const fs = require("fs")
+const cp = require("child_process")
+const crypto = require("crypto")
+const [wt, shardIndexArg, shardCountArg, outPath] = process.argv.slice(2)
+const shardIndex = Number(shardIndexArg)
+const shardCount = Number(shardCountArg)
+const sol = `${wt}/solidity`
+const killset = process.env.KILLSET || fs.readFileSync("/dev/shm/public-merge/killset.txt", "utf8").trim()
+const only = process.env.ONLY ? new Set(process.env.ONLY.split(",")) : null
+const RTR = "contracts/bridge/ReservationRouter.sol"
+
+// The 8 surviving view-getter mutants. Each is one exact, unique string
+// replacement on ReservationRouter.sol; the getter body is forced to a
+// wrong value so a test that asserts the correct value fails.
+const ind = (n) => " ".repeat(n)
+const mutants = [
+  // reservationCaps(): four returned fields, one mutant each (zeroed).
+  [
+    "G01 caps: maxReservationsAmountPerWallet zeroed",
+    RTR,
+    "maxReservationsAmountPerWallet = self.maxReservationsAmountPerWallet;",
+    "maxReservationsAmountPerWallet = 0;",
+  ],
+  [
+    "G02 caps: reservationMaxSingleAmount zeroed",
+    RTR,
+    "reservationMaxSingleAmount = self.reservationMaxSingleAmount;",
+    "reservationMaxSingleAmount = 0;",
+  ],
+  [
+    "G03 caps: maxActiveReservations zeroed",
+    RTR,
+    "maxActiveReservations = self.maxActiveReservations;",
+    "maxActiveReservations = 0;",
+  ],
+  [
+    "G04 caps: maxThirdPartyReanchorHoldsPerWallet zeroed",
+    RTR,
+    `maxThirdPartyReanchorHoldsPerWallet = self\n${ind(12)}.maxThirdPartyReanchorHoldsPerWallet;`,
+    "maxThirdPartyReanchorHoldsPerWallet = 0;",
+  ],
+  // hand-off reserve getter: zeroed.
+  [
+    "G05 handoffReserveWallets zeroed",
+    RTR,
+    "return self.handoffReserveWallets;",
+    "return 0;",
+  ],
+  // pendingThirdPartyReanchorHolds(bytes20): zeroed.
+  [
+    "G06 pendingThirdPartyReanchorHolds zeroed",
+    RTR,
+    "holds = self.pendingThirdPartyReanchorHolds[walletPubKeyHash];",
+    "holds = 0;",
+  ],
+  // reservationByAnchorUtxo(...): zero key / default.
+  [
+    "G07 reservationByAnchorUtxo returns zero",
+    RTR,
+    `return\n${ind(12)}self.reservationsByAnchorUtxo[\n${ind(16)}uint256(\n${ind(20)}keccak256(\n${ind(24)}abi.encodePacked(anchorTxHash, anchorTxOutputIndex)\n${ind(20)})\n${ind(16)})\n${ind(12)}];`,
+    "return 0;",
+  ],
+  // reservationRouter() self-address getter: zero.
+  [
+    "G08 reservationRouter returns address(0)",
+    RTR,
+    "return self.reservationRouter;",
+    "return address(0);",
+  ],
+]
+
+const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")
+const results = fs.existsSync(outPath) ? JSON.parse(fs.readFileSync(outPath, "utf8")) : {}
+const mine = mutants.filter((m, i) => i % shardCount === shardIndex && (!only || only.has(m[0].split(" ")[0])))
+
+for (const [name, file, find, replace] of mine) {
+  const id = name.split(" ")[0]
+  if (results[id]) continue
+  const path = `${sol}/${file}`
+  const original = fs.readFileSync(path, "utf8")
+  const before = sha(path)
+  const first = original.indexOf(find)
+  if (first < 0 || original.indexOf(find, first + 1) >= 0) {
+    results[id] = { name, verdict: first < 0 ? "PATTERN_NOT_FOUND" : "PATTERN_NOT_UNIQUE" }
+    fs.writeFileSync(outPath, JSON.stringify(results, null, 1))
+    continue
+  }
+  const start = Date.now()
+  let verdict = "ERROR"
+  let note = ""
+  try {
+    fs.writeFileSync(path, original.slice(0, first) + replace + original.slice(first + find.length))
+    const r = cp.spawnSync(
+      "bash",
+      ["-c", `cd ${sol} && env -u FORKING_URL -u FORKING_BLOCK TEST_USE_STUBS_TBTC=true USE_EXTERNAL_DEPLOY=true NODE_OPTIONS=--max-old-space-size=4096 npx hardhat test ${killset}`],
+      { encoding: "utf8", maxBuffer: 1 << 28, timeout: 40 * 60 * 1000 }
+    )
+    const out = (r.stdout || "") + (r.stderr || "")
+    const failing = /(\d+) failing/.exec(out)
+    const passing = /(\d+) passing/.exec(out)
+    if (/HH600|Compilation failed|CompilerError|TypeError:|DeclarationError|ParserError/.test(out) && !passing) {
+      verdict = "NOT_VIABLE"
+      note = (out.match(/(Error|TypeError|DeclarationError)[^\n]{0,120}/) || [""])[0]
+    } else if (failing) {
+      verdict = "KILLED"
+      note = `${failing[1]} failing`
+    } else if (passing && r.status === 0) {
+      verdict = "SURVIVED"
+      note = `${passing[1]} passing`
+    } else {
+      verdict = r.error ? "TIMEOUT" : "ERROR"
+      note = `status ${r.status}`
+    }
+    fs.writeFileSync(`${outPath}.${id}.log`, out.slice(-6000))
+  } finally {
+    fs.writeFileSync(path, original)
+  }
+  if (sha(path) !== before) throw new Error(`restore failed for ${file}`)
+  results[id] = { name, verdict, note, seconds: Math.round((Date.now() - start) / 1000) }
+  fs.writeFileSync(outPath, JSON.stringify(results, null, 1))
+  console.log(id, verdict, note)
+}
+console.log("shard done")

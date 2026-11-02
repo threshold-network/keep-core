@@ -417,3 +417,58 @@ later cycle. Check logs for the affected transaction hashes. All SPV maintainer
 gauges and counters update immediately when the underlying event occurs, with
 no polling delay. Only the `rpc_*` health-status metrics above are sampled on
 a 1-minute poll; allow for that delay when alerting on RPC health.
+
+== Reservation keeper
+
+A maintainer with `maintainer.spv.reservationProofsEnabled` runs a read-only
+reservation keeper observer next to the reservation watchers. It needs no
+operator stake and sends no transactions. An independent keeper is one more
+`maintainer` process with that flag on; `tbtc.reservationsEnabled` is not
+needed for its gauges to be published.
+
+The first pass discovers wallets registered before reservation activation.
+It scans registration history in chunks of at most 10,000 blocks.
+Later passes scan only new confirmed registrations.
+Acceptance and deposit-reveal scans still start at the activation block.
+
+The observer sets the gauges below after each fully successful pass, at the
+action-timeout poll interval. If any read fails, the pass fails and every
+gauge keeps its last value. Alert on the observation timestamp, not only on
+the counts: a stale timestamp means the counts are no longer current. The
+tbtc-v2 monitoring service reads these gauges when
+`RESERVATION_KEEPER_METRICS_URL` is set (see `monitoring/README.adoc`).
+
+All names below have the `performance_` prefix on `/metrics`:
+
+[%header,cols="2,3,3"]
+|===
+|Metric |Meaning |Escalation
+|`reservation_acceptance_late_proof_at_risk_count`
+|Acceptance generations (Pending or TimedOut, not Settled) whose
+late-settlement edge `timeoutAt + termSeconds` is within 7 days of the chain
+head. After that edge a late acceptance proof reverts and a confirmed anchor
+can no longer be credited.
+|Page the allow-listed SPV maintainers. If the proof does not land, escalate to
+governance well before the edge.
+|`reservation_reanchor_no_eligible_target_count`
+|Active reservations on a MovingFunds or Closing wallet with no target a
+source-wallet member re-anchor can use: no other Live wallet past its creation
+period, an anchor at or below `minAmount + txMaxFee`, or an action timeout too
+short for a signing window.
+|Governance raises the caps or adds wallets before the moving-funds timeout.
+Operators restore signing if the source group is degraded.
+|`reservation_vault_fee_debt_sat`
+|Unpaid in-kind fee debt of the reservation vault, in satoshi. While it is
+above zero, TBTC supply exceeds the Bitcoin backing by this amount.
+|Treasury decides on repayment through `repayInKindFeeDebt`. Nothing is repaid
+automatically.
+|`reservation_unrequested_deposit_deadline_at_risk_count`
+|Pending reserved deposits with no acceptance request whose last possible
+request time (`refundDeadline - 24h - actionTimeout`) is within 1 day of the
+chain head.
+|Notify the depositor. After the deadline, explain the Bitcoin refund path
+after the refund locktime, or release to the pool while that is still allowed.
+|`reservation_keeper_observation_timestamp`
+|Chain head unix time of the last fully successful observation pass.
+|If it stops advancing, check the maintainer logs and its Ethereum RPC.
+|===

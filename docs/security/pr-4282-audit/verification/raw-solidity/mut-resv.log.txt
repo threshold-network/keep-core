@@ -1,0 +1,34 @@
+INFO:Slither-Mutate:Starting mutation campaign in contracts/bridge/Reservation.sol
+INFO:Slither-Mutate:Preparing to mutate contracts:
+- Reservation
+INFO:Slither-Mutate:Timing tests..
+INFO:Slither-Mutate:Test suite passes in 116 seconds, commencing mutation campaign with a timeout of 160 seconds
+
+INFO:Slither-Mutate:Mutating contract Reservation
+INFO:Slither-Mutate:Targeting functions: ['actionKey', 'validateReservationCapsInvariant']
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 424: 'return
+            uint256(keccak256(abi.encodePacked(reservationKey, requestNonce)))' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'revert()' --> UNCAUGHT
+INFO:Slither-Mutate:Mutator RR found 1 caught revert mutants (out of 2 that compile)
+INFO:Slither-Mutate:Mutator AOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Mutator LOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Mutator ROR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Done mutating Reservation.
+INFO:Slither-Mutate:Revert mutants: 1 caught of 2 (50.0% caught)
+INFO:Slither-Mutate:Zero Comment mutants analyzed
+INFO:Slither-Mutate:Zero Tweak mutants analyzed
+
+INFO:Slither-Mutate:Finished mutation testing assessment of 'contracts/bridge/Reservation.sol' in 4 minutes
+
+RESV_EXIT=0

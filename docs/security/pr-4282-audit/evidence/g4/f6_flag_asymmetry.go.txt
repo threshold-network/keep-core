@@ -1,0 +1,64 @@
+// Evidence for G4-F6 (reservation flag asymmetry strands anchors).
+//
+// Run in a detached worktree at 49c4df13d:
+//   go run evidence/g4/f6_flag_asymmetry.go
+//
+// Mirrors the control flow of cmd/start.go:236-243 (paired-flag gate,
+// warn-only branch) followed by the wire call at :257-269. Proves:
+// 1. With ReservationsEnabled=true and the paired flag
+//    (Maintainer.Spv.ReservationProofsEnabled) off, the start process
+//    logs a warning and continues; spv.WireReservationWatchers IS still
+//    called, so client-side stranding/stale-deposit/action-timeout
+//    watchers run, but the on-chain proof loop
+//    (pkg/maintainer/spv/reservation_proof_loop.go, gated on its own
+//    flag in spv.Initialize, which runs in the maintainer process)
+//    does not settle the anchors this process proposes.
+// 2. The asymmetry case is the only one in which anchors are proposed
+//    with no proof loop in the proposing deployment.
+//
+// No repo imports: pure control-flow mirror, so it compiles anywhere.
+
+package main
+
+import "fmt"
+
+// mirror of cmd/start.go:236-269.
+func startProcessBehavior(
+	reservationsEnabled bool,
+	pairedFlagEnabled bool,
+) (warnLogged, watchersWired, proofLoopHostedInThisProcess bool) {
+	if reservationsEnabled {
+		if !pairedFlagEnabled {
+			// cmd/start.go:240 logger.Warnf(...) - warn only, no return.
+			warnLogged = true
+		}
+		// cmd/start.go:257: WireReservationWatchers(ctx, tbtcChain,
+		// tbtcChain, pairedFlagEnabled, ...) - client-side watchers run
+		// regardless of the paired flag; the paired flag is only fed
+		// to the self-check signal.
+		watchersWired = true
+	}
+	// The proof loop (reservation_proof_loop.go) runs only in the
+	// maintainer process via spv.Initialize, gated on the maintainer's
+	// own flag; the start process never hosts it.
+	proofLoopHostedInThisProcess = false
+	return
+}
+
+func main() {
+	for _, tc := range []struct {
+		name         string
+		res          bool
+		paired       bool
+	}{
+		{"asymmetric (G4-F6 case): reservations on, paired off", true, false},
+		{"both on (end-to-end)", true, true},
+		{"reservations off", false, false},
+	} {
+		warned, wired, hosted := startProcessBehavior(tc.res, tc.paired)
+		anchorsProposed := tc.res
+		noSettlingHost := !hosted && wired
+		fmt.Printf("%-52s warn-only=%-5v client-watchers=%-5v proof-loop-hosted-here=%-5v => anchors-proposed=%-5v settled=%v\n",
+			tc.name, warned, wired, hosted, anchorsProposed, !noSettlingHost)
+	}
+}

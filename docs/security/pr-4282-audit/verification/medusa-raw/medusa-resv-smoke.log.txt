@@ -1,0 +1,93 @@
+[1m[32m⇾[0m[0m Reading the configuration file at: [1mmedusa-reservations.json[0m
+⇾ Compiling targets with crytic-compile
+⇾ Running command:
+crytic-compile . --export-format solc --export-dir cache_forge/medusa-reservations/crytic-export --foundry-compile-all
+⇾ Finished compiling targets in 1m6s
+⇾ artifacts: Medusa is running against a new set of build artifacts
+⇾ Running with a timeout of 180 seconds
+⇾ Setting up test chain
+⇾ Finished setting up test chain
+⇾ Creating corpus...
+⇾ Fuzzing with 4 workers
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_capsHoldAfterEveryRequest()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_creditsMatchSettlements()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_totalAmountMatchesOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_activeCountMatchesOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ fuzz: elapsed:       0s, calls:          0 (     0/sec), seq/s:      0, branches:    268, corpus:     0, failures: 0/0, gas/s:            0
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationHandler.property_walletCountersMatchOpenPositions()
+⇾ fuzz: elapsed:       3s, calls:       1309 (   436/sec), seq/s:      3, branches:   1760, corpus:    62, failures: 0/10, gas/s:     26879605
+⇾ fuzz: elapsed:       6s, calls:       3170 (   619/sec), seq/s:      6, branches:   1850, corpus:    70, failures: 0/29, gas/s:     35301957
+⇾ fuzz: elapsed:       9s, calls:       4823 (   550/sec), seq/s:      5, branches:   1862, corpus:    74, failures: 0/46, gas/s:     32601252
+⇾ fuzz: elapsed:      12s, calls:       6726 (   633/sec), seq/s:      6, branches:   1868, corpus:    77, failures: 0/65, gas/s:     36618905
+⇾ fuzz: elapsed:      15s, calls:       8567 (   613/sec), seq/s:      5, branches:   1890, corpus:    80, failures: 0/83, gas/s:     37190954
+⇾ fuzz: elapsed:      18s, calls:      10353 (   594/sec), seq/s:      5, branches:   1904, corpus:    83, failures: 0/101, gas/s:     36495670
+⇾ fuzz: elapsed:      21s, calls:      12229 (   624/sec), seq/s:      5, branches:   1906, corpus:    84, failures: 0/119, gas/s:     35694022
+⇾ fuzz: elapsed:      24s, calls:      14026 (   598/sec), seq/s:      6, branches:   1906, corpus:    84, failures: 0/138, gas/s:     36029403
+⇾ fuzz: elapsed:      27s, calls:      15760 (   577/sec), seq/s:      6, branches:   1952, corpus:    89, failures: 0/157, gas/s:     33698136
+⇾ fuzz: elapsed:      30s, calls:      17681 (   640/sec), seq/s:      5, branches:   1952, corpus:    89, failures: 0/174, gas/s:     38455017
+⇾ fuzz: elapsed:      33s, calls:      19437 (   585/sec), seq/s:      5, branches:   1973, corpus:    91, failures: 0/191, gas/s:     35780406
+⇾ fuzz: elapsed:      36s, calls:      21296 (   619/sec), seq/s:      6, branches:   1974, corpus:    92, failures: 0/211, gas/s:     37795601
+⇾ fuzz: elapsed:      39s, calls:      23231 (   644/sec), seq/s:      6, branches:   2092, corpus:    94, failures: 0/231, gas/s:     37692235
+⇾ fuzz: elapsed:      42s, calls:      24807 (   525/sec), seq/s:      4, branches:   2111, corpus:    95, failures: 0/245, gas/s:     31574162
+⇾ fuzz: elapsed:      45s, calls:      26491 (   561/sec), seq/s:      5, branches:   2116, corpus:    96, failures: 0/263, gas/s:     34426916
+⇾ fuzz: elapsed:      48s, calls:      28106 (   538/sec), seq/s:      4, branches:   2119, corpus:    98, failures: 0/278, gas/s:     34521522
+⇾ fuzz: elapsed:      51s, calls:      29804 (   565/sec), seq/s:      5, branches:   2123, corpus:   100, failures: 0/295, gas/s:     40772546
+⇾ fuzz: elapsed:      54s, calls:      31665 (   620/sec), seq/s:      5, branches:   2123, corpus:   100, failures: 0/313, gas/s:     37418888
+⇾ fuzz: elapsed:      57s, calls:      33308 (   547/sec), seq/s:      5, branches:   2123, corpus:   100, failures: 0/330, gas/s:     34237199
+⇾ fuzz: elapsed:    1m00s, calls:      34629 (   440/sec), seq/s:      4, branches:   2131, corpus:   101, failures: 0/344, gas/s:     31583118
+⇾ fuzz: elapsed:    1m03s, calls:      35819 (   396/sec), seq/s:      3, branches:   2138, corpus:   103, failures: 0/355, gas/s:     24050017
+⇾ fuzz: elapsed:    1m06s, calls:      37003 (   394/sec), seq/s:      4, branches:   2138, corpus:   103, failures: 0/368, gas/s:     32447992
+⇾ fuzz: elapsed:    1m09s, calls:      38483 (   493/sec), seq/s:      4, branches:   2143, corpus:   104, failures: 0/382, gas/s:     31068441
+⇾ fuzz: elapsed:    1m12s, calls:      39953 (   489/sec), seq/s:      4, branches:   2143, corpus:   104, failures: 0/397, gas/s:     29839429
+⇾ fuzz: elapsed:    1m15s, calls:      41312 (   452/sec), seq/s:      4, branches:   2143, corpus:   104, failures: 0/411, gas/s:     27010804
+⇾ fuzz: elapsed:    1m18s, calls:      42677 (   454/sec), seq/s:      4, branches:   2166, corpus:   106, failures: 0/424, gas/s:     27836975
+⇾ fuzz: elapsed:    1m21s, calls:      43928 (   416/sec), seq/s:      4, branches:   2166, corpus:   106, failures: 0/437, gas/s:     25168111
+⇾ fuzz: elapsed:    1m24s, calls:      45418 (   496/sec), seq/s:      4, branches:   2166, corpus:   106, failures: 0/452, gas/s:     30892583
+⇾ fuzz: elapsed:    1m27s, calls:      46917 (   499/sec), seq/s:      4, branches:   2166, corpus:   106, failures: 0/467, gas/s:     31598104
+⇾ fuzz: elapsed:    1m30s, calls:      48182 (   421/sec), seq/s:      3, branches:   2166, corpus:   106, failures: 0/479, gas/s:     27998058
+⇾ fuzz: elapsed:    1m33s, calls:      49362 (   393/sec), seq/s:      3, branches:   2166, corpus:   106, failures: 0/491, gas/s:     24191317
+⇾ fuzz: elapsed:    1m36s, calls:      50800 (   479/sec), seq/s:      4, branches:   2172, corpus:   107, failures: 0/506, gas/s:     38442903
+⇾ fuzz: elapsed:    1m39s, calls:      52297 (   498/sec), seq/s:      4, branches:   2174, corpus:   108, failures: 0/521, gas/s:     34999548
+⇾ fuzz: elapsed:    1m42s, calls:      53663 (   455/sec), seq/s:      4, branches:   2174, corpus:   108, failures: 0/534, gas/s:     26843610
+⇾ fuzz: elapsed:    1m45s, calls:      55140 (   492/sec), seq/s:      4, branches:   2174, corpus:   108, failures: 0/548, gas/s:     30692962
+⇾ fuzz: elapsed:    1m48s, calls:      56575 (   478/sec), seq/s:      4, branches:   2177, corpus:   109, failures: 0/563, gas/s:     29855191
+⇾ fuzz: elapsed:    1m51s, calls:      58333 (   585/sec), seq/s:      6, branches:   2177, corpus:   109, failures: 0/582, gas/s:     35027594
+⇾ fuzz: elapsed:    1m54s, calls:      59932 (   532/sec), seq/s:      4, branches:   2177, corpus:   109, failures: 0/597, gas/s:     37078724
+⇾ fuzz: elapsed:    1m57s, calls:      61473 (   513/sec), seq/s:      5, branches:   2177, corpus:   109, failures: 0/613, gas/s:     30679084
+⇾ fuzz: elapsed:    2m00s, calls:      62893 (   473/sec), seq/s:      4, branches:   2177, corpus:   109, failures: 0/626, gas/s:     32381628
+⇾ fuzz: elapsed:    2m03s, calls:      64390 (   498/sec), seq/s:      4, branches:   2177, corpus:   109, failures: 0/641, gas/s:     31026173
+⇾ fuzz: elapsed:    2m06s, calls:      65798 (   468/sec), seq/s:      4, branches:   2177, corpus:   109, failures: 0/656, gas/s:     33085906
+⇾ fuzz: elapsed:    2m09s, calls:      67444 (   548/sec), seq/s:      5, branches:   2179, corpus:   110, failures: 0/672, gas/s:     32350806
+⇾ fuzz: elapsed:    2m12s, calls:      68887 (   480/sec), seq/s:      4, branches:   2183, corpus:   111, failures: 0/686, gas/s:     30017169
+⇾ fuzz: elapsed:    2m15s, calls:      70385 (   499/sec), seq/s:      4, branches:   2188, corpus:   113, failures: 0/701, gas/s:     33968870
+⇾ fuzz: elapsed:    2m18s, calls:      71459 (   357/sec), seq/s:      3, branches:   2199, corpus:   114, failures: 0/713, gas/s:     20291033
+⇾ fuzz: elapsed:    2m21s, calls:      72451 (   330/sec), seq/s:      2, branches:   2199, corpus:   114, failures: 0/722, gas/s:     18902317
+⇾ fuzz: elapsed:    2m24s, calls:      73386 (   311/sec), seq/s:      3, branches:   2203, corpus:   115, failures: 0/732, gas/s:     18672301
+⇾ fuzz: elapsed:    2m27s, calls:      74391 (   334/sec), seq/s:      2, branches:   2203, corpus:   115, failures: 0/741, gas/s:     20249775
+⇾ fuzz: elapsed:    2m30s, calls:      75449 (   351/sec), seq/s:      3, branches:   2203, corpus:   115, failures: 0/753, gas/s:     19953967
+⇾ fuzz: elapsed:    2m33s, calls:      76468 (   339/sec), seq/s:      2, branches:   2203, corpus:   115, failures: 0/762, gas/s:     20721471
+⇾ fuzz: elapsed:    2m36s, calls:      77603 (   377/sec), seq/s:      3, branches:   2203, corpus:   115, failures: 0/773, gas/s:     25761488
+⇾ fuzz: elapsed:    2m39s, calls:      78401 (   265/sec), seq/s:      2, branches:   2203, corpus:   115, failures: 0/781, gas/s:     17549397
+⇾ fuzz: elapsed:    2m42s, calls:      79371 (   322/sec), seq/s:      3, branches:   2204, corpus:   116, failures: 0/791, gas/s:     20055094
+⇾ fuzz: elapsed:    2m45s, calls:      80486 (   371/sec), seq/s:      3, branches:   2204, corpus:   116, failures: 0/802, gas/s:     25806873
+⇾ fuzz: elapsed:    2m48s, calls:      81473 (   328/sec), seq/s:      3, branches:   2209, corpus:   118, failures: 0/813, gas/s:     19437167
+⇾ fuzz: elapsed:    2m51s, calls:      82482 (   336/sec), seq/s:      3, branches:   2209, corpus:   118, failures: 0/824, gas/s:     19478551
+⇾ fuzz: elapsed:    2m54s, calls:      83463 (   326/sec), seq/s:      2, branches:   2218, corpus:   119, failures: 0/832, gas/s:     19327672
+⇾ fuzz: elapsed:    2m57s, calls:      84028 (   188/sec), seq/s:      1, branches:   2218, corpus:   119, failures: 0/837, gas/s:     10678352
+⇾ Fuzzer stopped, test results follow below ...
+⇾ [PASSED] Property Test: ReservationHandler.property_activeCountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [PASSED] Property Test: ReservationHandler.property_capsHoldAfterEveryRequest()
+⇾ [PASSED] Property Test: ReservationHandler.property_creditsMatchSettlements()
+⇾ [PASSED] Property Test: ReservationHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ [PASSED] Property Test: ReservationHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [PASSED] Property Test: ReservationHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [PASSED] Property Test: ReservationHandler.property_totalAmountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationHandler.property_walletCountersMatchOpenPositions()
+⇾ Test summary: 9 test(s) passed, 0 test(s) failed
+⇾ html report(s) saved to: cache_forge/medusa-reservations/corpus/coverage/coverage_report.html
+⇾ lcov report(s) saved to: cache_forge/medusa-reservations/corpus/coverage/lcov.info

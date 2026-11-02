@@ -7,6 +7,13 @@ infrastructure/
 scripts/
 tmp/
 
+# Exception to the scripts/ exclusion above: cmd's deploy-check tests execute
+# this script from the build image (cmd/deploy_check_test.go resolves
+# ../scripts/check-reservation-flags.sh), so the test image needs it. It is a
+# top-level single file, never copied into the runtime image (that stage copies
+# only the keep-client binary) and not named by any release stage.
+!scripts/check-reservation-flags.sh
+
 # Top-level files unrealted to the build.
 CODEOWNERS
 Dockerfile

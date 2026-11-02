@@ -17,7 +17,7 @@ func TestConcurrentCounterIncrement(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 100
@@ -51,7 +51,7 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 50
@@ -115,7 +115,7 @@ func TestConcurrentDurationRecording(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 50
@@ -169,7 +169,7 @@ func TestConcurrentGaugeSet(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 100
@@ -205,7 +205,7 @@ func TestConcurrentDifferentOperations(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	const (
 		numGoroutines = 30
@@ -264,7 +264,7 @@ func TestHistogramBucketPlacement(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	metricName := "test_duration_seconds"
 
@@ -324,7 +324,7 @@ func TestMetricsInitialization(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	// Test counters
 	counters := []string{
@@ -364,7 +364,7 @@ func TestContextCancelation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	done := make(chan struct{})
 	go func() {
@@ -442,7 +442,7 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, true)
 
 	expectedCounters := []string{MetricFirewallOnChainChecksTotal}
 	for _, reason := range GetAllNetworkJoinFailureReasons() {
@@ -479,7 +479,7 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	expectedCounters := []string{
 		MetricDepositSweepProofSubmissionsTotal,
@@ -509,11 +509,14 @@ func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
 	}
 }
 
-// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip counters
-// are registered upfront so they appear in the metrics endpoint before any
-// increment. The spv.go maintainer emits IncrementCounter calls for these
-// counters from the relay-range and exceeded-max-headers skip branches; a
-// missing upfront registration would cause the values to be silently dropped
+// TestSpvProofSkipCountersRegistered tests that the SPV proof-skip
+// counters and the reservation watcher counters (watcher deaths, overdue
+// actions) are registered upfront so they appear in the metrics endpoint
+// before any increment.
+// The spv.go maintainer and WireReservationWatchers emit IncrementCounter
+// calls for these counters from the relay-range, exceeded-max-headers
+// skip branches and the watcher panic/error death paths; a missing
+// upfront registration would cause the values to be silently dropped
 // from /metrics because the lazy-create-without-register path in
 // IncrementCounter never calls ObserveApplicationSource.
 func TestSpvProofSkipCountersRegistered(t *testing.T) {
@@ -521,11 +524,13 @@ func TestSpvProofSkipCountersRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	expectedCounters := []string{
 		MetricSpvProofSkippedOutsideRelayRangeTotal,
 		MetricSpvProofSkippedExceededMaxHeadersTotal,
+		MetricSpvReservationWatcherDeathsTotal,
+		MetricSpvReservationActionOverdueTotal,
 	}
 
 	for _, counterName := range expectedCounters {
@@ -561,7 +566,7 @@ func TestDepositSweepMetricsRegistered(t *testing.T) {
 	defer cancel()
 
 	registry := newRegistry(ctx)
-	pm := NewPerformanceMetrics(ctx, registry)
+	pm := NewPerformanceMetrics(ctx, registry, false)
 
 	counters := []string{
 		MetricDepositSweepExecutionsTotal,
@@ -600,6 +605,217 @@ func TestDepositSweepMetricsRegistered(t *testing.T) {
 		pm.histogramsMutex.RUnlock()
 		if !exists {
 			t.Errorf("histogram %s should be registered upfront", histogramName)
+		}
+	}
+}
+
+func TestWalletActionMetricsRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := newRegistry(ctx)
+	pm := NewPerformanceMetrics(ctx, registry, true)
+
+	expectedActionTypes := []string{
+		"heartbeat",
+		"deposit_sweep",
+		"redemption",
+		"moving_funds",
+		"moved_funds_sweep",
+		"reservation_anchor",
+		"reservation_reanchor",
+	}
+
+	for _, actionType := range expectedActionTypes {
+		for _, metricType := range []string{
+			"total",
+			"success_total",
+			"failed_total",
+		} {
+			metricName := WalletActionMetricName(actionType, metricType)
+
+			pm.countersMutex.RLock()
+			_, exists := pm.counters[metricName]
+			pm.countersMutex.RUnlock()
+			if !exists {
+				t.Errorf("counter %s should be registered upfront", metricName)
+			}
+		}
+
+		durationMetricName := WalletActionMetricName(
+			actionType,
+			"duration_seconds",
+		)
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[durationMetricName]
+		pm.histogramsMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"histogram %s should be registered upfront",
+				durationMetricName,
+			)
+		}
+	}
+}
+
+// TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag verifies
+// wallet_action_reservation_* counters and histograms are registered even
+// when Tbtc.ReservationsEnabled is false. Reservation action
+// execution (anchor/re-anchor co-signing) is not itself gated on that flag -
+// only proposal generation, watcher wiring, and the reservation gauges are -
+// so gating this registration would silently drop observability for the
+// operators most likely to see unconditional execution.
+func TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := newRegistry(ctx)
+	pm := NewPerformanceMetrics(ctx, registry, false)
+
+	nonReservationActionTypes := []string{
+		"heartbeat",
+		"deposit_sweep",
+		"redemption",
+		"moving_funds",
+		"moved_funds_sweep",
+	}
+	reservationActionTypes := []string{
+		"reservation_anchor",
+		"reservation_reanchor",
+	}
+
+	for _, actionType := range nonReservationActionTypes {
+		metricName := WalletActionMetricName(actionType, "total")
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[metricName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"counter %s should still be registered when reservations "+
+					"are disabled",
+				metricName,
+			)
+		}
+	}
+
+	for _, actionType := range reservationActionTypes {
+		for _, metricType := range []string{"total", "success_total", "failed_total"} {
+			metricName := WalletActionMetricName(actionType, metricType)
+			pm.countersMutex.RLock()
+			_, exists := pm.counters[metricName]
+			pm.countersMutex.RUnlock()
+			if !exists {
+				t.Errorf(
+					"counter %s should be registered even when reservations "+
+						"are disabled, since action execution is not gated "+
+						"on the flag",
+					metricName,
+				)
+			}
+		}
+
+		durationMetricName := WalletActionMetricName(actionType, "duration_seconds")
+		pm.histogramsMutex.RLock()
+		_, exists := pm.histograms[durationMetricName]
+		pm.histogramsMutex.RUnlock()
+		if !exists {
+			t.Errorf(
+				"histogram %s should be registered even when reservations "+
+					"are disabled, since action execution is not gated on "+
+					"the flag",
+				durationMetricName,
+			)
+		}
+	}
+}
+
+// TestReservationGaugesRegistered verifies the six reservation gauges
+// (active_reservations_count, max_active_reservations, live_wallets_count,
+// wallet_reservations_count, reservation_vault_fee_debt_sat,
+// reservation_vault_fee_reserve_tbtc_base_units) are registered upfront with a 0
+// value when reservations are enabled.
+func TestReservationGaugesRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := newRegistry(ctx)
+	pm := NewPerformanceMetrics(ctx, registry, true)
+
+	reservationGauges := []string{
+		MetricReservationActiveReservationsCount,
+		MetricReservationMaxActiveReservations,
+		MetricReservationLiveWalletsCount,
+		MetricReservationWalletReservationsCount,
+		MetricReservationVaultFeeDebtSat,
+		MetricReservationVaultFeeReserveTbtcBaseUnits,
+		MetricReservationParamsInfeasible,
+		MetricReservationAcceptanceLateProofAtRiskCount,
+		MetricReservationReanchorNoEligibleTargetCount,
+		MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+		MetricReservationKeeperObservationTimestamp,
+	}
+
+	for _, name := range reservationGauges {
+		pm.gaugesMutex.RLock()
+		g, exists := pm.gauges[name]
+		pm.gaugesMutex.RUnlock()
+		if !exists {
+			t.Errorf("gauge %s should be registered upfront", name)
+			continue
+		}
+		g.mutex.RLock()
+		value := g.value
+		g.mutex.RUnlock()
+		if value != 0 {
+			t.Errorf("gauge %s should start at 0, got %v", name, value)
+		}
+	}
+
+	// SetGauge (as the reservation tasks do) must update the registered
+	// gauge, not silently no-op.
+	pm.SetGauge(MetricReservationActiveReservationsCount, 42)
+	if got := pm.GetGaugeValue(MetricReservationActiveReservationsCount); got != 42 {
+		t.Errorf("expected active_reservations_count = 42, got %v", got)
+	}
+}
+
+// TestReservationGaugesNotRegisteredWhenReservationsDisabled verifies the
+// six reservation gauges are absent (not just zero) when the m1
+// reservations feature is disabled. Unlike these gauges, the
+// wallet_action_reservation_* counters and histograms remain registered
+// regardless of the flag (see
+// TestWalletActionMetricsRegisteredRegardlessOfReservationsFlag) since
+// reservation action execution itself is not gated on it.
+func TestReservationGaugesNotRegisteredWhenReservationsDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := newRegistry(ctx)
+	pm := NewPerformanceMetrics(ctx, registry, false)
+
+	reservationGauges := []string{
+		MetricReservationActiveReservationsCount,
+		MetricReservationMaxActiveReservations,
+		MetricReservationLiveWalletsCount,
+		MetricReservationWalletReservationsCount,
+		MetricReservationVaultFeeDebtSat,
+		MetricReservationVaultFeeReserveTbtcBaseUnits,
+		MetricReservationParamsInfeasible,
+		MetricReservationAcceptanceLateProofAtRiskCount,
+		MetricReservationReanchorNoEligibleTargetCount,
+		MetricReservationUnrequestedDepositDeadlineAtRiskCount,
+		MetricReservationKeeperObservationTimestamp,
+	}
+
+	for _, name := range reservationGauges {
+		pm.gaugesMutex.RLock()
+		_, exists := pm.gauges[name]
+		pm.gaugesMutex.RUnlock()
+		if exists {
+			t.Errorf(
+				"gauge %s should not be registered when reservations are disabled",
+				name,
+			)
 		}
 	}
 }

@@ -102,6 +102,7 @@ func (n *node) handleDepositSweepProposal(
 	proposal *DepositSweepProposal,
 	startBlock uint64,
 	expiryBlock uint64,
+	coordinationBlock uint64,
 ) {
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
@@ -146,6 +147,7 @@ func (n *node) handleDepositSweepProposal(
 		walletActionLogger,
 		n.chain,
 		n.btcChain,
+		n.ethereumNetwork,
 		wallet,
 		signingExecutor,
 		proposal,
@@ -153,6 +155,7 @@ func (n *node) handleDepositSweepProposal(
 		expiryBlock,
 		n.waitForBlockHeight,
 		n.transactionMonitor,
+		coordinationBlock,
 	)
 
 	// Wire metrics recorder if available
@@ -291,6 +294,136 @@ func (n *node) handleMovingFundsProposal(
 	walletActionLogger.Infof("dispatching wallet action")
 
 	action := newMovingFundsAction(
+		walletActionLogger,
+		n.chain,
+		n.btcChain,
+		wallet,
+		signingExecutor,
+		proposal,
+		startBlock,
+		expiryBlock,
+		n.waitForBlockHeight,
+		n.transactionMonitor,
+	)
+
+	err = n.walletDispatcher.dispatch(action)
+	if err != nil {
+		walletActionLogger.Errorf("cannot dispatch wallet action: [%v]", err)
+		return
+	}
+
+	walletActionLogger.Infof("wallet action dispatched successfully")
+}
+
+// handleReservationAnchorProposal handles an incoming reservation anchor proposal by
+// orchestrating and dispatching an appropriate wallet action.
+func (n *node) handleReservationAnchorProposal(
+	wallet wallet,
+	proposal *ReservationAnchorProposal,
+	startBlock uint64,
+	expiryBlock uint64,
+) {
+	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
+	if err != nil {
+		logger.Errorf("cannot marshal wallet public key: [%v]", err)
+		return
+	}
+
+	signingExecutor, ok, err := n.getSigningExecutor(wallet.publicKey)
+	if err != nil {
+		logger.Errorf("cannot get signing executor: [%v]", err)
+		return
+	}
+	if !ok {
+		logger.Infof(
+			"node does not control signers of wallet PKH [0x%x]; "+
+				"ignoring the received reservation anchor proposal",
+			walletPublicKeyBytes,
+		)
+		return
+	}
+
+	logger.Infof(
+		"starting orchestration of the reservation anchor action for wallet [0x%x]; "+
+			"20-byte public key hash of that wallet is [0x%x]",
+		walletPublicKeyBytes,
+		bitcoin.PublicKeyHash(wallet.publicKey),
+	)
+
+	walletActionLogger := logger.With(
+		zap.String("wallet", fmt.Sprintf("0x%x", walletPublicKeyBytes)),
+		zap.String("action", ActionReservationAnchor.String()),
+		zap.Uint64("startBlock", startBlock),
+		zap.Uint64("expiryBlock", expiryBlock),
+	)
+	walletActionLogger.Infof("dispatching wallet action")
+
+	action := newReservationAnchorAction(
+		walletActionLogger,
+		n.chain,
+		n.btcChain,
+		wallet,
+		signingExecutor,
+		proposal,
+		startBlock,
+		expiryBlock,
+		n.waitForBlockHeight,
+		n.transactionMonitor,
+	)
+
+	err = n.walletDispatcher.dispatch(action)
+	if err != nil {
+		walletActionLogger.Errorf("cannot dispatch wallet action: [%v]", err)
+		return
+	}
+
+	walletActionLogger.Infof("wallet action dispatched successfully")
+}
+
+// handleReservationReanchorProposal handles an incoming reservation re-anchor proposal by
+// orchestrating and dispatching an appropriate wallet action.
+func (n *node) handleReservationReanchorProposal(
+	wallet wallet,
+	proposal *ReservationReanchorProposal,
+	startBlock uint64,
+	expiryBlock uint64,
+) {
+	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
+	if err != nil {
+		logger.Errorf("cannot marshal wallet public key: [%v]", err)
+		return
+	}
+
+	signingExecutor, ok, err := n.getSigningExecutor(wallet.publicKey)
+	if err != nil {
+		logger.Errorf("cannot get signing executor: [%v]", err)
+		return
+	}
+	if !ok {
+		logger.Infof(
+			"node does not control signers of wallet PKH [0x%x]; "+
+				"ignoring the received reservation re-anchor proposal",
+			walletPublicKeyBytes,
+		)
+		return
+	}
+
+	logger.Infof(
+		"starting orchestration of the reservation re-anchor action for wallet [0x%x]; "+
+			"20-byte public key hash of that wallet is [0x%x]",
+		walletPublicKeyBytes,
+		bitcoin.PublicKeyHash(wallet.publicKey),
+	)
+
+	walletActionLogger := logger.With(
+		zap.String("wallet", fmt.Sprintf("0x%x", walletPublicKeyBytes)),
+		zap.String("action", ActionReservationReanchor.String()),
+		zap.Uint64("startBlock", startBlock),
+		zap.Uint64("expiryBlock", expiryBlock),
+	)
+	walletActionLogger.Infof("dispatching wallet action")
+
+	action := newReservationReanchorAction(
 		walletActionLogger,
 		n.chain,
 		n.btcChain,

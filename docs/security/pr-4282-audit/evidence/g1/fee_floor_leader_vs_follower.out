@@ -1,0 +1,45 @@
+floor=5 buf=25 est=1 leaderRate=5 followerBufferedFloor=7 belowBuffered=true belowBare=false
+floor=5 buf=25 est=2 leaderRate=5 followerBufferedFloor=7 belowBuffered=true belowBare=false
+floor=5 buf=25 est=3 leaderRate=5 followerBufferedFloor=7 belowBuffered=true belowBare=false
+floor=5 buf=25 est=4 leaderRate=5 followerBufferedFloor=7 belowBuffered=true belowBare=false
+floor=5 buf=25 est=5 leaderRate=7 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 est=6 leaderRate=8 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 est=7 leaderRate=9 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 est=8 leaderRate=10 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 est=9 leaderRate=12 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 est=10 leaderRate=13 followerBufferedFloor=7 belowBuffered=false belowBare=false
+floor=5 buf=25 capJustAboveBare leaderRate=5.00
+floor=5 buf=0 est=1 leaderRate=5 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=2 leaderRate=5 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=3 leaderRate=5 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=4 leaderRate=5 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=5 leaderRate=5 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=6 leaderRate=6 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=7 leaderRate=7 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=8 leaderRate=8 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=9 leaderRate=9 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 est=10 leaderRate=10 followerBufferedFloor=5 belowBuffered=false belowBare=false
+floor=5 buf=0 capJustAboveBare leaderRate=5.00
+floor=10 buf=25 est=1 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=2 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=3 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=4 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=5 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=6 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=7 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=8 leaderRate=10 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=9 leaderRate=12 followerBufferedFloor=13 belowBuffered=true belowBare=false
+floor=10 buf=25 est=10 leaderRate=13 followerBufferedFloor=13 belowBuffered=false belowBare=false
+floor=10 buf=25 capJustAboveBare leaderRate=10.00
+floor=2 buf=50 est=1 leaderRate=2 followerBufferedFloor=3 belowBuffered=true belowBare=false
+floor=2 buf=50 est=2 leaderRate=3 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=3 leaderRate=5 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=4 leaderRate=6 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=5 leaderRate=8 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=6 leaderRate=9 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=7 leaderRate=11 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=8 leaderRate=12 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=9 leaderRate=14 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 est=10 leaderRate=15 followerBufferedFloor=3 belowBuffered=false belowBare=false
+floor=2 buf=50 capJustAboveBare leaderRate=2.00
+ok  	github.com/keep-network/keep-core/pkg/tbtcpg	0.139s

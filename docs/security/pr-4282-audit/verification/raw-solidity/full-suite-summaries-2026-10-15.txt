@@ -1,0 +1,64 @@
+Bundle and suite summary lines on the re-reconciled head, 2026-10-15
+
+Environment: FORKING_URL and FORKING_BLOCK unset, TEST_USE_STUBS_TBTC=true,
+USE_EXTERNAL_DEPLOY=true, NODE_OPTIONS=--max-old-space-size=4096.
+Tooling: tbtc-v2, a verification-tooling branch.
+
+merged head e3690e498 (the reconciled line), npm run lint:sol:
+  63 problems (0 errors, 63 warnings)
+  exit 0
+
+merged head e3690e498, kill set (bundle run.sh --steps killset):
+  266 passing, 0 failing, 0 pending
+
+merged head e3690e498, survivor mutants (bundle run.sh --steps survivors):
+  9/9 killed (9 ran)
+
+merged head e3690e498, SDK suite (bundle run.sh --steps sdk):
+  944 passing, 0 failing, 59 pending
+
+merged head e3690e498, full Hardhat suite (bundle run.sh --steps full):
+  3567 passing (8m)
+  61 pending
+  1 failing
+    1) L1BTCDepositorWormholeV2Base
+         finalizeDeposit
+           when the reimbursement pool is set and a deferred gas reimbursement exists
+             "before all" hook for "should reimburse finalization before deferred initialization":
+       ProviderError: Timestamp 1792399855 is lower than the previous block's timestamp 1792399856
+
+same file run alone on e3690e498, three attempts:
+  71 passing, 1 failing   (Timestamp 1792054900 lower than 1792054902)
+  71 passing, 1 failing   (Timestamp 1792399855 lower than 1792399856)
+  72 passing, 0 failing
+  d30f99f65, same file alone: 72 passing, 0 failing
+
+merged head e3690e498, keep-core drift check
+(bundle run.sh --steps drift --keepcore <the integrated reservation worktree>):
+  8 of 8 comparisons match, exit 0
+
+same step with --keepcore pointed at the audit checkout (pre-D31 vendored ABI):
+  0 of 8 comparisons match, exit 2
+  diffs: ReservationCapsUpdated gains maxThirdPartyReanchorHoldsPerWallet and
+  handoffReserveWallets, and one further event is missing from the vendored ABI
+
+rehearsal branch (the Sepolia rehearsal branch),
+prepare-artifact guard tests:
+  30 passing, 0 failing
+
+Second re-reconcile, later on 2026-10-15 (fourth PR head move, 0667abb12 to c27b71281)
+
+merged head reconciled-head (the reconciled line), npm run lint:sol:
+  63 problems (0 errors, 63 warnings)
+  exit 0
+
+merged head reconciled-head, reconcile check (bundle reconcile.sh 0667abb12 c27b71281 b2d23eaea):
+  files the PR changed under contracts and deploy: 0
+    (the pair differs only in solidity/docs/toolchain-upgrades.md)
+  not clean: 0 (contracts: 0)
+  contracts at b2d23eaea against the head under test, both normalized: 1 differing file
+    Reservation.sol
+  exit 1 (the remaining normalized difference above; details: <worktree>)
+
+fifth head move check on 2026-10-15:
+  origin/reservations-upgrade = c27b71281; c27b71281 is an ancestor of reconciled-head (fast-forward holds)

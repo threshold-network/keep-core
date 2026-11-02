@@ -1,0 +1,473 @@
+INFO:Slither-Mutate:Starting mutation campaign in contracts/bridge/Reservation.sol
+INFO:Slither-Mutate:Preparing to mutate contracts:
+- Reservation
+INFO:Slither-Mutate:Timing tests..
+INFO:Slither-Mutate:Test suite passes in 78 seconds, commencing mutation campaign with a timeout of 240 seconds
+
+INFO:Slither-Mutate:Mutating contract Reservation
+INFO:Slither-Mutate:Targeting functions: ['actionKey', 'validateReservationCapsInvariant']
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 424: 'return
+            uint256(keccak256(abi.encodePacked(reservationKey, requestNonce)))' ==> 'revert()' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[RR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'revert()' --> CAUGHT
+INFO:Slither-Mutate:Mutator RR found 2 caught revert mutants (out of 2 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) + reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) / reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) - reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> CAUGHT
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+INFO:Slither-Mutate:[AOR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) % reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> CAUGHT
+INFO:Slither-Mutate:Mutator AOR found 4 caught tweak mutants (out of 4 that compile)
+INFO:Slither-Mutate:Running total: found 4 caught tweak mutants (out of 4 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 71.43ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1329:44:
+stderr:      |
+stderr: 1329 |                 maxActiveReservations == 0 ;
+stderr:      |                                            ^
+INFO:Slither-Mutate:[LOR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0  && 
+                maxActiveReservations == 0 ' --> COMPILATION FAILURE
+INFO:Slither-Mutate:Mutator LOR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 4 caught tweak mutants (out of 4 that compile)
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 56.61ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount < 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 56.32ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount > 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 52.58ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount <= 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 59.29ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount >= 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 76.76ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount != 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 67.13ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount < 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 56.20ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount > 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 61.95ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount <= 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 81.81ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount >= 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 61.37ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2314): Expected ',' but got ';'
+stderr:     --> contracts/bridge/Reservation.sol:1335:10:
+stderr:      |
+stderr: 1335 |         );
+stderr:      |          ^
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount != 0 ||
+                maxActiveReservations ' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 183.01ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 146.77ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount >
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 226.29ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount >=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 150.93ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount ==
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> COMPILATION FAILURE
+WARNING:CryticCompile:Multiple frameworks detected: Foundry, solc, Solc-json. Using Foundry (highest priority). Use --compile-force-framework to override.
+ERROR:CryticCompile:'forge' returned non-zero exit code 1
+ERROR:CryticCompile:Compiling 60 files with Solc 0.8.17
+stdout: Solc 0.8.17 finished in 156.21ms
+ERROR:CryticCompile:Error: Compiler run failed:
+stderr: Error (2271): Operator || not compatible with types bool and tuple().
+stderr:     --> contracts/bridge/Reservation.sol:1328:13:
+stderr:      |
+stderr: 1328 |             reservationMaxSingleAmount == 0 ||
+stderr:      |             ^ (Relevant source part starts here and spans across multiple lines).
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:336:9:
+stderr:     |
+stderr: 336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+stderr:     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+stderr: 
+stderr: Warning (9302): Return value of low-level calls not used.
+stderr:    --> contracts/bridge/Fraud.sol:417:9:
+stderr:     |
+stderr: 417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+stderr:     |         ^ (Relevant source part starts here and spans across multiple lines).
+INFO:Slither-Mutate:[ROR] Line 1327: 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount <=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' ==> 'require(
+            reservationMaxSingleAmount == 0 ||
+                maxActiveReservations == 0 ||
+                reservationMaxTotalAmount !=
+                uint256(maxActiveReservations) * reservationMaxSingleAmount,
+            "Amount cap exceeds slot capacity"
+        )' --> COMPILATION FAILURE
+INFO:Slither-Mutate:Mutator ROR found 0 caught tweak mutants (out of 0 that compile)
+INFO:Slither-Mutate:Running total: found 4 caught tweak mutants (out of 4 that compile)
+INFO:Slither-Mutate:Done mutating Reservation.
+INFO:Slither-Mutate:Revert mutants: 2 caught of 2 (100.0% caught)
+INFO:Slither-Mutate:Zero Comment mutants analyzed
+INFO:Slither-Mutate:Tweak mutants: 4 caught of 4 (100.0% caught)
+INFO:Slither-Mutate:Finished mutation testing assessment of 'contracts/bridge/Reservation.sol' in 12 minutes
+
+RESV2_EXIT=0

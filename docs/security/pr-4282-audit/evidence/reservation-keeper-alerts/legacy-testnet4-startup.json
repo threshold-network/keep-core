@@ -1,0 +1,10 @@
+{
+  "mode": "legacy",
+  "setupCompleted": false,
+  "managerSuccess": false,
+  "code": 1,
+  "signal": null,
+  "receiversConfigured": false,
+  "chainAccess": "Sepolia read-only",
+  "bitcoinNetwork": "Testnet4"
+}

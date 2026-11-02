@@ -236,12 +236,14 @@ func unmarshalCoordinationProposal(actionType uint32, payload []byte) (
 	}
 
 	proposal, ok := map[WalletActionType]CoordinationProposal{
-		ActionNoop:            &NoopProposal{},
-		ActionHeartbeat:       &HeartbeatProposal{},
-		ActionDepositSweep:    &DepositSweepProposal{},
-		ActionRedemption:      &RedemptionProposal{},
-		ActionMovingFunds:     &MovingFundsProposal{},
-		ActionMovedFundsSweep: &MovedFundsSweepProposal{},
+		ActionNoop:                &NoopProposal{},
+		ActionHeartbeat:           &HeartbeatProposal{},
+		ActionDepositSweep:        &DepositSweepProposal{},
+		ActionRedemption:          &RedemptionProposal{},
+		ActionMovingFunds:         &MovingFundsProposal{},
+		ActionMovedFundsSweep:     &MovedFundsSweepProposal{},
+		ActionReservationAnchor:   &ReservationAnchorProposal{},
+		ActionReservationReanchor: &ReservationReanchorProposal{},
 	}[parsedActionType]
 	if !ok {
 		return nil, fmt.Errorf(
@@ -484,4 +486,159 @@ func marshalPublicKey(publicKey *ecdsa.PublicKey) ([]byte, error) {
 // public key.
 func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
 	return secp256k1.Unmarshal(bytes)
+}
+
+// Marshal converts the ReservationAnchorProposal to a byte array.
+func (rap *ReservationAnchorProposal) Marshal() ([]byte, error) {
+	if rap.AnchorTxFee == nil {
+		return nil, fmt.Errorf("anchor transaction fee is required")
+	}
+	if rap.AnchorTxFee.Sign() <= 0 || len(rap.AnchorTxFee.Bytes()) > 8 {
+		return nil, fmt.Errorf("anchor transaction fee must be positive")
+	}
+	if rap.RequestNonce == 0 {
+		return nil, fmt.Errorf("request nonce is required")
+	}
+	if rap.DepositFundingTxHash == [32]byte{} {
+		return nil, fmt.Errorf("deposit funding tx hash is required")
+	}
+
+	return proto.Marshal(
+		&pb.ReservationAnchorProposal{
+			DepositFundingTxHash:      rap.DepositFundingTxHash[:],
+			DepositFundingOutputIndex: rap.DepositFundingOutputIndex,
+			RequestNonce:              rap.RequestNonce,
+			AnchorTxFee:               rap.AnchorTxFee.Bytes(),
+		})
+}
+
+// Unmarshal converts a byte array back to the ReservationAnchorProposal.
+func (rap *ReservationAnchorProposal) Unmarshal(data []byte) error {
+	pbMsg := pb.ReservationAnchorProposal{}
+	if err := proto.Unmarshal(data, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationAnchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.AnchorTxFee) == 0 {
+		return fmt.Errorf("anchor transaction fee is required")
+	}
+	if len(pbMsg.AnchorTxFee) > 8 {
+		return fmt.Errorf(
+			"invalid anchor transaction fee byte length: [%v]",
+			len(pbMsg.AnchorTxFee),
+		)
+	}
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.DepositFundingTxHash) != 32 {
+		return fmt.Errorf(
+			"invalid deposit funding tx hash length: [%v]",
+			len(pbMsg.DepositFundingTxHash),
+		)
+	}
+	if [32]byte(pbMsg.DepositFundingTxHash) == [32]byte{} {
+		return fmt.Errorf("deposit funding tx hash is required")
+	}
+
+	copy(rap.DepositFundingTxHash[:], pbMsg.DepositFundingTxHash)
+	rap.DepositFundingOutputIndex = pbMsg.DepositFundingOutputIndex
+	rap.RequestNonce = pbMsg.RequestNonce
+	rap.AnchorTxFee = new(big.Int).SetBytes(pbMsg.AnchorTxFee)
+	if rap.AnchorTxFee.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid anchor transaction fee value: [%v]",
+			rap.AnchorTxFee,
+		)
+	}
+
+	return nil
+}
+
+// Marshal converts the ReservationReanchorProposal to a byte array.
+func (rrp *ReservationReanchorProposal) Marshal() ([]byte, error) {
+	if rrp.ReservationKey == nil || rrp.ReservationKey.Sign() <= 0 {
+		return nil, fmt.Errorf("reservation key is required")
+	}
+	if len(rrp.ReservationKey.Bytes()) > 32 {
+		return nil, fmt.Errorf("invalid reservation key")
+	}
+	if rrp.ReanchorTxFee == nil {
+		return nil, fmt.Errorf("re-anchor transaction fee is required")
+	}
+	if rrp.ReanchorTxFee.Sign() <= 0 || len(rrp.ReanchorTxFee.Bytes()) > 8 {
+		return nil, fmt.Errorf("re-anchor transaction fee must be positive")
+	}
+	if rrp.RequestNonce == 0 {
+		return nil, fmt.Errorf("request nonce is required")
+	}
+	if rrp.TargetWalletPublicKeyHash == [20]byte{} {
+		return nil, fmt.Errorf("target wallet public key hash is required")
+	}
+
+	return proto.Marshal(
+		&pb.ReservationReanchorProposal{
+			ReservationKey:            rrp.ReservationKey.Bytes(),
+			RequestNonce:              rrp.RequestNonce,
+			TargetWalletPublicKeyHash: append([]byte{}, rrp.TargetWalletPublicKeyHash[:]...),
+			ReanchorTxFee:             rrp.ReanchorTxFee.Bytes(),
+		})
+}
+
+// Unmarshal converts a byte array back to the ReservationReanchorProposal.
+func (rrp *ReservationReanchorProposal) Unmarshal(data []byte) error {
+	pbMsg := pb.ReservationReanchorProposal{}
+	if err := proto.Unmarshal(data, &pbMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal ReservationReanchorProposal: [%v]", err)
+	}
+
+	if len(pbMsg.ReservationKey) == 0 {
+		return fmt.Errorf("reservation key is required")
+	}
+	if len(pbMsg.ReservationKey) > 32 {
+		return fmt.Errorf(
+			"invalid reservation key byte length: [%v]",
+			len(pbMsg.ReservationKey),
+		)
+	}
+	if pbMsg.RequestNonce == 0 {
+		return fmt.Errorf("request nonce is required")
+	}
+	if len(pbMsg.ReanchorTxFee) == 0 {
+		return fmt.Errorf("re-anchor transaction fee is required")
+	}
+	if len(pbMsg.ReanchorTxFee) > 8 {
+		return fmt.Errorf(
+			"invalid re-anchor transaction fee byte length: [%v]",
+			len(pbMsg.ReanchorTxFee),
+		)
+	}
+	if len(pbMsg.TargetWalletPublicKeyHash) != 20 {
+		return fmt.Errorf(
+			"invalid target wallet public key hash length: [%v]",
+			len(pbMsg.TargetWalletPublicKeyHash),
+		)
+	}
+	copy(rrp.TargetWalletPublicKeyHash[:], pbMsg.TargetWalletPublicKeyHash)
+	if rrp.TargetWalletPublicKeyHash == [20]byte{} {
+		return fmt.Errorf("target wallet public key hash is required")
+	}
+
+	rrp.ReservationKey = new(big.Int).SetBytes(pbMsg.ReservationKey)
+	if rrp.ReservationKey.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid reservation key value: [%v]",
+			rrp.ReservationKey,
+		)
+	}
+	rrp.RequestNonce = pbMsg.RequestNonce
+	rrp.ReanchorTxFee = new(big.Int).SetBytes(pbMsg.ReanchorTxFee)
+	if rrp.ReanchorTxFee.Sign() <= 0 {
+		return fmt.Errorf(
+			"invalid re-anchor transaction fee value: [%v]",
+			rrp.ReanchorTxFee,
+		)
+	}
+
+	return nil
 }

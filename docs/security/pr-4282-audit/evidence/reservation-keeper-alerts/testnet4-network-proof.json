@@ -1,0 +1,7 @@
+{
+  "sdkBefore": "v2.5.0-dev.5",
+  "before": "unrecognized",
+  "sdkAfter": "4.0.0-dev",
+  "after": "testnet4",
+  "endpointSource": "sdk4-default#1"
+}

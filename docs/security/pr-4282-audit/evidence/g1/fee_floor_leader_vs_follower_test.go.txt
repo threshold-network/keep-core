@@ -1,0 +1,31 @@
+package tbtcpg
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+// Throwaway audit probe: leader output rate vs the follower's buffered floor.
+// followerBuffered mirrors tbtc.bufferedWalletTxFeeFloor (ceil(floor*(100+P)/100)).
+func TestZZLeaderVsFollowerFloor(t *testing.T) {
+	const vsize = int64(200)
+	for _, cfg := range []struct{ floor, buf int64 }{{5, 25}, {5, 0}, {10, 25}, {2, 50}} {
+		tbtc.MinWalletTxSatPerVByteFee, tbtc.WalletTxFeeBufferPercent = cfg.floor, cfg.buf
+		followerBuffered := (cfg.floor*(100+cfg.buf) + 99) / 100
+		for est := int64(1); est <= 10; est++ {
+			fee, err := applyWalletTxFeeFloor(est*vsize, vsize, 1_000_000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rate := fee / vsize
+			fmt.Printf("floor=%d buf=%d est=%d leaderRate=%d followerBufferedFloor=%d belowBuffered=%v belowBare=%v\n",
+				cfg.floor, cfg.buf, est, rate, followerBuffered, rate < followerBuffered, rate < cfg.floor)
+		}
+		// cap between bare and buffered floor
+		fee, _ := applyWalletTxFeeFloor(1*vsize, vsize, uint64(cfg.floor*vsize+1))
+		fmt.Printf("floor=%d buf=%d capJustAboveBare leaderRate=%.2f\n", cfg.floor, cfg.buf, float64(fee)/float64(vsize))
+	}
+	tbtc.MinWalletTxSatPerVByteFee, tbtc.WalletTxFeeBufferPercent = tbtc.DefaultWalletTxSatPerVByteFloor, tbtc.DefaultWalletTxFeeBufferPercent
+}

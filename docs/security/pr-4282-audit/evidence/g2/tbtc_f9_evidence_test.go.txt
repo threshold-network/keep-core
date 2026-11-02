@@ -1,0 +1,70 @@
+package ethereum
+
+// Scratch evidence test for G2F9 (go-spv-chain triage). Run:
+// go test -run TestG2F9 ./pkg/chain/ethereum/...
+//
+// G2F9 claims: resolveCustodiedReservationKeys (tbtc.go:1512) returns on
+// the FIRST GetReservation lookup error, so WalletReservations aborts the
+// whole wallet lookup rather than skipping just the one bad key. This
+// extends the package's existing TestResolveCustodiedReservationKeys
+// ("lookup error short-circuits the whole call" subtest, which only
+// proves an error is returned) by using two candidate keys and recording
+// which ones the lookup function is actually called for: it proves the
+// second, otherwise-valid key is never even queried once the first fails,
+// i.e. the drop is not limited to the failing key.
+
+import (
+	"fmt"
+	"math/big"
+	"testing"
+
+	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+func TestG2F9_ResolveCustodiedReservationKeysAbortsOnFirstLookupError(t *testing.T) {
+	walletPKH := [20]byte{0x42}
+
+	acceptance := func(key int64) *tbtc.ReservationAcceptanceRequestedEvent {
+		return &tbtc.ReservationAcceptanceRequestedEvent{
+			ReservationKey:      big.NewInt(key),
+			WalletPublicKeyHash: walletPKH,
+		}
+	}
+
+	// Two candidate keys for the same wallet: 1 (sorts first, fails) and
+	// 3 (sorts second, would otherwise succeed and belong to this
+	// wallet). queried records every key the lookup was actually invoked
+	// for, in call order.
+	var queried []int64
+	lookup := func(key *big.Int) (*tbtc.Reservation, error) {
+		queried = append(queried, key.Int64())
+		if key.Int64() == 1 {
+			return nil, fmt.Errorf("simulated transient RPC failure on key 1")
+		}
+		return &tbtc.Reservation{WalletPublicKeyHash: walletPKH}, nil
+	}
+
+	keys, err := resolveCustodiedReservationKeys(
+		walletPKH,
+		[]*tbtc.ReservationAcceptanceRequestedEvent{
+			acceptance(1),
+			acceptance(3),
+		},
+		nil,
+		lookup,
+	)
+	if err == nil {
+		t.Fatal("expected the first key's lookup error to propagate")
+	}
+	if keys != nil {
+		t.Fatalf("expected no keys returned on the aborted call, got %v", keys)
+	}
+	if len(queried) != 1 || queried[0] != 1 {
+		t.Fatalf(
+			"expected the walk to stop after key 1's failure and never query key 3 "+
+				"(proving the abort drops every OTHER reservation on the wallet too, "+
+				"not just the failing key); queried=%v",
+			queried,
+		)
+	}
+}

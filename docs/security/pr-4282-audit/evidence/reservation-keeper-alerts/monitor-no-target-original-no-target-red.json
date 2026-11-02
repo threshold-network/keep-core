@@ -1,0 +1,253 @@
+{
+  "stage": "no-target",
+  "runId": "original-no-target-red",
+  "startedAt": "2026-10-13T09:18:30.543Z",
+  "options": {
+    "maxAgeSeconds": 1800,
+    "waitSeconds": 120
+  },
+  "assertions": [
+    {
+      "name": "local chain is chain 1 fork",
+      "ok": true,
+      "detail": {
+        "chainId": 1
+      }
+    },
+    {
+      "name": "sentry sink listening",
+      "ok": true,
+      "detail": {
+        "port": 18647
+      }
+    },
+    {
+      "name": "monitoring dist/index.js present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "all five exact metric names present and valid",
+      "ok": true,
+      "detail": {
+        "invalidOrMissing": []
+      }
+    },
+    {
+      "name": "stage 'no-target' precondition observed in real keeper metrics",
+      "ok": false,
+      "detail": {
+        "expected": "fresh + positive noTarget",
+        "observedCategory": "fresh",
+        "observedGauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "deviationSeconds": -20
+      }
+    }
+  ],
+  "wait": {
+    "attempts": 61,
+    "elapsedMs": 120555,
+    "satisfied": false,
+    "lastSamples": [
+      {
+        "at": "2026-10-13T09:20:27.072Z",
+        "chain": {
+          "number": 26154930,
+          "timestamp": 1792070851
+        },
+        "category": "fresh",
+        "fetch": {
+          "ok": true,
+          "error": null
+        },
+        "invalidOrMissing": [],
+        "deviationSeconds": -20,
+        "gauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "observationTimestamp": "1.792070831e+09",
+        "samples": {
+          "performance_reservation_acceptance_late_proof_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_reanchor_no_eligible_target_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_vault_fee_debt_sat": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_keeper_observation_timestamp": {
+            "raw": "1.792070831e+09",
+            "sampleTimestamp": "1791883174500",
+            "value": 1792070831
+          }
+        }
+      },
+      {
+        "at": "2026-10-13T09:20:29.105Z",
+        "chain": {
+          "number": 26154930,
+          "timestamp": 1792070851
+        },
+        "category": "fresh",
+        "fetch": {
+          "ok": true,
+          "error": null
+        },
+        "invalidOrMissing": [],
+        "deviationSeconds": -20,
+        "gauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "observationTimestamp": "1.792070831e+09",
+        "samples": {
+          "performance_reservation_acceptance_late_proof_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_reanchor_no_eligible_target_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_vault_fee_debt_sat": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_keeper_observation_timestamp": {
+            "raw": "1.792070831e+09",
+            "sampleTimestamp": "1791883174500",
+            "value": 1792070831
+          }
+        }
+      },
+      {
+        "at": "2026-10-13T09:20:31.112Z",
+        "chain": {
+          "number": 26154930,
+          "timestamp": 1792070851
+        },
+        "category": "fresh",
+        "fetch": {
+          "ok": true,
+          "error": null
+        },
+        "invalidOrMissing": [],
+        "deviationSeconds": -20,
+        "gauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "observationTimestamp": "1.792070831e+09",
+        "samples": {
+          "performance_reservation_acceptance_late_proof_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_reanchor_no_eligible_target_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_vault_fee_debt_sat": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791883174500",
+            "value": 0
+          },
+          "performance_reservation_keeper_observation_timestamp": {
+            "raw": "1.792070831e+09",
+            "sampleTimestamp": "1791883174500",
+            "value": 1792070831
+          }
+        }
+      }
+    ]
+  },
+  "preSample": {
+    "at": "2026-10-13T09:20:31.112Z",
+    "chain": {
+      "number": 26154930,
+      "timestamp": 1792070851
+    },
+    "category": "fresh",
+    "fetch": {
+      "ok": true,
+      "error": null
+    },
+    "invalidOrMissing": [],
+    "deviationSeconds": -20,
+    "gauges": {
+      "late": 0,
+      "noTarget": 0,
+      "fee": 0,
+      "deadline": 0
+    },
+    "observationTimestamp": "1.792070831e+09",
+    "samples": {
+      "performance_reservation_acceptance_late_proof_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791883174500",
+        "value": 0
+      },
+      "performance_reservation_reanchor_no_eligible_target_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791883174500",
+        "value": 0
+      },
+      "performance_reservation_vault_fee_debt_sat": {
+        "raw": "0",
+        "sampleTimestamp": "1791883174500",
+        "value": 0
+      },
+      "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791883174500",
+        "value": 0
+      },
+      "performance_reservation_keeper_observation_timestamp": {
+        "raw": "1.792070831e+09",
+        "sampleTimestamp": "1791883174500",
+        "value": 1792070831
+      }
+    }
+  },
+  "finishedAt": "2026-10-13T09:20:31.113Z",
+  "ok": false
+}

@@ -585,4 +585,95 @@ func (wpv *WalletProposalValidator) ValidateRedemptionProposalAtBlock(
 	return result, err
 }
 
+func (wpv *WalletProposalValidator) ValidateReservationAnchorProposal(
+	arg_proposal abi.WalletProposalValidatorReservationAnchorProposal,
+	arg_depositExtraInfo abi.WalletProposalValidatorDepositExtraInfo,
+) (bool, error) {
+	result, err := wpv.contract.ValidateReservationAnchorProposal(
+		wpv.callerOptions,
+		arg_proposal,
+		arg_depositExtraInfo,
+	)
+
+	if err != nil {
+		return result, wpv.errorResolver.ResolveError(
+			err,
+			wpv.callerOptions.From,
+			nil,
+			"validateReservationAnchorProposal",
+			arg_proposal,
+			arg_depositExtraInfo,
+		)
+	}
+
+	return result, err
+}
+
+func (wpv *WalletProposalValidator) ValidateReservationAnchorProposalAtBlock(
+	arg_proposal abi.WalletProposalValidatorReservationAnchorProposal,
+	arg_depositExtraInfo abi.WalletProposalValidatorDepositExtraInfo,
+	blockNumber *big.Int,
+) (bool, error) {
+	var result bool
+
+	err := chainutil.CallAtBlock(
+		wpv.callerOptions.From,
+		blockNumber,
+		nil,
+		wpv.contractABI,
+		wpv.caller,
+		wpv.errorResolver,
+		wpv.contractAddress,
+		"validateReservationAnchorProposal",
+		&result,
+		arg_proposal,
+		arg_depositExtraInfo,
+	)
+
+	return result, err
+}
+
+func (wpv *WalletProposalValidator) ValidateReservationReanchorProposal(
+	arg_proposal abi.WalletProposalValidatorReservationReanchorProposal,
+) (bool, error) {
+	result, err := wpv.contract.ValidateReservationReanchorProposal(
+		wpv.callerOptions,
+		arg_proposal,
+	)
+
+	if err != nil {
+		return result, wpv.errorResolver.ResolveError(
+			err,
+			wpv.callerOptions.From,
+			nil,
+			"validateReservationReanchorProposal",
+			arg_proposal,
+		)
+	}
+
+	return result, err
+}
+
+func (wpv *WalletProposalValidator) ValidateReservationReanchorProposalAtBlock(
+	arg_proposal abi.WalletProposalValidatorReservationReanchorProposal,
+	blockNumber *big.Int,
+) (bool, error) {
+	var result bool
+
+	err := chainutil.CallAtBlock(
+		wpv.callerOptions.From,
+		blockNumber,
+		nil,
+		wpv.contractABI,
+		wpv.caller,
+		wpv.errorResolver,
+		wpv.contractAddress,
+		"validateReservationReanchorProposal",
+		&result,
+		arg_proposal,
+	)
+
+	return result, err
+}
+
 // ------ Events -------

@@ -10,6 +10,8 @@ import (
 	"github.com/ipfs/go-log/v2"
 	"go.uber.org/zap"
 
+	"github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
@@ -108,12 +110,28 @@ type depositSweepAction struct {
 	chain    Chain
 	btcChain bitcoin.Chain
 
+	// ethereumNetwork is the network this action's node is connected to.
+	// Combined with coordinationBlock, it determines whether the
+	// reservations feature is live for this action via
+	// ReservationsActivationBlock - see the call site in execute().
+	ethereumNetwork ethereum.Network
+
 	sweepingWallet      wallet
 	transactionExecutor *walletTransactionExecutor
 
 	proposal                     *DepositSweepProposal
 	proposalProcessingStartBlock uint64
 	proposalExpiryBlock          uint64
+	// coordinationBlock is the coordination block of the coordination
+	// round that produced proposal - the same block the leader used in
+	// coordinationExecutor.executeLeaderRoutine to compute
+	// CoordinationProposalRequest.ReservationsActive. It must be used
+	// (rather than proposalProcessingStartBlock itself, a strictly
+	// later block - the end of the coordination window) so that this
+	// follower's ReservationsActivationBlock comparison in execute()
+	// agrees with the leader's, at the same block height, for the
+	// same round.
+	coordinationBlock uint64
 
 	requiredFundingTxConfirmations   uint
 	signingTimeoutSafetyMarginBlocks uint64
@@ -131,6 +149,7 @@ func newDepositSweepAction(
 	logger *zap.SugaredLogger,
 	chain Chain,
 	btcChain bitcoin.Chain,
+	ethereumNetwork ethereum.Network,
 	sweepingWallet wallet,
 	signingExecutor walletSigningExecutor,
 	proposal *DepositSweepProposal,
@@ -138,6 +157,7 @@ func newDepositSweepAction(
 	proposalExpiryBlock uint64,
 	waitForBlockFn waitForBlockFn,
 	transactionMonitor *transactionMonitor,
+	coordinationBlock uint64,
 ) *depositSweepAction {
 	transactionExecutor := newWalletTransactionExecutor(
 		btcChain,
@@ -148,15 +168,30 @@ func newDepositSweepAction(
 
 	transactionExecutor.setTransactionMonitor(transactionMonitor)
 
+	// coordinationBlock is passed in explicitly by the caller (ultimately
+	// processCoordinationResult's result.window.coordinationBlock), rather
+	// than being recovered here by reversing the fixed
+	// coordinationDurationBlocks offset from proposalProcessingStartBlock:
+	// that reversal is an unguarded uint64 subtraction that underflows to
+	// approximately 2^64 whenever proposalProcessingStartBlock is smaller
+	// than coordinationDurationBlocks, which would silently flip
+	// reservationsActive to true and reject legitimate reserved deposits.
+	// Passing the real value through avoids the arithmetic entirely and
+	// keeps this follower's activation check aligned with the leader's,
+	// which is evaluated at the coordination block itself in
+	// coordinationExecutor.executeLeaderRoutine.
+
 	return &depositSweepAction{
 		logger:                           logger,
 		chain:                            chain,
 		btcChain:                         btcChain,
+		ethereumNetwork:                  ethereumNetwork,
 		sweepingWallet:                   sweepingWallet,
 		transactionExecutor:              transactionExecutor,
 		proposal:                         proposal,
 		proposalProcessingStartBlock:     proposalProcessingStartBlock,
 		proposalExpiryBlock:              proposalExpiryBlock,
+		coordinationBlock:                coordinationBlock,
 		requiredFundingTxConfirmations:   DepositSweepRequiredFundingTxConfirmations,
 		signingTimeoutSafetyMarginBlocks: depositSweepSigningTimeoutSafetyMarginBlocks,
 		broadcastTimeout:                 depositSweepBroadcastTimeout,
@@ -178,11 +213,29 @@ func (dsa *depositSweepAction) execute() error {
 
 	walletPublicKeyHash := bitcoin.PublicKeyHash(dsa.wallet().publicKey)
 
+	// reservationsActive gates the reserved-deposit filter in
+	// ValidateDepositSweepProposal on the real per-network activation
+	// state, not on whether the ReservationParameters chain call happens
+	// to succeed - see ReservationsActivationBlock's doc comment.
+	//
+	// It is derived from dsa.coordinationBlock (the block at which the
+	// coordination round started and the leader made its own
+	// ReservationsActive determination via
+	// coordinationExecutor.executeLeaderRoutine), not from
+	// dsa.proposalProcessingStartBlock. proposalProcessingStartBlock is
+	// the coordination window's end block - strictly later than the
+	// coordination block - so using it here would let the leader and a
+	// follower evaluate ReservationsActivationBlock at two different
+	// block heights for the same coordination round and potentially
+	// disagree about whether reservations are active.
+	reservationsActive := dsa.coordinationBlock >= ReservationsActivationBlock(dsa.ethereumNetwork)
+
 	validatedDeposits, err := ValidateDepositSweepProposal(
 		validateProposalLogger,
 		walletPublicKeyHash,
 		dsa.proposal,
 		dsa.requiredFundingTxConfirmations,
+		reservationsActive,
 		dsa.chain,
 		dsa.btcChain,
 	)
@@ -329,6 +382,13 @@ func ValidateDepositSweepProposal(
 	walletPublicKeyHash [20]byte,
 	proposal *DepositSweepProposal,
 	requiredFundingTxConfirmations uint,
+	// reservationsActive reports whether reservations were live at the
+	// coordination block for this proposal round, i.e.
+	// ReservationsActivationBlock(network) <= coordinationBlock. It
+	// must be derived from that comparison, not from whether a
+	// reservation chain call below happens to succeed - see
+	// ReservationsActivationBlock's doc comment.
+	reservationsActive bool,
 	chain interface {
 		// PastDepositRevealedEvents fetches past deposit reveal events according
 		// to the provided filter or unfiltered if the filter is nil. Returned
@@ -364,6 +424,33 @@ func ValidateDepositSweepProposal(
 			fundingTxHash bitcoin.Hash,
 			fundingOutputIndex uint32,
 		) (*DepositChainRequest, bool, error)
+
+		// BuildDepositKey calculates a deposit key for the given funding
+		// transaction hash and output index.
+		BuildDepositKey(
+			fundingTxHash bitcoin.Hash,
+			fundingOutputIndex uint32,
+		) *big.Int
+
+		// IsReservedDeposit returns true if the given deposit was revealed
+		// with the reservation vault address and is therefore a
+		// reservation rather than a default deposit. This is the
+		// follower-side counterpart to the leader-path reserved-deposit
+		// filter in the deposit-sweep coordination task: a follower must
+		// not co-sign a reserved-deposit sweep. Called for every deposit
+		// in the proposal, and only when reservationsActive is true - see
+		// that parameter's doc comment. A failure is a hard error: a
+		// reserved status the client cannot read must never be treated as
+		// "not reserved".
+		IsReservedDeposit(depositKey *big.Int) (bool, error)
+
+		// ReservationsVaultTrusted reports whether the Bridge trusts the
+		// reservation vault, i.e. whether reservations are live on-chain.
+		// Consulted through ReservationsSweepGate when reservationsActive
+		// is false, so a client that does not believe reservations are
+		// live still refuses to sweep once the chain says they are. A
+		// Bridge deployed before the reservation upgrade cannot answer it.
+		ReservationsVaultTrusted() (bool, error)
 	},
 	btcChain bitcoin.Chain,
 ) ([]*Deposit, error) {
@@ -379,6 +466,30 @@ func ValidateDepositSweepProposal(
 
 	if len(proposal.DepositsKeys) != len(proposal.DepositsRevealBlocks) {
 		return nil, fmt.Errorf("proposal's reveal blocks list has a wrong length")
+	}
+
+	// Reservations sweep gate: the reserved-deposit check below only runs
+	// inside the activation window, so the chain's own reservation state
+	// decides whether a sweep is allowed at all when the window is closed.
+	// A refusal here means either that the Bridge already trusts the
+	// reservation vault while this client does not coordinate reservations,
+	// or that the reservation state cannot be determined; the only closed
+	// window that lets the sweep through without that state is a deployment
+	// that provably has no reservation surface.
+	preReservationsBridge, gateErr := ReservationsSweepGate(
+		reservationsActive,
+		chain,
+	)
+	if gateErr != nil {
+		return nil, fmt.Errorf("reservations sweep gate: [%v]", gateErr)
+	}
+	if preReservationsBridge {
+		validateProposalLogger.Warnf(
+			"the Bridge has no reservation surface (it predates the " +
+				"reservations upgrade), so it cannot hold a reserved " +
+				"deposit; sweeping on the basis of this client's " +
+				"activation window",
+		)
 	}
 
 	for i, depositKey := range proposal.DepositsKeys {
@@ -470,6 +581,48 @@ func ValidateDepositSweepProposal(
 			)
 		}
 
+		// Ask the chain for every candidate deposit rather than
+		// pre-filtering on the deposit's revealed vault: a reserved
+		// deposit stays reserved after the reservation vault rotates, so
+		// comparing the revealed vault with the *current* reservation
+		// vault misses exactly the deposits that must not be swept
+		// after a vault rotation. IsReservedDeposit is the predicate
+		// WalletProposalValidator enforces, so it is the only correct
+		// pre-filter here. Skipped entirely when reservationsActive is
+		// false, so the feature's pre-activation state never triggers a
+		// chain call that would fail deterministically on a
+		// non-upgraded Bridge.
+		if reservationsActive {
+			// Hard reject, like the protocol-minimum fee gate below: a
+			// follower must not sign a sweep that spends a reservation.
+			// Sweeping a reservation is irreversible, so a stalled sweep
+			// (some followers reject, signing doesn't reach threshold) is
+			// the acceptable cost, not a wrongly swept reservation.
+			validateProposalLogger.Infof(
+				"deposit [%v] - checking reservation status",
+				depositDisplayIndex,
+			)
+
+			depositReservationKey := chain.BuildDepositKey(
+				depositKey.FundingTxHash,
+				depositKey.FundingOutputIndex,
+			)
+			isReserved, err := chain.IsReservedDeposit(depositReservationKey)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot check reservation status for deposit [%v]: [%v]",
+					depositDisplayIndex,
+					err,
+				)
+			}
+			if isReserved {
+				return nil, fmt.Errorf(
+					"deposit [%v] is a reserved deposit and cannot be swept",
+					depositDisplayIndex,
+				)
+			}
+		}
+
 		depositRequest, found, err := chain.GetDepositRequest(
 			depositKey.FundingTxHash,
 			depositKey.FundingOutputIndex,
@@ -517,33 +670,45 @@ func ValidateDepositSweepProposal(
 		"deposit sweep proposal is valid",
 	)
 
-	// Follower-side soft check on the proposed fee. The on-chain
+	// Follower-side fee check on the proposed fee. The on-chain
 	// WalletProposalValidator only bounds the sweep fee from above, not below,
 	// so a misbehaving or unpatched leader can propose a fee at the ~1 sat/vByte
-	// relay floor that this node would otherwise sign - the same underpricing
-	// that jams the wallet (see threshold-network/keep-core#4171). We recompute
-	// the safe minimum (applying the 25% safety buffer that
-	// tbtcpg.applyWalletTxFeeFloor would also enforce on the leader side) and
-	// warn if the proposal is below it.
+	// relay floor that would jam the wallet (see
+	// threshold-network/keep-core#4171).
 	//
-	// This is intentionally log-only, not a rejection: rejecting a below-floor
-	// proposal here would, during a mixed-version rollout, split signers (patched
-	// nodes reject, unpatched nodes sign) and could stall signing. Hard
-	// enforcement belongs on-chain in the WalletProposalValidator, or behind a
-	// coordinated all-nodes upgrade. The threshold is recomputed in
-	// checkSweepFeeFloor using the same buffered floor
-	// (MinWalletTxSatPerVByteFee + WalletTxFeeBufferPercent) as
-	// warnIfProposedWalletTxFeeBelowBufferedFloor (proposal_fee_check.go);
-	// keep the size estimator in checkSweepFeeFloor in sync with the
+	// The hard-reject gate uses the fixed protocol minimum
+	// (ProtocolMinWalletTxSatPerVByteFee = 5) so every follower rejects
+	// underpriced proposals regardless of operator tuning: an honest leader
+	// emits at least 5 sat/vB so its fee always clears the reject gate,
+	// and a misbehaving leader proposing below the protocol minimum is
+	// rejected outright. The one-vByte allowance (ProtocolMin * (vsize-1))
+	// covers size-estimate differences between leader and follower versions.
+	//
+	// The soft warning uses the operator's own bare floor
+	// (MinWalletTxSatPerVByteFee * vsize) to catch degraded fees that pass
+	// the protocol minimum but fall short of the configured floor; the
+	// buffered-floor variant instead fired on every honest
+	// quiet-mempool proposal.
+	//
+	// Keep the size estimator in checkSweepFeeFloor in sync with the
 	// leader-side estimator in tbtcpg/deposit_sweep.go.
 	check, checkErr := checkSweepFeeFloor(proposal)
 	if checkErr != nil {
 		validateProposalLogger.Warnf(
-			"cannot estimate sweep tx size for the fee sanity check: [%v]",
+			"cannot estimate sweep tx size for the fee check: [%v]",
 			checkErr,
 		)
 	} else {
-		warnIfProposedWalletTxFeeBelowBufferedFloor(
+		// Hard reject: follower refuses to co-sign a below-protocol fee.
+		if err := rejectIfProposedWalletTxFeeBelowProtocolMin(
+			proposal.SweepTxFee,
+			check.sweepTxSize,
+			"deposit sweep",
+		); err != nil {
+			return nil, err
+		}
+		// Soft warning: below the operator's bare floor.
+		warnIfProposedWalletTxFeeBelowBareFloor(
 			validateProposalLogger,
 			MinWalletTxSatPerVByteFee,
 			check.sweepTxSize,

@@ -1,0 +1,40 @@
+No files changed, compilation skipped
+
+Ran 1 test for test-foundry/reservations/ReservationInvariants.t.sol:ReservationInvariantsTest
+[PASS] invariant_reservationAccounting() (runs: 256, calls: 25600, reverts: 0)
+
+╭--------------------+--------------------------+-------+---------+----------╮
+| Contract           | Selector                 | Calls | Reverts | Discards |
++============================================================================+
+| ReservationHandler | addWallet                | 1828  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | advanceWallet            | 1780  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyAcceptanceTimedOut | 1826  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyReanchorTimedOut   | 1816  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyStranded           | 1853  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | proveAcceptance          | 1800  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | proveReanchor            | 1787  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | requestAcceptance        | 1879  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | requestReanchor          | 1809  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | retirePendingDeposit     | 1841  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | revealReservedDeposit    | 1836  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | updateCaps               | 1899  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | updateLimits             | 1856  | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | warp                     | 1790  | 0       | 0        |
+╰--------------------+--------------------------+-------+---------+----------╯
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 37.34s (37.33s CPU time)
+
+Ran 1 test suite in 37.34s (37.34s CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)

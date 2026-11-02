@@ -1,0 +1,490 @@
+[1m[32m⇾[0m[0m Reading the configuration file at: [1mmedusa-reservations-liveness.json[0m
+⇾ Compiling targets with crytic-compile
+⇾ Running command:
+crytic-compile . --export-format solc --export-dir cache_forge/medusa-reservations-liveness/crytic-export --foundry-compile-all
+⇾ Finished compiling targets in 1m5s
+⇾ artifacts: Medusa is running against a new set of build artifacts
+⇾ Running with a timeout of 900 seconds
+⇾ Setting up test chain
+⇾ Finished setting up test chain
+⇾ Creating corpus...
+⇾ Initializing corpus...
+⇾ Fuzzing with 4 workers
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_capsHoldAfterEveryRequest()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_activeCountMatchesOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_walletCountersMatchOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckAtTheReanchorFloor()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_creditsMatchSettlements()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_aPossibleHandOffIsNeverRefused()
+⇾ [NOT STARTED] Property Test: ReservationLivenessHandler.property_totalAmountMatchesOpenPositions()
+⇾ fuzz: elapsed:       0s, calls:          0 (     0/sec), seq/s:      0, branches:    275, corpus:     0, failures: 0/0, gas/s:            0
+⇾ Finished running call sequences in the corpus in 0s
+⇾ corpus: health: 0%, sequences: 142 (0 valid, 141 invalid)
+⇾ fuzz: elapsed:       3s, calls:        918 (   305/sec), seq/s:     47, branches:   1924, corpus:    72, failures: 0/143, gas/s:     18556530
+⇾ [Worker 2] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit() with 69 call(s)
+⇾ fuzz: elapsed:       6s, calls:       2281 (   454/sec), seq/s:      4, branches:   2114, corpus:    87, failures: 0/157, gas/s:     27459908
+⇾ fuzz: elapsed:       9s, calls:       3359 (   359/sec), seq/s:      3, branches:   2120, corpus:    90, failures: 0/169, gas/s:     23331562
+⇾ fuzz: elapsed:      12s, calls:       4461 (   367/sec), seq/s:      3, branches:   2122, corpus:    91, failures: 0/179, gas/s:     21907008
+⇾ fuzz: elapsed:      15s, calls:       5668 (   401/sec), seq/s:      3, branches:   2141, corpus:    96, failures: 0/191, gas/s:     23002946
+⇾ fuzz: elapsed:      18s, calls:       6714 (   348/sec), seq/s:      3, branches:   2207, corpus:    99, failures: 0/201, gas/s:     21680437
+⇾ fuzz: elapsed:      21s, calls:       7916 (   400/sec), seq/s:      3, branches:   2209, corpus:   101, failures: 0/213, gas/s:     23875179
+⇾ fuzz: elapsed:      24s, calls:       9133 (   405/sec), seq/s:      4, branches:   2228, corpus:   103, failures: 0/226, gas/s:     24695695
+⇾ fuzz: elapsed:      27s, calls:      10047 (   304/sec), seq/s:      2, branches:   2249, corpus:   105, failures: 0/235, gas/s:     18668343
+⇾ [Worker 2] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:      30s, calls:      11071 (   341/sec), seq/s:      3, branches:   2271, corpus:   106, failures: 0/245, gas/s:     20034696
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+Test for method "ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(799209786703925451457619773639399053681266675925166158062547699289797282450, 216479740329116447, 1758033594) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(0) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(17320227251683691215246244128577014661213718672602074593016982478219092308556, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+4) ReservationLivenessHandler.advanceWallet(uint256,bool)(57260619311334291872152161663208936288905526585172264600352431325243630954, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+5) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(1725428359976766525442493171068278174995008310520122083833644371738542, 59641290431, 1328448399) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(108039427210739021023261328192272421856397797863515793356451054182613501231783, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(123428685533465139058469776285535209410762198767416150075287249262015886341, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(123428685533465139058469776285535209410762198767416150075287249262015886341, true) (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000000005) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=0, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()() (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=000000000000000000000000b0a2ea0c07a6549f8e938fd3603c49e195c472eb00000000000000000000000000000000000000000000000000000000001a422f000000000000000000000000000000000000000000000000000000000000003d000000000000000000000000000000000000100200000000000000000000000000000000000000000000000000000000000000000000000000000000001a422f000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ [Worker 2] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget() with 69 call(s)
+⇾ fuzz: elapsed:      33s, calls:      12371 (   433/sec), seq/s:      4, branches:   2274, corpus:   108, failures: 1/258, gas/s:     26370244
+⇾ fuzz: elapsed:      36s, calls:      13761 (   463/sec), seq/s:      4, branches:   2274, corpus:   108, failures: 1/272, gas/s:     26170336
+⇾ [Worker 3] Shrinking call sequence for Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget() with 81 call(s)
+⇾ fuzz: elapsed:      39s, calls:      14804 (   347/sec), seq/s:      3, branches:   2274, corpus:   108, failures: 1/283, gas/s:     20666063
+⇾ fuzz: elapsed:      42s, calls:      15426 (   207/sec), seq/s:      1, branches:   2289, corpus:   110, failures: 1/289, gas/s:     13022286
+⇾ fuzz: elapsed:      45s, calls:      16207 (   260/sec), seq/s:      2, branches:   2289, corpus:   110, failures: 1/297, gas/s:     15384563
+⇾ fuzz: elapsed:      48s, calls:      16986 (   259/sec), seq/s:      2, branches:   2289, corpus:   110, failures: 1/305, gas/s:     15585655
+⇾ fuzz: elapsed:      51s, calls:      17709 (   240/sec), seq/s:      2, branches:   2299, corpus:   112, failures: 1/312, gas/s:     13595195
+⇾ fuzz: elapsed:      54s, calls:      18372 (   220/sec), seq/s:      2, branches:   2299, corpus:   112, failures: 1/319, gas/s:     12626404
+⇾ [Worker 2] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:      57s, calls:      19110 (   245/sec), seq/s:      2, branches:   2299, corpus:   112, failures: 1/326, gas/s:     14363162
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+Test for method "ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(1945727559953757468267200637228132772829300676321140086555004392299590341536, 18374988243088968611, 2680411294) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(0) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(30742992207933047791930284766185165382932230883053731934305115945431080768059, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+4) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(3896548364376759413981988740750174100420546580173032785654669948707, 143068313093846811, 0) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+5) ReservationLivenessHandler.advanceWallet(uint256,bool)(50218407180974119616264366838264341627729978169202202626673548517814919698333, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(0, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(63721047294435421120294937788392601761762453598024791938698062383226735758, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(63721047294435421120294937788392601761762453598024791938698062383226735758, true) (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x30000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010020000000000000000000000000000000000000000000000000000000000000000000000000000000000000005) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=0, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()() (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=000000000000000000000000b0a2ea0c07a6549f8e938fd3603c49e195c472eb0000000000000000000000000000000000000000000000000000000000181673000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000181673000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ fuzz: elapsed:    1m00s, calls:      20233 (   374/sec), seq/s:      3, branches:   2299, corpus:   112, failures: 2/337, gas/s:     22758094
+⇾ fuzz: elapsed:    1m03s, calls:      21344 (   370/sec), seq/s:      3, branches:   2308, corpus:   114, failures: 2/348, gas/s:     21768148
+⇾ fuzz: elapsed:    1m06s, calls:      22488 (   381/sec), seq/s:      3, branches:   2308, corpus:   114, failures: 2/359, gas/s:     22778913
+⇾ [Worker 3] Shrinking complete after 5000 attempts (limit: 5000)
+⇾ fuzz: elapsed:    1m09s, calls:      23653 (   388/sec), seq/s:      3, branches:   2312, corpus:   115, failures: 2/371, gas/s:     24653448
+⇾ fuzz: elapsed:    1m12s, calls:      25183 (   509/sec), seq/s:      4, branches:   2312, corpus:   115, failures: 3/386, gas/s:     31154696
+⇾ fuzz: elapsed:    1m15s, calls:      26975 (   597/sec), seq/s:      5, branches:   2315, corpus:   116, failures: 3/404, gas/s:     35805525
+⇾ fuzz: elapsed:    1m18s, calls:      29013 (   679/sec), seq/s:      6, branches:   2315, corpus:   116, failures: 3/423, gas/s:     40696272
+⇾ fuzz: elapsed:    1m21s, calls:      31057 (   681/sec), seq/s:      7, branches:   2315, corpus:   116, failures: 3/446, gas/s:     41653072
+⇾ fuzz: elapsed:    1m24s, calls:      33084 (   675/sec), seq/s:      6, branches:   2319, corpus:   117, failures: 3/465, gas/s:     39908046
+⇾ fuzz: elapsed:    1m27s, calls:      35153 (   689/sec), seq/s:      6, branches:   2319, corpus:   117, failures: 3/486, gas/s:     40917582
+⇾ fuzz: elapsed:    1m30s, calls:      36905 (   583/sec), seq/s:      5, branches:   2319, corpus:   117, failures: 3/504, gas/s:     35279215
+⇾ fuzz: elapsed:    1m33s, calls:      38697 (   597/sec), seq/s:      5, branches:   2347, corpus:   119, failures: 3/521, gas/s:     35489636
+⇾ fuzz: elapsed:    1m36s, calls:      40743 (   681/sec), seq/s:      6, branches:   2372, corpus:   122, failures: 3/541, gas/s:     39751026
+⇾ fuzz: elapsed:    1m39s, calls:      42719 (   658/sec), seq/s:      6, branches:   2372, corpus:   122, failures: 3/562, gas/s:     41130544
+⇾ fuzz: elapsed:    1m42s, calls:      44374 (   551/sec), seq/s:      5, branches:   2395, corpus:   123, failures: 3/578, gas/s:     34204949
+⇾ fuzz: elapsed:    1m45s, calls:      46078 (   567/sec), seq/s:      5, branches:   2395, corpus:   123, failures: 3/595, gas/s:     33811204
+⇾ fuzz: elapsed:    1m48s, calls:      48124 (   681/sec), seq/s:      6, branches:   2399, corpus:   124, failures: 3/615, gas/s:     39447263
+⇾ fuzz: elapsed:    1m51s, calls:      49775 (   550/sec), seq/s:      5, branches:   2399, corpus:   124, failures: 3/632, gas/s:     32746811
+⇾ fuzz: elapsed:    1m54s, calls:      51201 (   475/sec), seq/s:      4, branches:   2399, corpus:   124, failures: 3/645, gas/s:     27455592
+⇾ fuzz: elapsed:    1m57s, calls:      52643 (   480/sec), seq/s:      5, branches:   2399, corpus:   124, failures: 3/661, gas/s:     28886447
+⇾ fuzz: elapsed:    2m00s, calls:      53894 (   416/sec), seq/s:      3, branches:   2399, corpus:   124, failures: 3/673, gas/s:     25818900
+⇾ fuzz: elapsed:    2m03s, calls:      55220 (   441/sec), seq/s:      4, branches:   2418, corpus:   125, failures: 3/687, gas/s:     26907369
+⇾ fuzz: elapsed:    2m06s, calls:      56210 (   329/sec), seq/s:      2, branches:   2420, corpus:   126, failures: 3/696, gas/s:     20789240
+⇾ fuzz: elapsed:    2m09s, calls:      57474 (   421/sec), seq/s:      4, branches:   2420, corpus:   126, failures: 3/710, gas/s:     24267628
+⇾ fuzz: elapsed:    2m12s, calls:      58490 (   338/sec), seq/s:      3, branches:   2442, corpus:   127, failures: 3/720, gas/s:     21062390
+⇾ fuzz: elapsed:    2m15s, calls:      59546 (   351/sec), seq/s:      2, branches:   2463, corpus:   128, failures: 3/729, gas/s:     21192074
+⇾ fuzz: elapsed:    2m18s, calls:      60717 (   390/sec), seq/s:      3, branches:   2463, corpus:   128, failures: 3/741, gas/s:     22848965
+⇾ fuzz: elapsed:    2m21s, calls:      61827 (   369/sec), seq/s:      3, branches:   2463, corpus:   128, failures: 3/752, gas/s:     21414319
+⇾ fuzz: elapsed:    2m24s, calls:      62983 (   385/sec), seq/s:      3, branches:   2463, corpus:   128, failures: 3/763, gas/s:     22684025
+⇾ fuzz: elapsed:    2m27s, calls:      64728 (   581/sec), seq/s:      6, branches:   2463, corpus:   128, failures: 3/782, gas/s:     35054224
+⇾ fuzz: elapsed:    2m30s, calls:      66569 (   613/sec), seq/s:      5, branches:   2463, corpus:   128, failures: 3/800, gas/s:     36909446
+⇾ fuzz: elapsed:    2m33s, calls:      68107 (   512/sec), seq/s:      4, branches:   2463, corpus:   128, failures: 3/815, gas/s:     29633351
+⇾ fuzz: elapsed:    2m36s, calls:      69563 (   485/sec), seq/s:      4, branches:   2463, corpus:   128, failures: 3/829, gas/s:     28683994
+⇾ fuzz: elapsed:    2m39s, calls:      71258 (   564/sec), seq/s:      5, branches:   2463, corpus:   128, failures: 3/846, gas/s:     33251242
+⇾ fuzz: elapsed:    2m42s, calls:      73001 (   580/sec), seq/s:      5, branches:   2463, corpus:   128, failures: 3/864, gas/s:     36632379
+⇾ fuzz: elapsed:    2m45s, calls:      74109 (   369/sec), seq/s:      3, branches:   2470, corpus:   128, failures: 3/876, gas/s:     22484732
+⇾ fuzz: elapsed:    2m48s, calls:      74831 (   240/sec), seq/s:      2, branches:   2478, corpus:   130, failures: 3/883, gas/s:     13902488
+⇾ fuzz: elapsed:    2m51s, calls:      76072 (   413/sec), seq/s:      3, branches:   2478, corpus:   131, failures: 3/895, gas/s:     29235943
+⇾ fuzz: elapsed:    2m54s, calls:      77360 (   429/sec), seq/s:      3, branches:   2478, corpus:   131, failures: 3/907, gas/s:     25566316
+⇾ fuzz: elapsed:    2m57s, calls:      78326 (   321/sec), seq/s:      3, branches:   2478, corpus:   131, failures: 3/918, gas/s:     20215721
+⇾ fuzz: elapsed:    3m00s, calls:      79815 (   496/sec), seq/s:      4, branches:   2478, corpus:   131, failures: 3/932, gas/s:     28256741
+⇾ fuzz: elapsed:    3m03s, calls:      80991 (   391/sec), seq/s:      3, branches:   2480, corpus:   132, failures: 3/944, gas/s:     25563611
+⇾ fuzz: elapsed:    3m06s, calls:      81929 (   312/sec), seq/s:      2, branches:   2480, corpus:   132, failures: 3/953, gas/s:     20122704
+⇾ fuzz: elapsed:    3m09s, calls:      83074 (   381/sec), seq/s:      3, branches:   2482, corpus:   133, failures: 3/965, gas/s:     24000084
+⇾ fuzz: elapsed:    3m12s, calls:      83936 (   287/sec), seq/s:      2, branches:   2482, corpus:   133, failures: 3/974, gas/s:     18122244
+⇾ fuzz: elapsed:    3m15s, calls:      84915 (   326/sec), seq/s:      3, branches:   2482, corpus:   133, failures: 3/984, gas/s:     20798309
+⇾ fuzz: elapsed:    3m18s, calls:      85859 (   314/sec), seq/s:      2, branches:   2485, corpus:   134, failures: 3/992, gas/s:     18395444
+⇾ fuzz: elapsed:    3m21s, calls:      86840 (   326/sec), seq/s:      3, branches:   2489, corpus:   135, failures: 3/1003, gas/s:     18657976
+⇾ fuzz: elapsed:    3m24s, calls:      88147 (   435/sec), seq/s:      4, branches:   2489, corpus:   135, failures: 3/1016, gas/s:     25684414
+⇾ fuzz: elapsed:    3m27s, calls:      89090 (   314/sec), seq/s:      3, branches:   2489, corpus:   135, failures: 3/1026, gas/s:     18677396
+⇾ fuzz: elapsed:    3m30s, calls:      90054 (   321/sec), seq/s:      2, branches:   2489, corpus:   135, failures: 3/1035, gas/s:     18548751
+⇾ fuzz: elapsed:    3m34s, calls:      90925 (   290/sec), seq/s:      2, branches:   2489, corpus:   135, failures: 3/1044, gas/s:     17133684
+⇾ fuzz: elapsed:    3m37s, calls:      92124 (   399/sec), seq/s:      3, branches:   2489, corpus:   135, failures: 3/1056, gas/s:     23616370
+⇾ fuzz: elapsed:    3m40s, calls:      93223 (   366/sec), seq/s:      3, branches:   2489, corpus:   135, failures: 3/1067, gas/s:     21579631
+⇾ fuzz: elapsed:    3m43s, calls:      94050 (   275/sec), seq/s:      2, branches:   2489, corpus:   135, failures: 3/1074, gas/s:     16979643
+⇾ fuzz: elapsed:    3m46s, calls:      95244 (   397/sec), seq/s:      4, branches:   2494, corpus:   136, failures: 3/1087, gas/s:     24362123
+⇾ fuzz: elapsed:    3m49s, calls:      96359 (   370/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1097, gas/s:     21756005
+⇾ fuzz: elapsed:    3m52s, calls:      97644 (   428/sec), seq/s:      4, branches:   2494, corpus:   136, failures: 3/1111, gas/s:     24601576
+⇾ fuzz: elapsed:    3m55s, calls:      98664 (   339/sec), seq/s:      2, branches:   2494, corpus:   136, failures: 3/1120, gas/s:     21582094
+⇾ fuzz: elapsed:    3m58s, calls:      99891 (   408/sec), seq/s:      4, branches:   2494, corpus:   136, failures: 3/1133, gas/s:     23937504
+⇾ fuzz: elapsed:    4m01s, calls:     101011 (   373/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1144, gas/s:     21965642
+⇾ fuzz: elapsed:    4m04s, calls:     102067 (   351/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1155, gas/s:     20576168
+⇾ fuzz: elapsed:    4m07s, calls:     103210 (   380/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1166, gas/s:     21575574
+⇾ fuzz: elapsed:    4m10s, calls:     104415 (   401/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1178, gas/s:     23057392
+⇾ fuzz: elapsed:    4m13s, calls:     105546 (   376/sec), seq/s:      3, branches:   2494, corpus:   136, failures: 3/1189, gas/s:     22537869
+⇾ fuzz: elapsed:    4m16s, calls:     106770 (   407/sec), seq/s:      4, branches:   2496, corpus:   137, failures: 3/1202, gas/s:     23220597
+⇾ fuzz: elapsed:    4m19s, calls:     107661 (   296/sec), seq/s:      2, branches:   2503, corpus:   138, failures: 3/1210, gas/s:     19202719
+⇾ fuzz: elapsed:    4m22s, calls:     108877 (   405/sec), seq/s:      4, branches:   2505, corpus:   139, failures: 3/1223, gas/s:     22925009
+⇾ fuzz: elapsed:    4m25s, calls:     110112 (   411/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1235, gas/s:     23411468
+⇾ fuzz: elapsed:    4m28s, calls:     111247 (   377/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1246, gas/s:     23080813
+⇾ fuzz: elapsed:    4m31s, calls:     112424 (   392/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1258, gas/s:     23380701
+⇾ fuzz: elapsed:    4m34s, calls:     113779 (   451/sec), seq/s:      4, branches:   2505, corpus:   139, failures: 3/1273, gas/s:     25925261
+⇾ fuzz: elapsed:    4m37s, calls:     115091 (   437/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1285, gas/s:     24984103
+⇾ fuzz: elapsed:    4m40s, calls:     116275 (   394/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1297, gas/s:     24314148
+⇾ fuzz: elapsed:    4m43s, calls:     117617 (   447/sec), seq/s:      4, branches:   2505, corpus:   139, failures: 3/1311, gas/s:     25769009
+⇾ fuzz: elapsed:    4m46s, calls:     118699 (   360/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1321, gas/s:     21995135
+⇾ fuzz: elapsed:    4m49s, calls:     119777 (   359/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1332, gas/s:     22491769
+⇾ fuzz: elapsed:    4m52s, calls:     120929 (   383/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1343, gas/s:     22622290
+⇾ fuzz: elapsed:    4m55s, calls:     122044 (   371/sec), seq/s:      3, branches:   2505, corpus:   139, failures: 3/1355, gas/s:     21496612
+⇾ fuzz: elapsed:    4m58s, calls:     123281 (   411/sec), seq/s:      4, branches:   2505, corpus:   139, failures: 3/1368, gas/s:     23163681
+⇾ fuzz: elapsed:    5m01s, calls:     124370 (   362/sec), seq/s:      2, branches:   2505, corpus:   139, failures: 3/1377, gas/s:     22090515
+⇾ Pruned 7 corpus items in 2.576326242s. Total pruned this run: 7
+⇾ fuzz: elapsed:    5m04s, calls:     125547 (   392/sec), seq/s:      4, branches:   2505, corpus:   132, failures: 3/1390, gas/s:     22982806
+⇾ fuzz: elapsed:    5m07s, calls:     126717 (   389/sec), seq/s:      3, branches:   2505, corpus:   132, failures: 3/1401, gas/s:     22692458
+⇾ fuzz: elapsed:    5m10s, calls:     127857 (   379/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1412, gas/s:     22338243
+⇾ fuzz: elapsed:    5m13s, calls:     128928 (   355/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1422, gas/s:     21141778
+⇾ fuzz: elapsed:    5m16s, calls:     130172 (   414/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1436, gas/s:     24294601
+⇾ fuzz: elapsed:    5m19s, calls:     131075 (   300/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1444, gas/s:     19003190
+⇾ fuzz: elapsed:    5m22s, calls:     132053 (   324/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1454, gas/s:     19965823
+⇾ fuzz: elapsed:    5m25s, calls:     133001 (   315/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1465, gas/s:     19182011
+⇾ fuzz: elapsed:    5m28s, calls:     134128 (   375/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1475, gas/s:     22351977
+⇾ fuzz: elapsed:    5m31s, calls:     135241 (   370/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1486, gas/s:     22589020
+⇾ fuzz: elapsed:    5m34s, calls:     136364 (   372/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1497, gas/s:     20947779
+⇾ fuzz: elapsed:    5m37s, calls:     137401 (   345/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1509, gas/s:     20517754
+⇾ fuzz: elapsed:    5m40s, calls:     138543 (   380/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1519, gas/s:     22972063
+⇾ fuzz: elapsed:    5m43s, calls:     139651 (   369/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1530, gas/s:     21990742
+⇾ fuzz: elapsed:    5m46s, calls:     140573 (   307/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1541, gas/s:     20292084
+⇾ fuzz: elapsed:    5m49s, calls:     141459 (   295/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1549, gas/s:     18454929
+⇾ fuzz: elapsed:    5m52s, calls:     142503 (   347/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1559, gas/s:     21397372
+⇾ fuzz: elapsed:    5m55s, calls:     143512 (   335/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1569, gas/s:     20539526
+⇾ fuzz: elapsed:    5m58s, calls:     144569 (   352/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1580, gas/s:     20527311
+⇾ fuzz: elapsed:    6m01s, calls:     145725 (   385/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1591, gas/s:     23270351
+⇾ fuzz: elapsed:    6m04s, calls:     146893 (   389/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1603, gas/s:     22465296
+⇾ fuzz: elapsed:    6m07s, calls:     148118 (   408/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1615, gas/s:     24539109
+⇾ fuzz: elapsed:    6m10s, calls:     149166 (   349/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1625, gas/s:     20731394
+⇾ fuzz: elapsed:    6m13s, calls:     150362 (   398/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1638, gas/s:     22702767
+⇾ fuzz: elapsed:    6m16s, calls:     151527 (   388/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1649, gas/s:     23361403
+⇾ fuzz: elapsed:    6m19s, calls:     152674 (   381/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1661, gas/s:     22959841
+⇾ fuzz: elapsed:    6m22s, calls:     153717 (   347/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1671, gas/s:     20220821
+⇾ fuzz: elapsed:    6m25s, calls:     154986 (   422/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1684, gas/s:     23969630
+⇾ fuzz: elapsed:    6m28s, calls:     155828 (   280/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1693, gas/s:     17089732
+⇾ fuzz: elapsed:    6m31s, calls:     156678 (   283/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1700, gas/s:     17558910
+⇾ fuzz: elapsed:    6m34s, calls:     157787 (   369/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1711, gas/s:     21408118
+⇾ fuzz: elapsed:    6m37s, calls:     158871 (   361/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1723, gas/s:     21551951
+⇾ fuzz: elapsed:    6m40s, calls:     159909 (   345/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1733, gas/s:     20638928
+⇾ fuzz: elapsed:    6m43s, calls:     161073 (   387/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1745, gas/s:     22556034
+⇾ fuzz: elapsed:    6m46s, calls:     162185 (   370/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1756, gas/s:     20867601
+⇾ fuzz: elapsed:    6m49s, calls:     163611 (   475/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1771, gas/s:     29200301
+⇾ fuzz: elapsed:    6m52s, calls:     164930 (   439/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1784, gas/s:     26203280
+⇾ fuzz: elapsed:    6m55s, calls:     166185 (   418/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1796, gas/s:     24243059
+⇾ fuzz: elapsed:    6m58s, calls:     167356 (   389/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1807, gas/s:     23303140
+⇾ fuzz: elapsed:    7m01s, calls:     168367 (   336/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1818, gas/s:     20683655
+⇾ fuzz: elapsed:    7m04s, calls:     169168 (   266/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1826, gas/s:     15996565
+⇾ fuzz: elapsed:    7m07s, calls:     170623 (   484/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1841, gas/s:     27932081
+⇾ fuzz: elapsed:    7m10s, calls:     171566 (   314/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1849, gas/s:     18287829
+⇾ fuzz: elapsed:    7m13s, calls:     172912 (   448/sec), seq/s:      4, branches:   2517, corpus:   134, failures: 3/1864, gas/s:     24555932
+⇾ fuzz: elapsed:    7m16s, calls:     173796 (   294/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1872, gas/s:     18136602
+⇾ fuzz: elapsed:    7m19s, calls:     174876 (   359/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1883, gas/s:     21951423
+⇾ fuzz: elapsed:    7m22s, calls:     175866 (   329/sec), seq/s:      2, branches:   2517, corpus:   134, failures: 3/1892, gas/s:     18287583
+⇾ fuzz: elapsed:    7m25s, calls:     176985 (   372/sec), seq/s:      3, branches:   2517, corpus:   134, failures: 3/1904, gas/s:     21971202
+⇾ fuzz: elapsed:    7m28s, calls:     177996 (   336/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1914, gas/s:     19764690
+⇾ fuzz: elapsed:    7m31s, calls:     179092 (   365/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1925, gas/s:     21912153
+⇾ fuzz: elapsed:    7m34s, calls:     180274 (   393/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1937, gas/s:     23534779
+⇾ fuzz: elapsed:    7m37s, calls:     181205 (   310/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/1946, gas/s:     20381136
+⇾ fuzz: elapsed:    7m40s, calls:     182176 (   323/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1957, gas/s:     18656707
+⇾ fuzz: elapsed:    7m43s, calls:     183188 (   337/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/1966, gas/s:     19199204
+⇾ fuzz: elapsed:    7m46s, calls:     184228 (   346/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1976, gas/s:     21039290
+⇾ fuzz: elapsed:    7m49s, calls:     185199 (   323/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1986, gas/s:     19501912
+⇾ fuzz: elapsed:    7m52s, calls:     186431 (   410/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/1998, gas/s:     23362584
+⇾ fuzz: elapsed:    7m55s, calls:     187479 (   349/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2009, gas/s:     21100832
+⇾ fuzz: elapsed:    7m58s, calls:     188636 (   385/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2021, gas/s:     22439778
+⇾ fuzz: elapsed:    8m01s, calls:     189849 (   404/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2032, gas/s:     24275108
+⇾ fuzz: elapsed:    8m04s, calls:     191047 (   398/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2045, gas/s:     23674861
+⇾ fuzz: elapsed:    8m07s, calls:     192094 (   348/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2055, gas/s:     19894316
+⇾ fuzz: elapsed:    8m10s, calls:     193101 (   335/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2066, gas/s:     19516207
+⇾ fuzz: elapsed:    8m13s, calls:     194116 (   338/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2075, gas/s:     19658348
+⇾ fuzz: elapsed:    8m16s, calls:     195109 (   330/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2085, gas/s:     20042659
+⇾ fuzz: elapsed:    8m19s, calls:     196240 (   376/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2096, gas/s:     20925165
+⇾ fuzz: elapsed:    8m22s, calls:     197390 (   383/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2108, gas/s:     22481487
+⇾ fuzz: elapsed:    8m25s, calls:     198817 (   475/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2122, gas/s:     28136340
+⇾ fuzz: elapsed:    8m28s, calls:     199841 (   341/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2133, gas/s:     19999060
+⇾ fuzz: elapsed:    8m31s, calls:     200719 (   292/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2141, gas/s:     17288512
+⇾ fuzz: elapsed:    8m34s, calls:     201599 (   293/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2150, gas/s:     16795581
+⇾ fuzz: elapsed:    8m37s, calls:     202239 (   213/sec), seq/s:      1, branches:   2525, corpus:   135, failures: 3/2156, gas/s:     12327363
+⇾ fuzz: elapsed:    8m40s, calls:     203135 (   298/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2166, gas/s:     16973392
+⇾ fuzz: elapsed:    8m43s, calls:     204026 (   296/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2174, gas/s:     16961101
+⇾ fuzz: elapsed:    8m46s, calls:     204620 (   197/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2181, gas/s:     11566255
+⇾ fuzz: elapsed:    8m49s, calls:     205350 (   243/sec), seq/s:      1, branches:   2525, corpus:   135, failures: 3/2187, gas/s:     15190991
+⇾ fuzz: elapsed:    8m52s, calls:     206250 (   299/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2197, gas/s:     18109004
+⇾ fuzz: elapsed:    8m55s, calls:     207266 (   338/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2207, gas/s:     20031601
+⇾ fuzz: elapsed:    8m58s, calls:     208405 (   379/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2218, gas/s:     21681403
+⇾ fuzz: elapsed:    9m01s, calls:     209524 (   372/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2230, gas/s:     26374126
+⇾ fuzz: elapsed:    9m04s, calls:     210585 (   353/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2240, gas/s:     22035224
+⇾ fuzz: elapsed:    9m07s, calls:     211688 (   367/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2251, gas/s:     22154527
+⇾ fuzz: elapsed:    9m10s, calls:     212741 (   350/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2262, gas/s:     21521485
+⇾ fuzz: elapsed:    9m13s, calls:     214003 (   420/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2275, gas/s:     24932795
+⇾ fuzz: elapsed:    9m16s, calls:     214988 (   328/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2284, gas/s:     20040745
+⇾ fuzz: elapsed:    9m19s, calls:     215971 (   327/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2293, gas/s:     19480353
+⇾ fuzz: elapsed:    9m22s, calls:     216831 (   286/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2302, gas/s:     16886733
+⇾ fuzz: elapsed:    9m25s, calls:     217882 (   350/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2313, gas/s:     20439668
+⇾ fuzz: elapsed:    9m28s, calls:     219018 (   378/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2325, gas/s:     21849877
+⇾ fuzz: elapsed:    9m31s, calls:     220060 (   347/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2335, gas/s:     20320406
+⇾ fuzz: elapsed:    9m34s, calls:     221013 (   317/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2345, gas/s:     19794473
+⇾ fuzz: elapsed:    9m37s, calls:     222056 (   347/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2356, gas/s:     20996038
+⇾ fuzz: elapsed:    9m40s, calls:     223098 (   347/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2365, gas/s:     21155153
+⇾ fuzz: elapsed:    9m43s, calls:     224369 (   423/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2378, gas/s:     24858031
+⇾ fuzz: elapsed:    9m46s, calls:     225795 (   475/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2392, gas/s:     26833923
+⇾ fuzz: elapsed:    9m49s, calls:     227090 (   431/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2405, gas/s:     24337814
+⇾ fuzz: elapsed:    9m52s, calls:     228144 (   351/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2415, gas/s:     21797104
+⇾ fuzz: elapsed:    9m55s, calls:     229200 (   351/sec), seq/s:      3, branches:   2525, corpus:   135, failures: 3/2425, gas/s:     20571956
+⇾ fuzz: elapsed:    9m58s, calls:     230320 (   373/sec), seq/s:      4, branches:   2525, corpus:   135, failures: 3/2438, gas/s:     21717838
+⇾ fuzz: elapsed:   10m01s, calls:     231130 (   269/sec), seq/s:      2, branches:   2525, corpus:   135, failures: 3/2446, gas/s:     16418050
+⇾ Pruned 3 corpus items in 2.643513863s. Total pruned this run: 10
+⇾ fuzz: elapsed:   10m04s, calls:     232516 (   461/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2459, gas/s:     26662161
+⇾ fuzz: elapsed:   10m07s, calls:     233648 (   377/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2471, gas/s:     22672575
+⇾ fuzz: elapsed:   10m10s, calls:     234567 (   306/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2480, gas/s:     18619397
+⇾ fuzz: elapsed:   10m13s, calls:     235787 (   406/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2493, gas/s:     24211385
+⇾ fuzz: elapsed:   10m16s, calls:     237020 (   410/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2504, gas/s:     24135433
+⇾ fuzz: elapsed:   10m19s, calls:     238394 (   457/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2518, gas/s:     26764474
+⇾ fuzz: elapsed:   10m22s, calls:     239342 (   315/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2527, gas/s:     19621644
+⇾ fuzz: elapsed:   10m25s, calls:     240557 (   404/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2541, gas/s:     23757647
+⇾ fuzz: elapsed:   10m28s, calls:     241489 (   310/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2549, gas/s:     18335622
+⇾ fuzz: elapsed:   10m31s, calls:     242274 (   261/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2557, gas/s:     15105045
+⇾ fuzz: elapsed:   10m34s, calls:     243369 (   364/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2567, gas/s:     22246421
+⇾ fuzz: elapsed:   10m37s, calls:     244485 (   371/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2579, gas/s:     26663294
+⇾ fuzz: elapsed:   10m40s, calls:     245524 (   346/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2589, gas/s:     20382882
+⇾ fuzz: elapsed:   10m43s, calls:     246618 (   364/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2600, gas/s:     21769039
+⇾ fuzz: elapsed:   10m46s, calls:     247657 (   346/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2611, gas/s:     21077769
+⇾ fuzz: elapsed:   10m49s, calls:     249035 (   459/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2625, gas/s:     26481421
+⇾ fuzz: elapsed:   10m52s, calls:     250012 (   325/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2634, gas/s:     18897419
+⇾ fuzz: elapsed:   10m55s, calls:     250978 (   321/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2643, gas/s:     19488516
+⇾ fuzz: elapsed:   10m58s, calls:     252104 (   375/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2655, gas/s:     22760861
+⇾ fuzz: elapsed:   11m01s, calls:     252996 (   297/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2665, gas/s:     19007388
+⇾ fuzz: elapsed:   11m04s, calls:     254003 (   335/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2674, gas/s:     18930175
+⇾ fuzz: elapsed:   11m07s, calls:     255125 (   373/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2685, gas/s:     21725032
+⇾ fuzz: elapsed:   11m10s, calls:     256217 (   363/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2697, gas/s:     21584772
+⇾ fuzz: elapsed:   11m13s, calls:     257129 (   303/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2705, gas/s:     19167414
+⇾ fuzz: elapsed:   11m16s, calls:     258072 (   314/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2714, gas/s:     19183549
+⇾ fuzz: elapsed:   11m19s, calls:     259019 (   315/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2725, gas/s:     20056683
+⇾ fuzz: elapsed:   11m22s, calls:     259904 (   294/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2733, gas/s:     18097303
+⇾ fuzz: elapsed:   11m25s, calls:     260984 (   359/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2744, gas/s:     21517768
+⇾ fuzz: elapsed:   11m28s, calls:     261908 (   307/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2753, gas/s:     18630720
+⇾ fuzz: elapsed:   11m31s, calls:     262831 (   307/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2762, gas/s:     17633380
+⇾ fuzz: elapsed:   11m34s, calls:     263703 (   290/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2770, gas/s:     16861360
+⇾ fuzz: elapsed:   11m37s, calls:     264606 (   300/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2780, gas/s:     18108768
+⇾ fuzz: elapsed:   11m40s, calls:     265641 (   344/sec), seq/s:      3, branches:   2525, corpus:   132, failures: 3/2791, gas/s:     19834920
+⇾ fuzz: elapsed:   11m43s, calls:     266941 (   433/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2804, gas/s:     25105645
+⇾ fuzz: elapsed:   11m46s, calls:     267778 (   278/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2811, gas/s:     16563542
+⇾ fuzz: elapsed:   11m49s, calls:     268864 (   361/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2824, gas/s:     21557790
+⇾ fuzz: elapsed:   11m52s, calls:     269790 (   308/sec), seq/s:      2, branches:   2525, corpus:   132, failures: 3/2831, gas/s:     18077988
+⇾ fuzz: elapsed:   11m55s, calls:     271088 (   432/sec), seq/s:      4, branches:   2525, corpus:   132, failures: 3/2844, gas/s:     24553494
+⇾ fuzz: elapsed:   11m58s, calls:     272348 (   419/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2858, gas/s:     25477635
+⇾ fuzz: elapsed:   12m01s, calls:     273466 (   372/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/2869, gas/s:     21589495
+⇾ fuzz: elapsed:   12m04s, calls:     274911 (   481/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2882, gas/s:     27018663
+⇾ fuzz: elapsed:   12m07s, calls:     276035 (   374/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2895, gas/s:     21150497
+⇾ fuzz: elapsed:   12m10s, calls:     277088 (   350/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/2905, gas/s:     21222337
+⇾ fuzz: elapsed:   12m13s, calls:     278440 (   450/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2919, gas/s:     27309120
+⇾ fuzz: elapsed:   12m16s, calls:     279852 (   470/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2934, gas/s:     27047017
+⇾ fuzz: elapsed:   12m19s, calls:     281504 (   550/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/2950, gas/s:     31973641
+⇾ fuzz: elapsed:   12m22s, calls:     282807 (   434/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/2962, gas/s:     27045501
+⇾ fuzz: elapsed:   12m25s, calls:     284022 (   404/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2975, gas/s:     24506179
+⇾ fuzz: elapsed:   12m28s, calls:     285416 (   464/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/2988, gas/s:     26007612
+⇾ fuzz: elapsed:   12m31s, calls:     287015 (   532/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3004, gas/s:     30019244
+⇾ fuzz: elapsed:   12m34s, calls:     288716 (   566/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3021, gas/s:     33608254
+⇾ fuzz: elapsed:   12m37s, calls:     290268 (   517/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3036, gas/s:     30078570
+⇾ fuzz: elapsed:   12m40s, calls:     291646 (   458/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3050, gas/s:     27779725
+⇾ fuzz: elapsed:   12m43s, calls:     293127 (   493/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3065, gas/s:     29390219
+⇾ fuzz: elapsed:   12m46s, calls:     294767 (   546/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3082, gas/s:     35371594
+⇾ fuzz: elapsed:   12m49s, calls:     296649 (   626/sec), seq/s:      6, branches:   2527, corpus:   133, failures: 3/3101, gas/s:     37325797
+⇾ fuzz: elapsed:   12m52s, calls:     298103 (   484/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3116, gas/s:     29040649
+⇾ fuzz: elapsed:   12m55s, calls:     299907 (   601/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3133, gas/s:     36121905
+⇾ fuzz: elapsed:   12m58s, calls:     301469 (   520/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3149, gas/s:     30911334
+⇾ fuzz: elapsed:   13m01s, calls:     303083 (   537/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3165, gas/s:     30049456
+⇾ fuzz: elapsed:   13m04s, calls:     304707 (   541/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3182, gas/s:     31408190
+⇾ fuzz: elapsed:   13m07s, calls:     306244 (   512/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3196, gas/s:     29698663
+⇾ fuzz: elapsed:   13m10s, calls:     307910 (   555/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3213, gas/s:     32432418
+⇾ fuzz: elapsed:   13m13s, calls:     309545 (   544/sec), seq/s:      5, branches:   2527, corpus:   133, failures: 3/3230, gas/s:     30856694
+⇾ fuzz: elapsed:   13m16s, calls:     310765 (   406/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/3242, gas/s:     25232112
+⇾ fuzz: elapsed:   13m19s, calls:     312028 (   420/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/3254, gas/s:     25096641
+⇾ fuzz: elapsed:   13m22s, calls:     313490 (   486/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3269, gas/s:     28399662
+⇾ fuzz: elapsed:   13m26s, calls:     314927 (   478/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3284, gas/s:     27205725
+⇾ fuzz: elapsed:   13m29s, calls:     316256 (   442/sec), seq/s:      3, branches:   2527, corpus:   133, failures: 3/3296, gas/s:     25182909
+⇾ fuzz: elapsed:   13m32s, calls:     317594 (   445/sec), seq/s:      4, branches:   2527, corpus:   133, failures: 3/3310, gas/s:     27367467
+⇾ fuzz: elapsed:   13m35s, calls:     318815 (   406/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3322, gas/s:     31887049
+⇾ fuzz: elapsed:   13m38s, calls:     320119 (   434/sec), seq/s:      4, branches:   2528, corpus:   134, failures: 3/3335, gas/s:     25009064
+⇾ fuzz: elapsed:   13m41s, calls:     321353 (   411/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3347, gas/s:     24461445
+⇾ fuzz: elapsed:   13m44s, calls:     322656 (   434/sec), seq/s:      4, branches:   2528, corpus:   134, failures: 3/3361, gas/s:     26996811
+⇾ fuzz: elapsed:   13m47s, calls:     323739 (   360/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3372, gas/s:     21420512
+⇾ fuzz: elapsed:   13m50s, calls:     324932 (   397/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3383, gas/s:     23988064
+⇾ fuzz: elapsed:   13m53s, calls:     325989 (   352/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3394, gas/s:     21829230
+⇾ fuzz: elapsed:   13m56s, calls:     327058 (   356/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3404, gas/s:     20551064
+⇾ fuzz: elapsed:   13m59s, calls:     328147 (   362/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3416, gas/s:     22534676
+⇾ fuzz: elapsed:   14m02s, calls:     329185 (   345/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3426, gas/s:     20460971
+⇾ fuzz: elapsed:   14m05s, calls:     330383 (   399/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3437, gas/s:     22490265
+⇾ fuzz: elapsed:   14m08s, calls:     331531 (   382/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3449, gas/s:     23463139
+⇾ fuzz: elapsed:   14m11s, calls:     332594 (   354/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3460, gas/s:     21362813
+⇾ fuzz: elapsed:   14m14s, calls:     333610 (   338/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3470, gas/s:     20816323
+⇾ fuzz: elapsed:   14m17s, calls:     334504 (   297/sec), seq/s:      2, branches:   2528, corpus:   134, failures: 3/3479, gas/s:     17582134
+⇾ fuzz: elapsed:   14m20s, calls:     335518 (   337/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3490, gas/s:     21234419
+⇾ fuzz: elapsed:   14m23s, calls:     336629 (   370/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3501, gas/s:     22146607
+⇾ fuzz: elapsed:   14m26s, calls:     337656 (   342/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3511, gas/s:     20054307
+⇾ fuzz: elapsed:   14m29s, calls:     338686 (   343/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3522, gas/s:     20546732
+⇾ fuzz: elapsed:   14m32s, calls:     339718 (   343/sec), seq/s:      2, branches:   2528, corpus:   134, failures: 3/3531, gas/s:     21330340
+⇾ fuzz: elapsed:   14m35s, calls:     340733 (   338/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3542, gas/s:     20317074
+⇾ fuzz: elapsed:   14m38s, calls:     341704 (   323/sec), seq/s:      2, branches:   2528, corpus:   134, failures: 3/3551, gas/s:     19125269
+⇾ fuzz: elapsed:   14m41s, calls:     342947 (   414/sec), seq/s:      4, branches:   2528, corpus:   134, failures: 3/3564, gas/s:     24850597
+⇾ fuzz: elapsed:   14m44s, calls:     344246 (   432/sec), seq/s:      4, branches:   2528, corpus:   134, failures: 3/3577, gas/s:     25345192
+⇾ fuzz: elapsed:   14m47s, calls:     345528 (   427/sec), seq/s:      4, branches:   2528, corpus:   134, failures: 3/3590, gas/s:     24569608
+⇾ fuzz: elapsed:   14m50s, calls:     346628 (   366/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3600, gas/s:     22410040
+⇾ fuzz: elapsed:   14m53s, calls:     347713 (   361/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3611, gas/s:     21904244
+⇾ fuzz: elapsed:   14m56s, calls:     348702 (   329/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3621, gas/s:     19465124
+⇾ fuzz: elapsed:   14m59s, calls:     349788 (   361/sec), seq/s:      3, branches:   2528, corpus:   134, failures: 3/3633, gas/s:     21004750
+⇾ Fuzzer stopped, test results follow below ...
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_aPossibleHandOffIsNeverRefused()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_activeCountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_anchorIndexPointsAtOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_capsHoldAfterEveryRequest()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_creditsMatchSettlements()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckAtTheReanchorFloor()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_pendingReservedDepositsMatchMarkers()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_settledAndSupersededActionsAreFinal()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_thirdPartyHoldsMatchPendingRequests()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_totalAmountMatchesOpenPositions()
+⇾ [PASSED] Property Test: ReservationLivenessHandler.property_walletCountersMatchOpenPositions()
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()
+Test for method "ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(799209786703925451457619773639399053681266675925166158062547699289797282450, 216479740329116447, 1758033594) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(0) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(17320227251683691215246244128577014661213718672602074593016982478219092308556, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+4) ReservationLivenessHandler.advanceWallet(uint256,bool)(57260619311334291872152161663208936288905526585172264600352431325243630954, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+5) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(1725428359976766525442493171068278174995008310520122083833644371738542, 59641290431, 1328448399) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+6) ReservationLivenessHandler.advanceWallet(uint256,bool)(108039427210739021023261328192272421856397797863515793356451054182613501231783, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(123428685533465139058469776285535209410762198767416150075287249262015886341, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(123428685533465139058469776285535209410762198767416150075287249262015886341, true) (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000000000000000000000000000005) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=0, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_everyRetiringPositionHasAnExit()() (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=000000000000000000000000b0a2ea0c07a6549f8e938fd3603c49e195c472eb00000000000000000000000000000000000000000000000000000000001a422f000000000000000000000000000000000000000000000000000000000000003d000000000000000000000000000000000000100200000000000000000000000000000000000000000000000000000000000000000000000000000000001a422f000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [return (false)]
+
+⇾ [FAILED] Property Test: ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()
+Test for method "ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()" failed after the following call sequence:
+[Call Sequence]
+1) ReservationLivenessHandler.revealReservedDeposit(uint256,uint64,uint32)(183752094763280043193981829000938542267293040141031372567952251781231054319, 3336783957453, 151434310) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+2) ReservationLivenessHandler.requestAcceptance(uint256)(5301835377088331955054300527948651571065487252175587045189395644654317945) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+3) ReservationLivenessHandler.advanceWallet(uint256,bool)(1908030304250415845608362634926417353801584334952430931182011316764528955, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+4) ReservationLivenessHandler.advanceWallet(uint256,bool)(0, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+5) ReservationLivenessHandler.advanceWallet(uint256,bool)(51130924560130379222818532043894341482219319312420413950497668768365723938649, false) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x20000)
+6) ReservationLivenessHandler.proveAcceptance(uint256,uint64,uint64)(824549474648273753640817672607616965520880572690685529748225649, 2051918307090177655, 13449185480257937903) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x30000)
+7) ReservationLivenessHandler.advanceWallet(uint256,bool)(30487546397839887553565654664435091957351868066057379857096565549735318, true) (block=61, time=61, gas=12500000, gasprice=0, value=0, sender=0x10000)
+[Execution Trace]
+ => [call] ReservationLivenessHandler.advanceWallet(uint256,bool)(30487546397839887553565654664435091957351868066057379857096565549735318, true) (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000001)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=2055589c00000000000000000000000000000000000010020000000000000000000000000000000000000000000000000000000000000000000000000000000000000005) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=0, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return]
+	 => [return ()]
+
+[Property Test Execution Trace]
+[Execution Trace]
+ => [call] ReservationLivenessHandler.property_noPositionIsStuckWithoutALiveTarget()() (addr=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB, value=0, sender=0x10000)
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=cd48edd7c451c1f11f6d6e30642715561e73e7e433c3dce097f22c263a5010c304028539) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=000000000000000000000000b0a2ea0c07a6549f8e938fd3603c49e195c472eb000000000000000000000000000000000000000000000000000000000017c76d000000000000000000000000000000000000000000000000000000000000003d0000000000000000000000000000000000001003000000000000000000000000000000000000000000000000000000000000000000000000000000000017c76d000000000000000000000000000000000000000000000000000000000076a73db085b1b8ae2416de72e22bca92082bebaebe58d4b6b95d9dd5046fc0aabee522000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe1bd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001003000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=89035730) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=00000000000000000000000000000000000000000000000000000000000186a000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000005460)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001000000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001001000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000002)]
+	 => [call] <unresolved contract>.<unresolved method>(msg_data=891f5b7a0000000000000000000000000000000000001002000000000000000000000000) (addr=0x77446720595d8b5dB3aB86365688eEF32a325F7B, value=<nil>, sender=0xb0A2ea0c07a6549f8e938Fd3603c49E195C472eB)
+		 => [return (return_data=0000000000000000000000000000000000000000000000000000000000000005)]
+	 => [return (false)]
+
+⇾ Test summary: 11 test(s) passed, 2 test(s) failed
+⇾ html report(s) saved to: cache_forge/medusa-reservations-liveness/corpus/coverage/coverage_report.html
+⇾ lcov report(s) saved to: cache_forge/medusa-reservations-liveness/corpus/coverage/lcov.info

@@ -385,6 +385,14 @@ func TestReadConfigFromFile(t *testing.T) {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.IdleBackoffTime },
 			expectedValue: 15 * time.Minute,
 		},
+		"Maintainer.Spv.ReservationProofsEnabled": {
+			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.ReservationProofsEnabled },
+			expectedValue: true,
+		},
+		"Tbtc.ReservationsEnabled": {
+			readValueFunc: func(c *Config) interface{} { return c.Tbtc.ReservationsEnabled },
+			expectedValue: true,
+		},
 		"Maintainer.Spv.MaxProofHeaders": {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.MaxProofHeaders },
 			expectedValue: uint(144),

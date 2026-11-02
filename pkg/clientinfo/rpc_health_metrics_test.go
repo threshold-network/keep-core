@@ -120,7 +120,7 @@ func TestMaintainerMetricsRegistered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := newRegistry(ctx)
-	metrics := NewPerformanceMetrics(ctx, registry)
+	metrics := NewPerformanceMetrics(ctx, registry, false)
 	defer metrics.Stop()
 	for _, name := range []string{
 		MetricSpvMaintainerActive, MetricSpvMaintainerLastActivityTimestamp,

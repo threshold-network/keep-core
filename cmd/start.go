@@ -19,9 +19,11 @@ import (
 	"github.com/keep-network/keep-core/pkg/beacon"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
+	ethereumutil "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/generator"
+	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/net/retransmission"
@@ -92,7 +94,11 @@ func start(cmd *cobra.Command) error {
 	// Wire performance metrics into network provider if available
 	var perfMetrics *clientinfo.PerformanceMetrics
 	if clientInfoRegistry != nil {
-		perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfoRegistry)
+		perfMetrics = clientinfo.NewPerformanceMetrics(
+			ctx,
+			clientInfoRegistry,
+			clientConfig.Tbtc.ReservationsEnabled,
+		)
 		// Type assert to libp2p provider to set metrics recorder
 		// The provider struct is not exported, so we use interface assertion
 		if setter, ok := netProvider.(interface {
@@ -162,6 +168,7 @@ func start(cmd *cobra.Command) error {
 		proposalGenerator := tbtcpg.NewProposalGenerator(
 			tbtcChain,
 			btcChain,
+			clientConfig.Tbtc.ReservationsEnabled,
 		)
 
 		err = tbtc.Initialize(
@@ -179,7 +186,101 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Ethereum.Network,
 		)
 		if err != nil {
-			return fmt.Errorf("error initializing TBTC: [%v]", err)
+			return fmt.Errorf("cannot initialize TBTC: [%v]", err)
+		}
+
+		// Wire the reservation watchers (stranding, stale-deposit,
+		// action-timeout) directly against the same tbtcChain handle:
+		// cmd/start.go already imports both tbtc and spv, so there is no
+		// import-cycle reason to thread this through tbtc.Initialize via a
+		// callback type. Gated on the same flag that gates the reservation
+		// proposal generator tasks above.
+		//
+		// pkg/maintainer/spv.Initialize ALSO wires these same watchers,
+		// gated on its own Maintainer.Spv.ReservationProofsEnabled
+		// flag, since it is the process that physically hosts the watcher
+		// code and is guaranteed to run whenever the reservation feature
+		// is enabled end-to-end. This call site is kept in addition to
+		// that one - not instead of it - because it is the only process
+		// with visibility into BOTH reservation-enabling flags at once
+		// (see the paired-flag comment below), which lets it drive
+		// WireReservationWatchers's misconfiguration self-check with a
+		// real signal; spv.Initialize cannot determine this process's
+		// flag and passes true (self-check disabled) instead. Running
+		// both watchers when both processes happen to share one
+		// deployment is redundant but harmless: a Notify* call against an
+		// already-notified or already-settled reservation is a no-op on
+		// the Bridge. Failing to wire the watchers here is still fatal:
+		// the operator opted into reservations, so a missing watcher
+		// would silently strand anchors.
+		//
+		// The paired-flag read below feeds that self-check rather than
+		// failing fast on its own, deliberately: config.ReadConfig
+		// unmarshals the whole config file into the whole Config struct
+		// regardless of which categories a command declares (categories
+		// only gate required-field validation and which CLI flags get
+		// registered) - so Maintainer.Spv.ReservationProofsEnabled
+		// IS populated here whenever the start process's own config file
+		// happens to contain a [maintainer.spv] section. But
+		// it CANNOT be set via a start command-line flag at all
+		// (StartCmdCategories excludes Maintainer, so no such flag is
+		// registered), and a legitimate split deployment's start-process
+		// config file has no reason to include a section start never
+		// otherwise reads - so this field reading as its zero value here
+		// does not reliably mean the maintainer process actually has it
+		// disabled on its own. A hard error at this call site on that
+		// signal alone would risk rejecting a valid split deployment's
+		// config outright; WireReservationWatchers only escalates to a
+		// hard error when this signal is corroborated by all three
+		// watchers finding zero reservation activity on-chain.
+		tbtcReservationsEnabled := clientConfig.Tbtc.ReservationsEnabled
+		if tbtcReservationsEnabled {
+			pairedFlagEnabled := clientConfig.Maintainer.Spv.ReservationProofsEnabled
+			if !pairedFlagEnabled {
+				logger.Warnf("Client reservation proposal generation is enabled; " +
+					"ensure the paired Maintainer.Spv.ReservationProofsEnabled flag is also " +
+					"enabled in the maintainer config for end-to-end operation")
+			}
+			// perfMetrics is a *clientinfo.PerformanceMetrics that is nil
+			// when the client info pipeline is disabled (see its
+			// declaration above). Passed directly, that nil pointer would
+			// still satisfy the spv.MetricsRecorder interface parameter as
+			// a non-nil, typed-nil interface value, and
+			// WireReservationWatchers's watcher-death counter would
+			// dereference it. Normalize to a true nil interface here so a
+			// disabled metrics pipeline reads as "metrics off", per the
+			// spv package's documented MetricsRecorder convention.
+			var reservationMetricsRecorder spv.MetricsRecorder
+			if perfMetrics != nil {
+				reservationMetricsRecorder = perfMetrics
+			}
+			if err := spv.WireReservationWatchers(
+				ctx,
+				tbtcChain,
+				tbtcChain,
+				pairedFlagEnabled,
+				reservationMetricsRecorder,
+				clientConfig.Ethereum.Network,
+			); err != nil {
+				return fmt.Errorf(
+					"failed to wire reservation watchers: [%v]",
+					err,
+				)
+			}
+
+			// The C-4 activation ordering gate compares the client's
+			// compiled activation block for the running network with the
+			// contract's reported reservation state. A C-4 violation is
+			// fatal: the chain accepts reserved deposits that this node
+			// will never coordinate, which is exactly the state the
+			// activation block exists to prevent.
+			if err := verifyReservationsActivation(
+				blockCounter,
+				tbtcChain,
+				clientConfig.Ethereum.Network,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -199,6 +300,68 @@ func isBootstrap() bool {
 		logger.Warnf("--network.bootstrap is deprecated and will be removed in a future release")
 	}
 	return clientConfig.LibP2P.Bootstrap
+}
+
+// verifyReservationsActivation checks the reservations activation state at
+// startup and returns an error when the C-4 ordering gate has been violated.
+//
+// A C-4 violation - the Bridge trusts the reservation vault while this client
+// has no activation block for the network or has not reached it - is fatal:
+// reserved deposits can be accepted on-chain while this node never coordinates
+// their anchors, and running on would hide exactly that from the operator. The
+// sweep paths independently refuse to sweep in that state (see
+// tbtc.ReservationsSweepGate), so the node also stops before it can do damage.
+//
+// Two states are logged and do not stop the node:
+//
+//   - The on-chain activation is still pending (the client is ready, the
+//     contract is not): nothing is reserved yet, so there is nothing to refuse.
+//   - The state cannot be read at all: a Bridge deployed before the reservation
+//     surface cannot answer the query, and refusing to start there would turn
+//     the client cut-over that must precede the Bridge upgrade into a total
+//     outage, halting duties that have nothing to do with reservations (DKG,
+//     heartbeats, redemptions).
+func verifyReservationsActivation(
+	blockCounter chain.BlockCounter,
+	vaultReader tbtc.ReservationsActivationVaultReader,
+	network ethereumutil.Network,
+) error {
+	status, err := tbtc.CollectReservationsActivationStatus(
+		network,
+		blockCounter,
+		vaultReader,
+	)
+	if err != nil {
+		logger.Errorf(
+			"cannot verify the reservations activation state for network "+
+				"[%s]: [%v]; the reservations activation ordering gate "+
+				"(C-4) could not be checked",
+			network,
+			err,
+		)
+		return nil
+	}
+
+	message, severity := tbtc.EvaluateReservationsActivation(status)
+	if message == "" {
+		return nil
+	}
+
+	switch severity {
+	case tbtc.ReservationsActivationError:
+		logger.Errorf(
+			"reservations activation ordering violation (C-4): %s; "+
+				"refusing to start",
+			message,
+		)
+		return fmt.Errorf(
+			"reservations activation ordering violation (C-4): %s",
+			message,
+		)
+	default:
+		logger.Warnf("reservations activation warning: %s", message)
+		return nil
+	}
 }
 
 // admissionApplications lists the chain handles that can authorize a peer.

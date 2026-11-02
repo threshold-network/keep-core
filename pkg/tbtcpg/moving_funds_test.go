@@ -2,6 +2,7 @@ package tbtcpg_test
 
 import (
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -366,8 +367,6 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			tbtcChain := tbtcpg.NewLocalChain()
 
-			task := tbtcpg.NewMovingFundsTask(tbtcChain, nil)
-
 			walletOperators := []chain.Address{}
 			for _, operatorInfo := range test.walletOperators {
 				err := tbtcChain.SetOperatorID(
@@ -380,7 +379,8 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 				walletOperators = append(walletOperators, operatorInfo.Address)
 			}
 
-			memberIDs, operatorPosition, err := task.GetWalletMembersInfo(
+			memberIDs, operatorPosition, err := tbtcpg.GetWalletMembersInfo(
+				tbtcChain,
 				walletOperators,
 				test.executingOperator,
 			)
@@ -752,4 +752,53 @@ func hexToByte32(hexStr string) [32]byte {
 	var result [32]byte
 	copy(result[:], decoded)
 	return result
+}
+
+// TestMovingFundsAction_GetWalletMembersInfo_EmptyWalletOperators pins the
+// empty-list boundary that ReservationReanchorTask.Run relies on when it
+// guards the source wallet member proof with len(WalletOperators) > 0: a nil
+// or empty operator list has no executing operator on it, so
+// GetWalletMembersInfo must return ErrNoExecutingOperator with no member IDs
+// and position 0. The local chain holds no operator IDs, so a lookup attempt
+// would surface as a different error than ErrNoExecutingOperator.
+func TestMovingFundsAction_GetWalletMembersInfo_EmptyWalletOperators(t *testing.T) {
+	tests := []struct {
+		name            string
+		walletOperators []chain.Address
+	}{
+		{"nil slice", nil},
+		{"empty slice", []chain.Address{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tbtcChain := tbtcpg.NewLocalChain()
+
+			memberIDs, operatorPosition, err := tbtcpg.GetWalletMembersInfo(
+				tbtcChain,
+				tc.walletOperators,
+				chain.Address("0x0000000000000000000000000000000000000001"),
+			)
+
+			if !errors.Is(err, tbtcpg.ErrNoExecutingOperator) {
+				t.Fatalf(
+					"expected ErrNoExecutingOperator for empty operators, got: %v",
+					err,
+				)
+			}
+			if len(memberIDs) != 0 {
+				t.Fatalf(
+					"expected no member IDs for empty operators, got %v",
+					memberIDs,
+				)
+			}
+			if operatorPosition != 0 {
+				t.Fatalf(
+					"expected operator position 0 for empty operators, got %d",
+					operatorPosition,
+				)
+			}
+
+		})
+	}
 }

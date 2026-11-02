@@ -915,6 +915,268 @@ func (b *Bridge) InitializeGasEstimate(
 }
 
 // Transaction submission.
+func (b *Bridge) InitializeV2FixVaultZeroDeposit(
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction initializeV2FixVaultZeroDeposit",
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.InitializeV2FixVaultZeroDeposit(
+		transactorOptions,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"initializeV2FixVaultZeroDeposit",
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction initializeV2FixVaultZeroDeposit with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.InitializeV2FixVaultZeroDeposit(
+				newTransactorOptions,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"initializeV2FixVaultZeroDeposit",
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction initializeV2FixVaultZeroDeposit with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallInitializeV2FixVaultZeroDeposit(
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"initializeV2FixVaultZeroDeposit",
+		&result,
+	)
+
+	return err
+}
+
+func (b *Bridge) InitializeV2FixVaultZeroDepositGasEstimate() (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"initializeV2FixVaultZeroDeposit",
+		b.contractABI,
+		b.transactor,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) InitializeV5RepairRebateStaking(
+	arg_newRebateStaking common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction initializeV5RepairRebateStaking",
+		" params: ",
+		fmt.Sprint(
+			arg_newRebateStaking,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.InitializeV5RepairRebateStaking(
+		transactorOptions,
+		arg_newRebateStaking,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"initializeV5RepairRebateStaking",
+			arg_newRebateStaking,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction initializeV5RepairRebateStaking with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.InitializeV5RepairRebateStaking(
+				newTransactorOptions,
+				arg_newRebateStaking,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"initializeV5RepairRebateStaking",
+					arg_newRebateStaking,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction initializeV5RepairRebateStaking with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallInitializeV5RepairRebateStaking(
+	arg_newRebateStaking common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"initializeV5RepairRebateStaking",
+		&result,
+		arg_newRebateStaking,
+	)
+
+	return err
+}
+
+func (b *Bridge) InitializeV5RepairRebateStakingGasEstimate(
+	arg_newRebateStaking common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"initializeV5RepairRebateStaking",
+		b.contractABI,
+		b.transactor,
+		arg_newRebateStaking,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (b *Bridge) NotifyFraudChallengeDefeatTimeout(
 	arg_walletPublicKey []byte,
 	arg_walletMembersIDs []uint32,
@@ -3027,6 +3289,144 @@ func (b *Bridge) RevealDepositWithExtraDataGasEstimate(
 }
 
 // Transaction submission.
+func (b *Bridge) SetRebateStaking(
+	arg_rebateStaking common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setRebateStaking",
+		" params: ",
+		fmt.Sprint(
+			arg_rebateStaking,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetRebateStaking(
+		transactorOptions,
+		arg_rebateStaking,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setRebateStaking",
+			arg_rebateStaking,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setRebateStaking with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetRebateStaking(
+				newTransactorOptions,
+				arg_rebateStaking,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setRebateStaking",
+					arg_rebateStaking,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setRebateStaking with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetRebateStaking(
+	arg_rebateStaking common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setRebateStaking",
+		&result,
+		arg_rebateStaking,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetRebateStakingGasEstimate(
+	arg_rebateStaking common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setRebateStaking",
+		b.contractABI,
+		b.transactor,
+		arg_rebateStaking,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (b *Bridge) SetRedemptionWatchtower(
 	arg_redemptionWatchtower common.Address,
 
@@ -3159,6 +3559,144 @@ func (b *Bridge) SetRedemptionWatchtowerGasEstimate(
 		b.contractABI,
 		b.transactor,
 		arg_redemptionWatchtower,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SetReservationRouter(
+	arg__reservationRouter common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setReservationRouter",
+		" params: ",
+		fmt.Sprint(
+			arg__reservationRouter,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetReservationRouter(
+		transactorOptions,
+		arg__reservationRouter,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setReservationRouter",
+			arg__reservationRouter,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setReservationRouter with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetReservationRouter(
+				newTransactorOptions,
+				arg__reservationRouter,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setReservationRouter",
+					arg__reservationRouter,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setReservationRouter with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetReservationRouter(
+	arg__reservationRouter common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setReservationRouter",
+		&result,
+		arg__reservationRouter,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetReservationRouterGasEstimate(
+	arg__reservationRouter common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setReservationRouter",
+		b.contractABI,
+		b.transactor,
+		arg__reservationRouter,
 	)
 
 	return result, err
@@ -5961,6 +6499,43 @@ func (b *Bridge) FraudParametersAtBlock(
 	return result, err
 }
 
+func (b *Bridge) GetRebateStaking() (common.Address, error) {
+	result, err := b.contract.GetRebateStaking(
+		b.callerOptions,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"getRebateStaking",
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) GetRebateStakingAtBlock(
+	blockNumber *big.Int,
+) (common.Address, error) {
+	var result common.Address
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"getRebateStaking",
+		&result,
+	)
+
+	return result, err
+}
+
 func (b *Bridge) GetRedemptionWatchtower() (common.Address, error) {
 	result, err := b.contract.GetRedemptionWatchtower(
 		b.callerOptions,
@@ -5992,6 +6567,43 @@ func (b *Bridge) GetRedemptionWatchtowerAtBlock(
 		b.errorResolver,
 		b.contractAddress,
 		"getRedemptionWatchtower",
+		&result,
+	)
+
+	return result, err
+}
+
+func (b *Bridge) GetReservationRouter() (common.Address, error) {
+	result, err := b.contract.GetReservationRouter(
+		b.callerOptions,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"getReservationRouter",
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) GetReservationRouterAtBlock(
+	blockNumber *big.Int,
+) (common.Address, error) {
+	var result common.Address
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"getReservationRouter",
 		&result,
 	)
 
@@ -6030,6 +6642,49 @@ func (b *Bridge) GovernanceAtBlock(
 		b.contractAddress,
 		"governance",
 		&result,
+	)
+
+	return result, err
+}
+
+func (b *Bridge) IsReservedDeposit(
+	arg_depositKey *big.Int,
+) (bool, error) {
+	result, err := b.contract.IsReservedDeposit(
+		b.callerOptions,
+		arg_depositKey,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"isReservedDeposit",
+			arg_depositKey,
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) IsReservedDepositAtBlock(
+	arg_depositKey *big.Int,
+	blockNumber *big.Int,
+) (bool, error) {
+	var result bool
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"isReservedDeposit",
+		&result,
+		arg_depositKey,
 	)
 
 	return result, err
@@ -6940,6 +7595,196 @@ func (b *Bridge) PastDepositRevealedEvents(
 	}
 
 	events := make([]*abi.BridgeDepositRevealed, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) DepositVaultFixedEvent(
+	opts *ethereum.SubscribeOpts,
+	depositKeyFilter []*big.Int,
+) *BDepositVaultFixedSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BDepositVaultFixedSubscription{
+		b,
+		opts,
+		depositKeyFilter,
+	}
+}
+
+type BDepositVaultFixedSubscription struct {
+	contract         *Bridge
+	opts             *ethereum.SubscribeOpts
+	depositKeyFilter []*big.Int
+}
+
+type bridgeDepositVaultFixedFunc func(
+	DepositKey *big.Int,
+	NewVault common.Address,
+	blockNumber uint64,
+)
+
+func (dvfs *BDepositVaultFixedSubscription) OnEvent(
+	handler bridgeDepositVaultFixedFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeDepositVaultFixed)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.DepositKey,
+					event.NewVault,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := dvfs.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (dvfs *BDepositVaultFixedSubscription) Pipe(
+	sink chan *abi.BridgeDepositVaultFixed,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(dvfs.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := dvfs.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - dvfs.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past DepositVaultFixed events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := dvfs.contract.PastDepositVaultFixedEvents(
+					fromBlock,
+					nil,
+					dvfs.depositKeyFilter,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past DepositVaultFixed events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := dvfs.contract.watchDepositVaultFixed(
+		sink,
+		dvfs.depositKeyFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchDepositVaultFixed(
+	sink chan *abi.BridgeDepositVaultFixed,
+	depositKeyFilter []*big.Int,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchDepositVaultFixed(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			depositKeyFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event DepositVaultFixed had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event DepositVaultFixed failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastDepositVaultFixedEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	depositKeyFilter []*big.Int,
+) ([]*abi.BridgeDepositVaultFixed, error) {
+	iterator, err := b.contract.FilterDepositVaultFixed(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		depositKeyFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past DepositVaultFixed events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeDepositVaultFixed, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -10145,6 +10990,366 @@ func (b *Bridge) PastNewWalletRequestedEvents(
 	}
 
 	events := make([]*abi.BridgeNewWalletRequested, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) RebateStakingRepairedEvent(
+	opts *ethereum.SubscribeOpts,
+) *BRebateStakingRepairedSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BRebateStakingRepairedSubscription{
+		b,
+		opts,
+	}
+}
+
+type BRebateStakingRepairedSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
+}
+
+type bridgeRebateStakingRepairedFunc func(
+	OldRebateStaking common.Address,
+	NewRebateStaking common.Address,
+	blockNumber uint64,
+)
+
+func (rsrs *BRebateStakingRepairedSubscription) OnEvent(
+	handler bridgeRebateStakingRepairedFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeRebateStakingRepaired)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.OldRebateStaking,
+					event.NewRebateStaking,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := rsrs.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rsrs *BRebateStakingRepairedSubscription) Pipe(
+	sink chan *abi.BridgeRebateStakingRepaired,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(rsrs.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := rsrs.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - rsrs.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past RebateStakingRepaired events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := rsrs.contract.PastRebateStakingRepairedEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past RebateStakingRepaired events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := rsrs.contract.watchRebateStakingRepaired(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchRebateStakingRepaired(
+	sink chan *abi.BridgeRebateStakingRepaired,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchRebateStakingRepaired(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event RebateStakingRepaired had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event RebateStakingRepaired failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastRebateStakingRepairedEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.BridgeRebateStakingRepaired, error) {
+	iterator, err := b.contract.FilterRebateStakingRepaired(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past RebateStakingRepaired events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeRebateStakingRepaired, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) RebateStakingSetEvent(
+	opts *ethereum.SubscribeOpts,
+) *BRebateStakingSetSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BRebateStakingSetSubscription{
+		b,
+		opts,
+	}
+}
+
+type BRebateStakingSetSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
+}
+
+type bridgeRebateStakingSetFunc func(
+	RebateStaking common.Address,
+	blockNumber uint64,
+)
+
+func (rsss *BRebateStakingSetSubscription) OnEvent(
+	handler bridgeRebateStakingSetFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeRebateStakingSet)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.RebateStaking,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := rsss.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (rsss *BRebateStakingSetSubscription) Pipe(
+	sink chan *abi.BridgeRebateStakingSet,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(rsss.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := rsss.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - rsss.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past RebateStakingSet events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := rsss.contract.PastRebateStakingSetEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past RebateStakingSet events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := rsss.contract.watchRebateStakingSet(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchRebateStakingSet(
+	sink chan *abi.BridgeRebateStakingSet,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchRebateStakingSet(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event RebateStakingSet had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event RebateStakingSet failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastRebateStakingSetEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.BridgeRebateStakingSet, error) {
+	iterator, err := b.contract.FilterRebateStakingSet(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past RebateStakingSet events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeRebateStakingSet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event

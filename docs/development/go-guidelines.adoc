@@ -68,6 +68,29 @@ There are a few common patterns for testing in the Keep codebase:
   See `pkg/internal/testutils` for an example of an assert helper that uses this
   style.
 
+==== Reservation fuzz targets
+
+The reservation targets use Go's coverage-guided fuzzer. Seed inputs run with:
+
+[source,sh]
+----
+go test -run '^Fuzz' ./pkg/tbtc ./pkg/tbtcpg ./pkg/maintainer/spv
+----
+
+Run one target per campaign:
+
+[source,sh]
+----
+go test -run '^$' -fuzz '^FuzzReservationReanchorProposal_Unmarshal$' -fuzztime 60s -parallel 2 ./pkg/tbtc
+----
+
+The targets check proposal round trips, transaction matching, fee bounds,
+parameter feasibility, and re-anchor target capacity. They do not exercise
+distributed signing or submit SPV proofs to a live chain.
+The headroom target checks arithmetic invariants only in its overflow-free
+domain; outside that domain it checks for panics.
+When a campaign fails, keep its `testdata/fuzz/` input as a regression case.
+
 === Integer conversions
 
 Keep numeric validation and narrowing in the same function. A checked conversion

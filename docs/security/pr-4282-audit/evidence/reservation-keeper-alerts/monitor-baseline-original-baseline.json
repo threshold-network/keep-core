@@ -1,0 +1,352 @@
+{
+  "stage": "baseline",
+  "runId": "original-baseline",
+  "startedAt": "2026-10-13T08:45:29.115Z",
+  "options": {
+    "maxAgeSeconds": 1800,
+    "waitSeconds": 180
+  },
+  "assertions": [
+    {
+      "name": "local chain is chain 1 fork",
+      "ok": true,
+      "detail": {
+        "chainId": 1
+      }
+    },
+    {
+      "name": "sentry sink listening",
+      "ok": true,
+      "detail": {
+        "port": 18647
+      }
+    },
+    {
+      "name": "monitoring dist/index.js present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "all five exact metric names present and valid",
+      "ok": true,
+      "detail": {
+        "invalidOrMissing": []
+      }
+    },
+    {
+      "name": "stage 'baseline' precondition observed in real keeper metrics",
+      "ok": true,
+      "detail": {
+        "expected": "fresh + all four gauges 0",
+        "observedCategory": "fresh",
+        "observedGauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "deviationSeconds": 0
+      }
+    },
+    {
+      "name": "monitoring process exit acceptable (0, or SIGTERM after report)",
+      "ok": true,
+      "detail": {
+        "code": 0,
+        "exitedBy": "self"
+      }
+    },
+    {
+      "name": "manager report status success with no errors",
+      "ok": true,
+      "detail": {
+        "fromBlock": 26154839,
+        "toBlock": 26154851,
+        "status": "success",
+        "errors": []
+      }
+    },
+    {
+      "name": "checkpoint advanced to scanned toBlock",
+      "ok": true,
+      "detail": {
+        "before": 0,
+        "after": 26154851,
+        "toBlock": 26154851
+      }
+    },
+    {
+      "name": "no pending block range or pending Sentry outbox",
+      "ok": true,
+      "detail": {
+        "pendingBlockRange": null,
+        "pendingCounts": {}
+      }
+    },
+    {
+      "name": "every handled Sentry event reached the local sink",
+      "ok": true,
+      "detail": {
+        "sinkNew": 0,
+        "handledDelta": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper late acceptance proofs at risk] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper re-anchor has no eligible target] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper vault fee debt] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper unrequested deposit deadline at risk] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "healthy stage: no keeper Sentry events",
+      "ok": true,
+      "detail": {
+        "keeperEvents": []
+      }
+    }
+  ],
+  "wait": {
+    "attempts": 1,
+    "elapsedMs": 53,
+    "satisfied": true,
+    "lastSamples": [
+      {
+        "at": "2026-10-13T08:45:29.202Z",
+        "chain": {
+          "number": 26154851,
+          "timestamp": 1791894925
+        },
+        "category": "fresh",
+        "fetch": {
+          "ok": true,
+          "error": null
+        },
+        "invalidOrMissing": [],
+        "deviationSeconds": 0,
+        "gauges": {
+          "late": 0,
+          "noTarget": 0,
+          "fee": 0,
+          "deadline": 0
+        },
+        "observationTimestamp": "1.791894925e+09",
+        "samples": {
+          "performance_reservation_acceptance_late_proof_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791881111661",
+            "value": 0
+          },
+          "performance_reservation_reanchor_no_eligible_target_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791881111661",
+            "value": 0
+          },
+          "performance_reservation_vault_fee_debt_sat": {
+            "raw": "0",
+            "sampleTimestamp": "1791881111661",
+            "value": 0
+          },
+          "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+            "raw": "0",
+            "sampleTimestamp": "1791881111661",
+            "value": 0
+          },
+          "performance_reservation_keeper_observation_timestamp": {
+            "raw": "1.791894925e+09",
+            "sampleTimestamp": "1791881111661",
+            "value": 1791894925
+          }
+        }
+      }
+    ]
+  },
+  "preSample": {
+    "at": "2026-10-13T08:45:29.202Z",
+    "chain": {
+      "number": 26154851,
+      "timestamp": 1791894925
+    },
+    "category": "fresh",
+    "fetch": {
+      "ok": true,
+      "error": null
+    },
+    "invalidOrMissing": [],
+    "deviationSeconds": 0,
+    "gauges": {
+      "late": 0,
+      "noTarget": 0,
+      "fee": 0,
+      "deadline": 0
+    },
+    "observationTimestamp": "1.791894925e+09",
+    "samples": {
+      "performance_reservation_acceptance_late_proof_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_reanchor_no_eligible_target_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_vault_fee_debt_sat": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_keeper_observation_timestamp": {
+        "raw": "1.791894925e+09",
+        "sampleTimestamp": "1791881111661",
+        "value": 1791894925
+      }
+    }
+  },
+  "electrum": {
+    "source": "sdk-default-mainnet#1",
+    "network": "mainnet"
+  },
+  "postSample": {
+    "at": "2026-10-13T08:45:40.005Z",
+    "chain": {
+      "number": 26154851,
+      "timestamp": 1791894925
+    },
+    "category": "fresh",
+    "fetch": {
+      "ok": true,
+      "error": null
+    },
+    "invalidOrMissing": [],
+    "deviationSeconds": 0,
+    "gauges": {
+      "late": 0,
+      "noTarget": 0,
+      "fee": 0,
+      "deadline": 0
+    },
+    "observationTimestamp": "1.791894925e+09",
+    "samples": {
+      "performance_reservation_acceptance_late_proof_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_reanchor_no_eligible_target_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_vault_fee_debt_sat": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_unrequested_deposit_deadline_at_risk_count": {
+        "raw": "0",
+        "sampleTimestamp": "1791881111661",
+        "value": 0
+      },
+      "performance_reservation_keeper_observation_timestamp": {
+        "raw": "1.791894925e+09",
+        "sampleTimestamp": "1791881111661",
+        "value": 1791894925
+      }
+    }
+  },
+  "chain": {
+    "before": {
+      "number": 26154851,
+      "timestamp": 1791894925
+    },
+    "after": {
+      "number": 26154851,
+      "timestamp": 1791894925
+    }
+  },
+  "monitor": {
+    "exitCode": 0,
+    "signal": null,
+    "exitedBy": "self",
+    "report": {
+      "fromBlock": 26154839,
+      "toBlock": 26154851,
+      "status": "success",
+      "errors": []
+    },
+    "log": "monitor-baseline-original-baseline.log.txt"
+  },
+  "persistence": {
+    "checkpointBefore": 0,
+    "checkpointAfter": 26154851,
+    "pendingBlockRange": null,
+    "pendingCounts": {},
+    "sentryHandledBefore": 0,
+    "sentryHandledAfter": 0
+  },
+  "sentry": {
+    "sinkOffsetBytes": 0,
+    "newEvents": 0,
+    "expectedPerTitle": {
+      "Reservation keeper late acceptance proofs at risk": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper re-anchor has no eligible target": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper vault fee debt": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper unrequested deposit deadline at risk": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper metrics stale": {
+        "required": false,
+        "allowed": []
+      }
+    },
+    "keeperEvents": [],
+    "otherEvents": []
+  },
+  "finishedAt": "2026-10-13T08:45:40.010Z",
+  "ok": true
+}

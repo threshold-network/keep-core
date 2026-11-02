@@ -5,8 +5,13 @@ import (
 	"net"
 	"testing"
 
+	commonEthereum "github.com/keep-network/keep-core/pkg/chain/ethereumutil"
+
+	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/maintainer"
+	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 )
 
 // stubBlockCounter is a minimal chain.BlockCounter implementation used to
@@ -214,5 +219,79 @@ func TestInitializeMaintainerMetricsEnabledWhenPortSet(t *testing.T) {
 			"expected counter value [1] after increment, got [%v]",
 			value,
 		)
+	}
+}
+
+// TestInitializeMaintainerMetricsRegistersReservationGaugesForKeeper
+// verifies that a maintainer run only for reservation proofs (no
+// operator client, so Tbtc.ReservationsEnabled is off) still publishes
+// the reservation gauges. Without registration SetGauge silently drops
+// every value, and the keeper's watchdog gauges never reach /metrics.
+func TestInitializeMaintainerMetricsRegistersReservationGaugesForKeeper(t *testing.T) {
+	originalPort := clientConfig.ClientInfo.Port
+	originalTbtc := clientConfig.Tbtc.ReservationsEnabled
+	originalSpv := clientConfig.Maintainer.Spv.ReservationProofsEnabled
+	defer func() {
+		clientConfig.ClientInfo.Port = originalPort
+		clientConfig.Tbtc.ReservationsEnabled = originalTbtc
+		clientConfig.Maintainer.Spv.ReservationProofsEnabled = originalSpv
+	}()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not reserve a free port: [%v]", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("could not release reserved port: [%v]", err)
+	}
+
+	clientConfig.ClientInfo.Port = port
+	clientConfig.Tbtc.ReservationsEnabled = false
+	clientConfig.Maintainer.Spv.ReservationProofsEnabled = true
+
+	recorder := initializeMaintainerMetrics(
+		context.Background(),
+		stubBlockCounter{},
+		stubEthereumRPC{},
+		stubBitcoinChain{},
+	)
+	perfMetrics, ok := recorder.(*clientinfo.PerformanceMetrics)
+	if !ok {
+		t.Fatalf("expected a *clientinfo.PerformanceMetrics, got [%T]", recorder)
+	}
+
+	perfMetrics.SetGauge(clientinfo.MetricReservationKeeperObservationTimestamp, 7)
+	if got := perfMetrics.GetGaugeValue(
+		clientinfo.MetricReservationKeeperObservationTimestamp,
+	); got != 7 {
+		t.Errorf("keeper observation timestamp gauge = %v, want 7", got)
+	}
+}
+
+// TestMaintainerConfig verifies that the maintainer command hands the SPV
+// maintainer the Ethereum network from the [ethereum] section: without it
+// the network is Unknown, the reservation activation block lookup fails
+// and every reservation catch-up scan is skipped. The rest of the
+// maintainer config passes through unchanged.
+func TestMaintainerConfig(t *testing.T) {
+	cfg := &config.Config{
+		Ethereum: commonEthereum.Config{Network: commonEthereum.Sepolia},
+		Maintainer: maintainer.Config{
+			Spv: spv.Config{Enabled: true, ReservationProofsEnabled: true},
+		},
+	}
+
+	got := maintainerConfig(cfg)
+
+	if got.Spv.EthereumNetwork != commonEthereum.Sepolia {
+		t.Errorf(
+			"expected the SPV maintainer network %v, got %v",
+			commonEthereum.Sepolia,
+			got.Spv.EthereumNetwork,
+		)
+	}
+	if !got.Spv.Enabled || !got.Spv.ReservationProofsEnabled {
+		t.Errorf("expected the rest of the SPV config to pass through, got %+v", got.Spv)
 	}
 }

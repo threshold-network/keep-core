@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,211 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
+
+// redemptionFeeTestScripts returns the given number of redeemer output
+// scripts, alternating between non-witness P2PKH and witness P2WPKH so the
+// size estimate covers both output shapes.
+func redemptionFeeTestScripts(t *testing.T, count int) []bitcoin.Script {
+	t.Helper()
+
+	scripts := make([]bitcoin.Script, count)
+	for i := range scripts {
+		publicKeyHash := [20]byte{0x20, byte(i)}
+
+		var err error
+		if i%2 == 0 {
+			scripts[i], err = bitcoin.PayToPublicKeyHash(publicKeyHash)
+		} else {
+			scripts[i], err = bitcoin.PayToWitnessPublicKeyHash(publicKeyHash)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return scripts
+}
+
+// redemptionVsize returns the virtual size ValidateRedemptionProposal
+// estimates for a redemption transaction paying to the given scripts.
+func redemptionVsize(t *testing.T, scripts []bitcoin.Script) int64 {
+	t.Helper()
+
+	estimator := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(1, true)
+	for _, script := range scripts {
+		switch bitcoin.GetScriptType(script) {
+		case bitcoin.P2PKHScript:
+			estimator.AddPublicKeyHashOutputs(1, false)
+		case bitcoin.P2WPKHScript:
+			estimator.AddPublicKeyHashOutputs(1, true)
+		default:
+			t.Fatalf("unexpected script type for script [%x]", script)
+		}
+	}
+
+	vsize, err := estimator.VirtualSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return vsize
+}
+
+// validateRedemptionFee runs ValidateRedemptionProposal for a proposal
+// redeeming the given scripts with the given fee against a local chain on
+// which the on-chain validation passes and every request is pending,
+// isolating the follower-side fee gate. It returns the warnings that were
+// logged and the validation error.
+func validateRedemptionFee(
+	t *testing.T,
+	scripts []bitcoin.Script,
+	fee *big.Int,
+) ([]string, error) {
+	t.Helper()
+
+	hostChain := Connect()
+
+	walletPublicKeyHash := [20]byte{0x11}
+
+	for _, script := range scripts {
+		hostChain.setPendingRedemptionRequest(
+			walletPublicKeyHash,
+			&RedemptionRequest{
+				RedeemerOutputScript: script,
+				RequestedAmount:      100_000,
+				TreasuryFee:          1000,
+				TxMaxFee:             5000,
+			},
+		)
+	}
+
+	proposal := &RedemptionProposal{
+		RedeemersOutputScripts: scripts,
+		RedemptionTxFee:        fee,
+	}
+
+	err := hostChain.setRedemptionProposalValidationResult(
+		walletPublicKeyHash,
+		proposal,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logger := &capturingLogger{}
+
+	_, err = ValidateRedemptionProposal(
+		logger,
+		walletPublicKeyHash,
+		proposal,
+		hostChain,
+	)
+
+	return logger.warnings, err
+}
+
+// TestRedemptionValidator_RejectsBelowProtocolMinimum verifies that the
+// follower refuses a redemption proposal whose fee is below
+// ProtocolMinWalletTxSatPerVByteFee * (vsize - 1). On the base code the
+// check only warned, so the proposal validated without error.
+func TestRedemptionValidator_RejectsBelowProtocolMinimum(t *testing.T) {
+	for _, requestsCount := range []int{1, 4} {
+		scripts := redemptionFeeTestScripts(t, requestsCount)
+		vsize := redemptionVsize(t, scripts)
+		threshold := ProtocolMinWalletTxSatPerVByteFee * (vsize - 1)
+
+		scenarios := map[string]*big.Int{
+			"one satoshi below the threshold": big.NewInt(threshold - 1),
+			"relay floor fee":                 big.NewInt(vsize),
+		}
+
+		for name, fee := range scenarios {
+			t.Run(
+				fmt.Sprintf("%d requests/%s", requestsCount, name),
+				func(t *testing.T) {
+					_, err := validateRedemptionFee(t, scripts, fee)
+					if err == nil {
+						t.Fatalf(
+							"expected fee [%v] to be rejected (threshold [%d])",
+							fee,
+							threshold,
+						)
+					}
+					if !strings.Contains(err.Error(), "protocol minimum") {
+						t.Errorf(
+							"expected a protocol minimum error, got: [%v]",
+							err,
+						)
+					}
+				},
+			)
+		}
+	}
+}
+
+// TestRedemptionValidator_AcceptsAtProtocolMinimum verifies that fees at the
+// reject threshold and at the full protocol minimum both validate.
+func TestRedemptionValidator_AcceptsAtProtocolMinimum(t *testing.T) {
+	for _, requestsCount := range []int{1, 4} {
+		scripts := redemptionFeeTestScripts(t, requestsCount)
+		vsize := redemptionVsize(t, scripts)
+
+		scenarios := map[string]*big.Int{
+			"exactly at the threshold": big.NewInt(
+				ProtocolMinWalletTxSatPerVByteFee * (vsize - 1),
+			),
+			"exactly at the full protocol minimum": big.NewInt(
+				ProtocolMinWalletTxSatPerVByteFee * vsize,
+			),
+		}
+
+		for name, fee := range scenarios {
+			t.Run(
+				fmt.Sprintf("%d requests/%s", requestsCount, name),
+				func(t *testing.T) {
+					_, err := validateRedemptionFee(t, scripts, fee)
+					if err != nil {
+						t.Errorf(
+							"expected fee [%v] to be accepted, got: [%v]",
+							fee,
+							err,
+						)
+					}
+				},
+			)
+		}
+	}
+}
+
+// TestRedemptionValidator_WarnsBelowBareFloor verifies that the soft warning
+// fires below the operator's bare floor and stays quiet at it, for a fee that
+// already clears the protocol minimum threshold.
+func TestRedemptionValidator_WarnsBelowBareFloor(t *testing.T) {
+	scripts := redemptionFeeTestScripts(t, 1)
+	bareFloorFee := MinWalletTxSatPerVByteFee * redemptionVsize(t, scripts)
+
+	warnings, err := validateRedemptionFee(t, scripts, big.NewInt(bareFloorFee-1))
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if len(warnings) == 0 {
+		t.Error("expected a warning for a fee below the bare floor")
+	}
+
+	warnings, err = validateRedemptionFee(t, scripts, big.NewInt(bareFloorFee))
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf(
+			"expected no warning for a fee at the bare floor, got: %v",
+			warnings,
+		)
+	}
+}
 
 // TODO: Think about covering unhappy paths for specific steps of the redemption action.
 func TestRedemptionAction_Execute(t *testing.T) {

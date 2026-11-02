@@ -1,0 +1,50 @@
+{
+ "G01": {
+  "name": "G01 caps: maxReservationsAmountPerWallet zeroed",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 116
+ },
+ "G02": {
+  "name": "G02 caps: reservationMaxSingleAmount zeroed",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 104
+ },
+ "G03": {
+  "name": "G03 caps: maxActiveReservations zeroed",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 74
+ },
+ "G04": {
+  "name": "G04 caps: maxThirdPartyReanchorHoldsPerWallet zeroed",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 58
+ },
+ "G05": {
+  "name": "G05 handoffReserveWallets zeroed",
+  "verdict": "KILLED",
+  "note": "2 failing",
+  "seconds": 38
+ },
+ "G06": {
+  "name": "G06 pendingThirdPartyReanchorHolds zeroed",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 87
+ },
+ "G07": {
+  "name": "G07 reservationByAnchorUtxo returns zero",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 85
+ },
+ "G08": {
+  "name": "G08 reservationRouter returns address(0)",
+  "verdict": "KILLED",
+  "note": "1 failing",
+  "seconds": 126
+ }
+}

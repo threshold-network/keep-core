@@ -1,0 +1,262 @@
+Compiling 67 files with Solc 0.8.17
+Compiling 204 files with Solc 0.8.17
+Compiling 26 files with Solc 0.8.17
+Solc 0.8.17 finished in 3.33s
+Solc 0.8.17 finished in 9.97s
+Solc 0.8.17 finished in 43.39s
+Compiler run successful with warnings:
+Warning (8760): This declaration has the same name as another declaration.
+    --> contracts/bridge/Bridge.sol:1611:29:
+     |
+1611 |     function updateTreasury(address treasury) external onlyGovernance {
+     |                             ^^^^^^^^^^^^^^^^
+Note: The other declaration is here:
+    --> contracts/bridge/Bridge.sol:2009:5:
+     |
+2009 |     function treasury() external view returns (address) {
+     |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (8760): This declaration has the same name as another declaration.
+  --> contracts/test/ReservationCapsGovernanceExecutor.sol:49:9:
+   |
+49 |         BridgeGovernanceParameters.ReservationCapsData
+   |         ^ (Relevant source part starts here and spans across multiple lines).
+Note: The other declaration is here:
+  --> contracts/test/ReservationCapsGovernanceExecutor.sol:63:5:
+   |
+63 |     function staged()
+   |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (8760): This declaration has the same name as another declaration.
+   --> contracts/test/TestReservation.sol:144:9:
+    |
+144 |         Wallets.WalletState walletState
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Note: The other declaration is here:
+   --> contracts/test/TestReservation.sol:782:5:
+    |
+782 |     function walletState(bytes20 walletPubKeyHash)
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (8760): This declaration has the same name as another declaration.
+   --> contracts/test/TestReservation.sol:220:9:
+    |
+220 |         Reservation.ReservationState reservationState
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Note: The other declaration is here:
+   --> contracts/test/TestReservation.sol:671:5:
+    |
+671 |     function reservationState(uint256 reservationKey)
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (8760): This declaration has the same name as another declaration.
+   --> contracts/test/TestReservation.sol:818:39:
+    |
+818 |     function reservationsByAnchorUtxo(bytes32 anchorUtxoHash)
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^
+Note: The other declaration is here:
+   --> contracts/test/TestReservation.sol:422:5:
+    |
+422 |     function anchorUtxoHash(uint256 reservationKey)
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/bridge/Fraud.sol:336:9:
+    |
+336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/bridge/Fraud.sol:417:9:
+    |
+417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+    |         ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/cross-chain/wormhole/L1BTCDepositorWormholeV2Arbitrum.sol:519:17:
+    |
+519 |                 address(reimbursementPool).call{gas: 2_000_000}(
+    |                 ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/cross-chain/wormhole/L1BTCDepositorWormholeV2Base.sol:515:17:
+    |
+515 |                 address(reimbursementPool).call{gas: 2_000_000}(
+    |                 ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (5667): Unused function parameter. Remove or comment out the variable name to silence this warning.
+   --> contracts/bridge/ReservationProofs.sol:837:9:
+    |
+837 |         bool restoreRetryCredit
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+   --> contracts/bridge/WalletProposalValidator.sol:794:5:
+    |
+794 |     function getWalletBtcBalance(
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to pure
+   --> contracts/bridge/WalletProposalValidator.sol:901:5:
+    |
+901 |     function validateHeartbeatProposal(
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+ --> contracts/test/LightRelayStub.sol:9:5:
+  |
+9 |     function validateChainGasReport(
+  |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> contracts/test/SepoliaLightRelay.sol:54:5:
+   |
+54 |     function isValidPreRetargetTarget(
+   |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> contracts/test/SepoliaLightRelay.sol:63:5:
+   |
+63 |     function isValidPostRetargetTarget(
+   |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> contracts/test/TestBTCDepositor.sol:267:5:
+    |
+267 |     function optimisticMintingRequests(
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to pure
+   --> contracts/test/TestBTCDepositor.sol:311:5:
+    |
+311 |     function tbtcToken() external view returns (address) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to pure
+   --> contracts/vault/TBTCVault.sol:311:5:
+    |
+311 |     function amountToSatoshis(
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:109:5:
+    |
+109 |     function property_activeCountMatchesOpenPositions() public returns (bool) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:114:5:
+    |
+114 |     function property_totalAmountMatchesOpenPositions() public returns (bool) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:119:5:
+    |
+119 |     function property_walletCountersMatchOpenPositions() public returns (bool) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:132:5:
+    |
+132 |     function property_thirdPartyHoldsMatchPendingRequests()
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:148:5:
+    |
+148 |     function property_pendingReservedDepositsMatchMarkers()
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:164:5:
+    |
+164 |     function property_anchorIndexPointsAtOpenPositions() public returns (bool) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:188:5:
+    |
+188 |     function property_settledAndSupersededActionsAreFinal()
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (2018): Function state mutability can be restricted to view
+   --> test-foundry/reservations/ReservationProperties.sol:210:5:
+    |
+210 |     function property_creditsMatchSettlements() public returns (bool) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (8760): This declaration has the same name as another declaration.
+    --> contracts/bridge/Bridge.sol:1611:29:
+     |
+1611 |     function updateTreasury(address treasury) external onlyGovernance {
+     |                             ^^^^^^^^^^^^^^^^
+Note: The other declaration is here:
+    --> contracts/bridge/Bridge.sol:2009:5:
+     |
+2009 |     function treasury() external view returns (address) {
+     |     ^ (Relevant source part starts here and spans across multiple lines).
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/bridge/Fraud.sol:336:9:
+    |
+336 |         self.treasury.call{gas: 100000, value: challenge.depositAmount}("");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (9302): Return value of low-level calls not used.
+   --> contracts/bridge/Fraud.sol:417:9:
+    |
+417 |         challenge.challenger.call{gas: 100000, value: challenge.depositAmount}(
+    |         ^ (Relevant source part starts here and spans across multiple lines).
+
+
+Ran 13 tests for test-foundry/reservations/ReservationInvariants.t.sol:ReservationInvariantsTest
+[PASS] invariant_reservationAccounting() (runs: 64, calls: 6400, reverts: 0)
+
+╭--------------------+--------------------------+-------+---------+----------╮
+| Contract           | Selector                 | Calls | Reverts | Discards |
++============================================================================+
+| ReservationHandler | addWallet                | 487   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | advanceWallet            | 478   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyAcceptanceTimedOut | 446   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyReanchorTimedOut   | 496   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | notifyStranded           | 454   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | proveAcceptance          | 441   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | proveReanchor            | 475   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | requestAcceptance        | 444   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | requestReanchor          | 470   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | retirePendingDeposit     | 459   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | revealReservedDeposit    | 462   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | updateCaps               | 430   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | updateLimits             | 419   | 0       | 0        |
+|--------------------+--------------------------+-------+---------+----------|
+| ReservationHandler | warp                     | 439   | 0       | 0        |
+╰--------------------+--------------------------+-------+---------+----------╯
+
+[PASS] test_acceptReanchorAndStrand() (gas: 1643399)
+[PASS] test_activeCountPropertyFires() (gas: 896064)
+[PASS] test_anchorIndexPropertyFires() (gas: 864951)
+[PASS] test_capsPropertyFires() (gas: 451484)
+[PASS] test_creditsPropertyFires() (gas: 884226)
+[PASS] test_finalActionsPropertyFires() (gas: 886198)
+[PASS] test_lateAcceptanceAfterTimeout() (gas: 1007612)
+[PASS] test_pendingReservedDepositsPropertyFires() (gas: 244854)
+[PASS] test_reanchorTimeoutThenLateProof() (gas: 1522789)
+[PASS] test_thirdPartyHoldsPropertyFires() (gas: 1117457)
+[PASS] test_totalAmountPropertyFires() (gas: 896070)
+[PASS] test_walletCountersPropertyFires() (gas: 897987)
+Suite result: ok. 13 passed; 0 failed; 0 skipped; finished in 15.62s (15.68s CPU time)
+
+Ran 1 test suite in 15.63s (15.62s CPU time): 13 tests passed, 0 failed, 0 skipped (13 total tests)

@@ -1,0 +1,11 @@
+Full Hardhat suite summary lines (FORKING_URL unset, TEST_USE_STUBS_TBTC=true, USE_EXTERNAL_DEPLOY=true), 2026-10-14
+
+public PR head 40bdfe4d4:
+  3488 passing (9m)
+  61 pending
+exit 0
+
+reconciled head d30f99f65 (second run, includes the four getter tests):
+  3568 passing (14m)
+  61 pending
+exit 0

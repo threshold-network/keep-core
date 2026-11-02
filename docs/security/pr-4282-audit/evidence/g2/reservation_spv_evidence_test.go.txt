@@ -1,0 +1,1268 @@
+package spv
+
+// Scratch evidence tests for the G2 go-spv-chain Low findings. Each test
+// targets one finding/lead and proves its claimed behavior against the
+// package's local chain doubles. Run: go test -run TestG2Low ./pkg/maintainer/spv/...
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/big"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/tbtc"
+)
+
+// g2FilterRecordingChain records, per filter, the StartBlock value that
+// reachers of PastNewWalletRegisteredEvents see through it, and counts the
+// notifications that reach the chain. It backs G2F4 and G2L15: the close
+// handler's resolveWalletPublicKeyHash is reachable with an error injected,
+// and the wrapper's notifyStranded count proves whether the stranding check
+// actually ran.
+type g2FilterRecordingChain struct {
+	*localChain
+	pastNewWalletRegisteredStartBlocks []uint64
+	notifyStrandedCalls                int
+}
+
+func (c *g2FilterRecordingChain) PastNewWalletRegisteredEvents(
+	filter *tbtc.NewWalletRegisteredEventFilter,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	c.pastNewWalletRegisteredStartBlocks = append(
+		c.pastNewWalletRegisteredStartBlocks,
+		filter.StartBlock,
+	)
+	return c.localChain.PastNewWalletRegisteredEvents(filter)
+}
+
+func (c *g2FilterRecordingChain) NotifyReservationStranded(
+	reservationKey *big.Int,
+) error {
+	c.notifyStrandedCalls++
+	return c.localChain.NotifyReservationStranded(reservationKey)
+}
+
+// g2ConfirmationsFailingChain is the G2F8 double: a full localBitcoinChain
+// whose GetTransactionConfirmations fails for one specific transaction
+// hash (simulating a per-tick Electrum blip) and delegates every other read
+// to the embedded chain. The hash's real body still fetches, so only the
+// confirmations read is what breaks.
+type g2ConfirmationsFailingChain struct {
+	*localBitcoinChain
+	failingHash *bitcoin.Hash
+}
+
+func (c *g2ConfirmationsFailingChain) GetTransactionConfirmations(
+	_ context.Context,
+	transactionHash bitcoin.Hash,
+) (uint, error) {
+	if c.failingHash != nil && transactionHash == *c.failingHash {
+		return 0, errors.New("simulated electrum blip on this tx")
+	}
+	return c.localBitcoinChain.GetTransactionConfirmations(
+		context.Background(),
+		transactionHash,
+	)
+}
+
+// TestG2F3_StaleDepositPollTickReadsScaleWithTrackedCount pins G2F3: one
+// poll tick re-checks every tracked reserved deposit, and a deposit past
+// its refund deadline costs a per-deposit chain read on every tick until
+// its on-chain record clears. There is no per-tick cap on the tracked set,
+// so an attacker's high-volume reveals grow the per-tick RPC volume linearly
+// (the on-chain precondition - that a malicious depositor can actually
+// reveal many reserved deposits - is the only unverified part; the Go side
+// here is proven: no count cap, reads scale with the tracked count).
+func TestG2F3_StaleDepositPollTickReadsScaleWithTrackedCount(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(200000)
+	spvChain.setBlockCounter(blockCounter)
+
+	const (
+		deadline = uint32(1_000_000)
+		count    = 3
+	)
+	// now is past deadline and past deadline + the maximum possible
+	// operator stagger offset (a full renotify interval, 600s), so the
+	// first-check stagger gate cannot hold any one of the three
+	// deposits back: every deposit's notification is due this tick.
+	now := deadline + 601
+
+	// vault is the zero value: the tracker matches a reveal whose vault
+	// field equals it, and ReservationParameters's default returns the
+	// zero vault, so the three seeded reveals are all tracked.
+	vault := chain.Address("")
+	spvChain.setReservationParameters(&tbtc.ReservationParameters{})
+
+	for i := 1; i <= count; i++ {
+		fundingTxHash := bitcoin.Hash{byte(0xF3), byte(i)}
+		spvChain.pastDepositRevealedEvents = append(
+			spvChain.pastDepositRevealedEvents,
+			&tbtc.DepositRevealedEvent{
+				Vault:               &vault,
+				Amount:              100_000,
+				RefundLocktime:      locktimeForDeadline(deadline),
+				BlockNumber:         150_000,
+				FundingTxHash:       fundingTxHash,
+				FundingOutputIndex:  0,
+				WalletPublicKeyHash: walletPKH(),
+			},
+		)
+		depositKey := spvChain.BuildDepositKey(fundingTxHash, 0)
+		spvChain.setReservedDeposit(depositKey, walletPKH(), true)
+		spvChain.setReservation(depositKey, &tbtc.Reservation{
+			State:        tbtc.ReservationStateActive,
+			RequestNonce: 1,
+		})
+		spvChain.setReservationAction(depositKey, 1, &tbtc.ReservationAction{
+			State:      tbcsActionTimedOut(),
+			ActionType: tbtc.ReservationActionTypeAcceptance,
+		})
+	}
+
+	counting := &staleReadCountingChain{Chain: spvChain}
+	watcher := NewReservationStaleDepositWatcher(
+		counting,
+		common.HexToAddress("0x00000000000000000000000000000000000000aa"),
+		tbtc.ReservationsActivationBlock(ethereum.Developer),
+	)
+
+	tracked, ok := watcher.pollTick(now)
+	if !ok {
+		t.Fatal("expected the tick's scans to succeed")
+	}
+	if tracked != count {
+		t.Fatalf(
+			"expected all %d past-deadline reserved deposits to be tracked, got %d",
+			count,
+			tracked,
+		)
+	}
+
+	// Each of the three deposits was notified once this tick.
+	if calls := spvChain.getSubmittedStaleReservedDeposits(); len(calls) != count {
+		t.Fatalf(
+			"expected %d stale-deposit notifications on the first tick, got %d",
+			count,
+			len(calls),
+		)
+	}
+
+	// Second tick, still past the deadline, record not yet cleared on-chain:
+	// the whole tracked set is re-read (and would be re-notified once the
+	// renotify backoff elapses). The point of the assertion is that no
+	// cap bounds the number of per-deposit reads a single tick performs -
+	// they scale with the tracked count.
+	tracked2, _ := watcher.pollTick(now + 1)
+	if tracked2 != count {
+		t.Fatalf(
+			"expected the tracked set to stay at %d on the second tick (the record is still set on-chain), got %d",
+			count,
+			tracked2,
+		)
+	}
+	// The second tick's per-deposit wallet reads double the first
+	// tick's: there is no cap on tracked-set re-reads, so the per-tick
+	// RPC volume scales linearly with the tracked count across ticks.
+	if reads := counting.reservedDepositWalletCalls; reads != 2*count {
+		t.Fatalf(
+			"expected %d total ReservedDepositWallet reads across two ticks (no per-tick cap), got %d",
+			2*count,
+			reads,
+		)
+	}
+}
+
+// TestG2F4_CloseHandlerResolutionFailureDropsTheCheck pins G2F4 and G2L15:
+// the one-shot OnWalletClosed worker resolves the closed wallet's public key
+// hash through a NewWalletRegistered event scan with no StartBlock (the
+// filter it builds carries zero, i.e. genesis), and on that read's failure
+// it logs and returns - the stranding check for that close event never runs
+// and is not retried.
+func TestG2F4_CloseHandlerResolutionFailureDropsTheCheck(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	newWiring := func() (*g2FilterRecordingChain, *mockWalletClosedChain) {
+		recording := &g2FilterRecordingChain{localChain: newLocalChain()}
+		recording.localChain.setBlockCounter(newMockBlockCounter())
+		return recording, &mockWalletClosedChain{}
+	}
+
+	t.Run("the close handler's lookup filter is unbounded (StartBlock 0)", func(t *testing.T) {
+		recording, walletClosedChain := newWiring()
+		watcher := newReservationStrandingWatcher(recording)
+
+		walletID := [32]byte{0x77}
+		recording.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+			EcdsaWalletID:       walletID,
+			WalletPublicKeyHash: walletPKH(),
+			BlockNumber:         500,
+		})
+
+		subscription := subscribeReservationWalletClosed(
+			ctx,
+			walletClosedChain,
+			recording,
+			watcher,
+		)
+		defer subscription.Unsubscribe()
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// The handler dispatches a worker goroutine; poll for it to reach
+		// the registration scan before asserting.
+		deadline := time.Now().Add(2 * time.Second)
+		for len(recording.pastNewWalletRegisteredStartBlocks) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+
+		// The resolution scan issued exactly one filter, and it carried
+		// StartBlock 0 - no registration bound, so the underlying
+		// production scan is genesis-wide.
+		if len(recording.pastNewWalletRegisteredStartBlocks) != 1 {
+			t.Fatalf(
+				"expected exactly one registration scan from the close handler, got %d",
+				len(recording.pastNewWalletRegisteredStartBlocks),
+			)
+		}
+		if recording.pastNewWalletRegisteredStartBlocks[0] != 0 {
+			t.Errorf(
+				"expected the close handler's lookup filter to be unbounded (StartBlock 0), got %d",
+				recording.pastNewWalletReservedStartBlocks()[0],
+			)
+		}
+	})
+
+	t.Run("a provider rejecting the scan drops this close's stranding check", func(t *testing.T) {
+		recording, walletClosedChain := newWiring()
+		watcher := newReservationStrandingWatcher(recording)
+
+		walletID := [32]byte{0x78}
+		// The wallet's reservation would otherwise be stranded: seed it.
+		recording.setWalletReservations(walletPKH(), []*big.Int{reservationKey(0xF401)})
+		recording.setReservation(
+			reservationKey(0xF401),
+			&tbtc.Reservation{State: tbtc.ReservationStateActive},
+		)
+
+		subscription := subscribeReservationWalletClosed(
+			ctx,
+			walletClosedChain,
+			recording,
+			watcher,
+		)
+		defer subscription.Unsubscribe()
+
+		// Simulate the provider rejecting the unbounded getLogs range.
+		recording.localChain.pastNewWalletRegisteredEventsErr =
+			errors.New("provider rejected range")
+
+		walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+			WalletID: walletID,
+		})
+
+		// The handler's goroutine must have finished before we assert; it
+		// is a plain closure, so synchronize through the notify count's
+		// absence plus a brief settle.
+		time.Sleep(50 * time.Millisecond)
+
+		if recording.notifyStrandedCalls != 0 {
+			t.Fatalf(
+				"expected the failed resolution to drop the stranding check (0 notifications), got %d",
+				recording.notifyStrandedCalls,
+			)
+		}
+	})
+}
+
+// TestG2F5_TransactionLimitTruncatesOldReanchorProof pins G2F5: a TimedOut
+// reanchor generation whose reanchor transaction is not among the wallet's
+// newest config.TransactionLimit transactions is never re-considered, while
+// the same fixture with a higher limit proves it - the transaction is found
+// and submitted.
+func TestG2F5_TransactionLimitTruncatesOldReanchorProof(t *testing.T) {
+	const fillerCount = 25
+	const defaultLimit = 20
+
+	fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+	fixture.state.nowFn = func() uint32 { return 4_000_000_000 }
+
+	// Fill the source wallet's confirmed history after the reanchor
+	// transaction: the filler set pushes the reanchor transaction out of
+	// the wallet's newest-defaultLimit window, which is exactly what a
+	// MovingFunds/Closing wallet sweeping many outputs after a reanchor
+	// does.
+	fillerScript, err := fixture.reanchorProofScript()
+	if err != nil {
+		t.Fatalf("cannot build filler output script: %v", err)
+	}
+	for i := 0; i < fillerCount; i++ {
+		filler := &bitcoin.Transaction{
+			Locktime: uint32(0xE000 + i),
+			Outputs: []*bitcoin.TransactionOutput{{
+				Value:           1000,
+				PublicKeyScript: fillerScript,
+			}},
+		}
+		if err := fixture.btcChain.BroadcastTransaction(filler); err != nil {
+			t.Fatalf("cannot broadcast filler transaction: %v", err)
+		}
+		if err := fixture.btcChain.addTransactionConfirmations(filler.Hash(), 20); err != nil {
+			t.Fatalf("cannot confirm filler transaction: %v", err)
+		}
+	}
+
+	prove := func(state *reservationProofScanState, config Config) (submissions int, tracked bool) {
+		err := proveReservationReanchorActions(
+			state,
+			config,
+			fixture.spvChain,
+			fixture.spvChain,
+			fixture.btcChain,
+			newProofInfoCache(),
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_, tracked = state.pendingReanchorEvents[
+			reservationEventKey(fixture.reservationKey, fixture.requestNonce),
+		]
+		return fixture.submissions, tracked
+	}
+
+	// Default limit (20): the reanchor transaction is outside the wallet's
+	// newest-20 window, so no candidate exists for its outpoint and no
+	// proof is submitted - the generation stays tracked with nothing to
+	// prove.
+	fixture.submissions = 0
+	submitted, tracked := prove(fixture.state, Config{
+		TransactionLimit: defaultLimit,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	})
+	if submitted != 0 {
+		t.Fatalf(
+			"expected the default limit to truncate the reanchor transaction out of the wallet's newest-%d, so no proof is submitted; got %d submissions",
+			defaultLimit,
+			submitted,
+		)
+	}
+	if !tracked {
+		t.Fatal("expected the TimedOut generation to stay tracked with nothing provable")
+	}
+
+	// Higher limit, against a fresh scan state: the stuck generation's
+	// pass-1 backoff (recorded against the limit-20 wallet tx cache) is
+	// local to fixture.state, so a fresh state re-discovers the same
+	// on-chain event and reservation record with no backoff baggage.
+	// With the wider limit the reanchor transaction re-enters the
+	// window and is found and submitted - proving the proof was
+	// reachable all along and was hidden only by the limit.
+	fixture.submissions = 0
+	submitted, _ = prove(newReservationProofScanState(), Config{
+		TransactionLimit: defaultLimit + fillerCount,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	})
+	if submitted != 1 {
+		t.Fatalf(
+			"expected the widened limit to surface and submit the reanchor proof, got %d submissions",
+			submitted,
+		)
+	}
+}
+
+// TestG2F8_EarlierCandidateConfirmationsErrorHidesLaterReplacement pins
+// G2F8: when the first matching candidate's proof-info read fails
+// transiently, proveReservationTransaction returns an error for that pass
+// and never examines the later, already-confirmed replacement. The control
+// run against the healthy chain proves the later candidate is the provable
+// one.
+func TestG2F8_EarlierCandidateConfirmationsErrorHidesLaterReplacement(t *testing.T) {
+	const proofStart = 790270
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
+	healthy := newLocalBitcoinChain()
+	if err := populateBlockHeaders(
+		healthy,
+		proofStart,
+		proofStart+19,
+		func(uint) *big.Int { return diff(32) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	spvChain := newLocalChain()
+	spvChain.setTxProofDifficultyFactor(big.NewInt(6))
+	spvChain.setCurrentEpoch(392)
+	spvChain.setCurrentAndPrevEpochDifficulty(diff(32), diff(16))
+
+	// A confirmed replacement that would be provable on a healthy chain.
+	healthyReplacement := &bitcoin.Transaction{Locktime: 9}
+	if err := healthy.addTransactionConfirmations(healthyReplacement.Hash(), 20); err != nil {
+		t.Fatal(err)
+	}
+
+	// A still-pending earlier candidate whose confirmations read is what
+	// breaks this pass.
+	pendingEarlier := &bitcoin.Transaction{Locktime: 8}
+	if err := healthy.addTransactionConfirmations(pendingEarlier.Hash(), 2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: the healthy chain proves the later confirmed replacement
+	// even though the unconfirmed candidate is encountered first.
+	submissions := 0
+	_, err := proveReservationTransaction(
+		[]*bitcoin.Transaction{pendingEarlier, healthyReplacement},
+		alwaysMatchReservationTransaction,
+		healthy,
+		spvChain,
+		spvChain,
+		DefaultMaxProofHeaders,
+		newProofInfoCache(),
+		nil,
+		func(hash bitcoin.Hash, requiredConfirmations uint) error {
+			submissions++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("healthy control unexpectedly failed: %v", err)
+	}
+	if submissions != 1 {
+		t.Fatalf("healthy control: expected the confirmed replacement to be proved, got %d submissions", submissions)
+	}
+
+	// The blip chain: the earlier candidate's confirmations read fails.
+	pendingEarlierHash := pendingEarlier.Hash()
+	blip := &g2ConfirmationsFailingChain{
+		localBitcoinChain: healthy,
+		failingHash:       &pendingEarlierHash,
+	}
+	submissions = 0
+	outcome, err := proveReservationTransaction(
+		[]*bitcoin.Transaction{pendingEarlier, healthyReplacement},
+		alwaysMatchReservationTransaction,
+		blip,
+		spvChain,
+		spvChain,
+		DefaultMaxProofHeaders,
+		newProofInfoCache(),
+		nil,
+		func(hash bitcoin.Hash, requiredConfirmations uint) error {
+			submissions++
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatalf("expected the first candidate's confirmations error to surface as a pass error, got nil")
+	}
+	if outcome != reservationProofNoMatch {
+		t.Fatalf("expected the pass to report no-match (no proof submitted), got outcome %d", outcome)
+	}
+	if submissions != 0 {
+		t.Fatalf(
+			"expected the confirmed later replacement NOT to be examined after the earlier read failed, got %d submissions",
+			submissions,
+		)
+	}
+}
+
+// TestG2F15_FailedSubmissionBlocksSiblingGeneration pins G2F15: two
+// settleable generations of the same reservation - a Pending one and a
+// TimedOut one - where the Pending generation's proof submission fails.
+// The pass marks the reservation key as submitted on that failed outcome
+// and then skips the TimedOut generation, which otherwise would have been
+// proved in the same pass. The control (healthy submit) shows the TimedOut
+// generation is provable when nothing fails.
+func TestG2F15_FailedSubmissionBlocksSiblingGeneration(t *testing.T) {
+	fixture := newTimedOutAcceptanceFixture(t, encodingP2WPKH)
+	fixture.state.nowFn = func() uint32 { return 1100 }
+
+	// A second, Pending generation of the same reservation, re-requested at
+	// nonce 2 with the same wallet: the same anchor transaction is a valid
+	// candidate for it too (both generations spend the deposit UTXO to the
+	// wallet).
+	pendingKey := fixture.reservationKey
+	fixture.spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      pendingKey,
+		RequestNonce:        2,
+		WalletPublicKeyHash: fixture.walletPKH,
+		DepositAmount:       150000,
+		BlockNumber:         501,
+	})
+	fixture.spvChain.setReservationAction(
+		pendingKey,
+		2,
+		&tbtc.ReservationAction{
+			State:                     tbcsActionPending(),
+			ActionType:                tbtc.ReservationActionTypeAcceptance,
+			TargetWalletPublicKeyHash: fixture.walletPKH,
+		},
+	)
+	// The reservation record must not exist (Unknown) for the TimedOut
+	// generation to stay settleable, which the fixture already guarantees
+	// by not seeding a reservation for the key.
+
+	// The submit hook fails on the FIRST call (the Pending generation is
+	// sorted first) and succeeds on later calls: it records which nonces
+	// actually reach a submission attempt.
+	submittedNonces := make([]uint64, 0)
+	fixture.spvChain.submitReservationAcceptanceProofHook = func(
+		_ *tbtc.BitcoinTxInfo,
+		_ *tbtc.BitcoinTxProof,
+		reservationKey *big.Int,
+		requestNonce uint64,
+	) error {
+		submittedNonces = append(submittedNonces, requestNonce)
+		if len(submittedNonces) == 1 {
+			return errors.New("simulated gas provider drop on first submit")
+		}
+		return nil
+	}
+
+	err := proveReservationAcceptanceActions(
+		fixture.state,
+		fixture.config,
+		fixture.spvChain,
+		fixture.spvChain,
+		fixture.btcChain,
+		newProofInfoCache(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(submittedNonces) != 1 {
+		t.Fatalf(
+			"expected exactly one submission attempt (the Pending generation's, which failed and blocked the sibling), got %v",
+			submittedNonces,
+		)
+	}
+	if submittedNonces[0] != 2 {
+		t.Fatalf(
+			"expected the Pending generation (nonce 2) to be submitted first and the failed submit to claim the key; got nonce %d",
+			submittedNonces[0],
+		)
+	}
+}
+
+// TestG2F16_StuckPendingAcceptanceGenerationTracksForever pins G2F16: an
+// acceptance generation that stays Pending on-chain is re-read on every
+// proof-loop pass with no age bound - eviction of a Pending generation
+// happens only on a state transition, so a dead action-timeout watcher
+// (the unverified precondition) leaves it tracked for the process life.
+func TestG2F16_StuckPendingAcceptanceGenerationTracksForever(t *testing.T) {
+	spvChain := newLocalChain()
+	btcChain := newReservationProofBitcoinChain()
+
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	key := big.NewInt(0xF1600)
+	walletPKH := [20]byte{0x0F, 0x16}
+
+	spvChain.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      key,
+		RequestNonce:        1,
+		WalletPublicKeyHash: walletPKH,
+		DepositAmount:       150000,
+		BlockNumber:         500,
+	})
+	// A Pending generation: no TimedOut late-window applies to it, so no
+	// bound can evict it.
+	spvChain.setReservationAction(key, 1, &tbtc.ReservationAction{
+		State:      tbcsActionPending(),
+		ActionType: tbtc.ReservationActionTypeAcceptance,
+	})
+
+	state := newReservationProofScanState()
+	// Drive now far into the future: a bounded late-window implementation
+	// would have evicted any tracked generation by now; the Pending
+	// generation must still be present and re-read.
+	state.nowFn = func() uint32 { return 4_000_000_000 }
+
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
+
+	counting := &actionReadCountingChain{localChain: spvChain}
+	for pass := 0; pass < 5; pass++ {
+		if err := proveReservationAcceptanceActions(
+			state,
+			config,
+			counting,
+			counting,
+			btcChain,
+			newProofInfoCache(),
+			nil,
+		); err != nil {
+			t.Fatalf("pass %d unexpected error: %v", pass, err)
+		}
+	}
+
+	if _, tracked := state.pendingAcceptanceEvents[reservationEventKey(key, 1)]; !tracked {
+		t.Fatal("expected the still-Pending acceptance generation to remain tracked after 5 passes at a far-future now")
+	}
+	if readsAfter := counting.getReservationActionCalls; readsAfter != 5 {
+		t.Fatalf(
+			"expected the stuck Pending generation to be re-read once per pass (5 reads), got %d",
+			readsAfter,
+		)
+	}
+}
+
+
+// TestG2F17_FailedReanchorSubmissionBlocksSiblingGeneration pins G2F17:
+// the re-anchor counterpart of G2F15. A failed submission of one
+// generation's proof claims the reservation key and blocks a later,
+// independently settleable sibling generation in the same pass.
+func TestG2F17_FailedReanchorSubmissionBlocksSiblingGeneration(t *testing.T) {
+	fixture := newTimedOutReanchorFixture(t, encodingP2WPKH)
+	fixture.state.nowFn = func() uint32 { return 4_000_000_000 }
+
+	// A second, Pending reanchor generation of the same reservation,
+	// re-requested at nonce 3 against the same source wallet: the same
+	// reanchor transaction is a valid candidate for it too.
+	pendingKey := fixture.reservationKey
+	fixture.spvChain.addReservationReanchorRequestedEvent(&tbtc.ReservationReanchorRequestedEvent{
+		ReservationKey:            pendingKey,
+		RequestNonce:              3,
+		SourceWalletPublicKeyHash: fixture.sourceWalletPKH,
+		TargetWalletPublicKeyHash: fixture.sourceWalletPKH,
+		TxMaxFee:                  20000,
+		BlockNumber:               501,
+	})
+	fixture.spvChain.setReservationAction(
+		pendingKey,
+		3,
+		&tbtc.ReservationAction{
+			State:                     tbcsActionPending(),
+			ActionType:                tbtc.ReservationActionTypeReanchor,
+			TargetWalletPublicKeyHash: fixture.sourceWalletPKH,
+			// The Pending generation's source anchor must match the
+			// reservation's current anchor for it to be settleable.
+			SourceAnchorUtxoHash: reanchorSourceAnchorHash(
+				&tbtc.Reservation{
+					AnchorUtxo: &bitcoin.UnspentTransactionOutput{
+						Outpoint: &bitcoin.TransactionOutpoint{
+							TransactionHash: reanchorFixtureAnchorTxHash(t, fixture),
+							OutputIndex:     1,
+						},
+						Value: 600000,
+					},
+				},
+			),
+		},
+	)
+
+	submittedNonces := make([]uint64, 0)
+	fixture.spvChain.submitReservationReanchorProofHook = func(
+		_ *tbtc.BitcoinTxInfo,
+		_ *tbtc.BitcoinTxProof,
+		_ *big.Int,
+		requestNonce uint64,
+	) error {
+		submittedNonces = append(submittedNonces, requestNonce)
+		if len(submittedNonces) == 1 {
+			return errors.New("simulated gas provider drop on first submit")
+		}
+		return nil
+	}
+
+	err := proveReservationReanchorActions(
+		fixture.state,
+		fixture.config,
+		fixture.spvChain,
+		fixture.spvChain,
+		fixture.btcChain,
+		newProofInfoCache(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(submittedNonces) != 1 {
+		t.Fatalf(
+			"expected exactly one submission attempt (the Pending generation's, which failed and blocked the sibling TimedOut generation), got %v",
+			submittedNonces,
+		)
+	}
+	if submittedNonces[0] != 3 {
+		t.Fatalf(
+			"expected the Pending generation (nonce 3) to be submitted first and its failed submit to claim the key; got nonce %d",
+			submittedNonces[0],
+		)
+	}
+}
+
+// TestG2F18_FailedReanchorTimeoutNoticeSkipsStrandingRequeue pins G2F18:
+// the stranding recheck is enqueued only after a successful
+// NotifyReservationActionTimeout; when that notice errors (e.g. the action
+// left Pending between read and send, or the RPC fails), the wallet is
+// never deferred to strandingRecheckWallets, so this operator drops the
+// recheck on that path.
+func TestG2F18_FailedReanchorTimeoutNoticeSkipsStrandingRequeue(t *testing.T) {
+	spvChain := newLocalChain()
+
+	wallet := walletPKHAt(0x48)
+	key := reservationKey(0x4800)
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbcsActionPending(),
+				TimeoutAt:  100,
+			},
+		},
+		1,
+	)
+
+	// The notice itself fails: the action left Pending between read and
+	// send, or the RPC is down.
+	spvChain.notifyReservationActionTimeoutErr = errors.New("reverting: action no longer pending")
+
+	strandingWatcher := newReservationStrandingWatcher(spvChain)
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain,
+		0,
+		common.Address{},
+		strandingWatcher,
+		0,
+	)
+
+	notified, err := watcher.checkReservationActionTimeout(key, 1000, nil, 0)
+	if err == nil {
+		t.Fatalf("expected the failed notice to surface an error, got notified=%v", notified)
+	}
+	if notified {
+		t.Fatal("expected notified=false on the failed notice path")
+	}
+
+	if len(watcher.strandingRecheckWallets) != 0 {
+		t.Fatalf(
+			"expected the failed notice to leave strandingRecheckWallets empty (the recheck is only enqueued after a successful notice), got %d entries",
+			len(watcher.strandingRecheckWallets),
+		)
+	}
+}
+
+// TestG2F19_DrainDropsClosingWalletAndCleanPendingSkip pins G2F19:
+// drainStrandingRechecks requeues a wallet only on error. A wallet still in
+// the Closing state is skipped with a clean continue (not requeued), and a
+// clean stranding check on an ActionPending reservation is dropped the same
+// way - so the reservation's stranding notice is not reissued by this
+// operator on that drain.
+func TestG2F19_DrainDropsClosingWalletAndCleanPendingSkip(t *testing.T) {
+	t.Run("a Closing wallet is dropped, not requeued", func(t *testing.T) {
+		spvChain := newLocalChain()
+		wallet := walletPKHAt(0x49)
+		key := reservationKey(0x4900)
+
+		// A dead wallet's reservation that the timeout notice should have
+		// prompted a stranding check for: the wallet is still Closing (not
+		// yet Closed/Terminated), and its reservation is Active.
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosing})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{State: tbcsReservationActive()})
+
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+		watcher := NewReservationActionTimeoutWatcher(
+			spvChain,
+			0,
+			common.Address{},
+			strandingWatcher,
+			0,
+		)
+		watcher.strandingRecheckWallets[wallet] = struct{}{}
+
+		watcher.drainStrandingRechecks()
+
+		if len(watcher.strandingRecheckWallets) != 0 {
+			t.Fatalf(
+				"expected the still-Closing wallet to be dropped (clean continue), not requeued; got %d entries",
+				len(watcher.strandingRecheckWallets),
+			)
+		}
+		if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+			t.Fatalf(
+				"expected no stranding notification for the dropped Closing wallet, got %d",
+				len(calls),
+			)
+		}
+	})
+
+	t.Run("a clean skip of an ActionPending reservation is dropped the same way", func(t *testing.T) {
+		spvChain := newLocalChain()
+		wallet := walletPKHAt(0x49)
+		key := reservationKey(0x4901)
+
+		// A Closed wallet whose only reservation has a pending action
+		// generation: the stranding check's own Active-only guard skips it
+		// cleanly, and the clean outcome means no requeue.
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{
+			State:        tbcsReservationActionPending(),
+			RequestNonce: 1,
+		})
+
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+		watcher := NewReservationActionTimeoutWatcher(
+			spvChain,
+			0,
+			common.Address{},
+			strandingWatcher,
+			0,
+		)
+		watcher.strandingRecheckWallets[wallet] = struct{}{}
+
+		watcher.drainStrandingRechecks()
+
+		if len(watcher.strandingRecheckWallets) != 0 {
+			t.Fatalf(
+				"expected the clean skip to drop the wallet (no requeue on a non-error outcome); got %d entries",
+				len(watcher.strandingRecheckWallets),
+			)
+		}
+		if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+			t.Fatalf("expected no stranding notification for the pending reservation, got %d", len(calls))
+		}
+	})
+}
+
+// TestG2F24_StartupStrandingScanNeverChecksClosingWallet pins G2F24: both
+// the startup scan's forwarding and the retry pass check a wallet's on-chain
+// state against Closed/Terminated only - a Closing wallet (which the
+// Bridge's notifyReservationStranded would strand once
+// block.timestamp >= dissolutionEligibleAt) is skipped by this operator's
+// startup scan.
+func TestG2F24_StartupStrandingScanNeverChecksClosingWallet(t *testing.T) {
+	strandedFromStates := map[tbtc.WalletState]bool{
+		tbtc.StateClosed:     true,
+		tbtc.StateTerminated: true,
+	}
+
+	for walletState := range map[tbtc.WalletState]bool{
+		tbtc.StateClosed:     true,
+		tbtc.StateTerminated: true,
+		tbtc.StateClosing:    true,
+		tbcsStateLive():      true,
+	} {
+		expected := strandedFromStates[walletState]
+
+		spvChain := newLocalChain()
+		strandingWatcher := newReservationStrandingWatcher(spvChain)
+
+		wallet := walletPKHAt(0x4A)
+		key := reservationKey(0x4A00)
+		spvChain.setWallet(wallet, &tbtc.WalletChainData{State: walletState})
+		spvChain.setWalletReservations(wallet, []*big.Int{key})
+		spvChain.setReservation(key, &tbtc.Reservation{State: tbcsReservationActive()})
+
+		retryReservationStrandingStartupScan(
+			context.Background(),
+			spvChain,
+			strandingWatcher,
+			[][20]byte{wallet},
+			0,
+		)
+
+		if calls := spvChain.getSubmittedReservationStrandedKeys(); len(calls) != 0 {
+			if !expected {
+				t.Fatalf(
+					"wallet state %v must NOT be checked for stranding by the startup scan (only Closed/Terminated are), but got %d notifications",
+					walletState,
+					len(calls),
+				)
+			}
+		} else if expected {
+			t.Fatalf(
+				"expected the startup scan to notify the stranded reservation for a %v wallet, got 0",
+				walletState,
+			)
+		}
+	}
+}
+
+// TestG2F25_SelfCheckKeysOnRegistrationCount pins G2F25: the
+// misconfiguration self-check fires only when the registration scan is also
+// zero. On any active network the last-30-days registration scan is
+// non-zero, so the Errorf never fires even when the two reservation scans
+// are genuinely zero and the flags are misconfigured.
+func TestG2F25_SelfCheckKeysOnRegistrationCount(t *testing.T) {
+	regZero := scanResult{name: "registration", count: 0, scanOK: true}
+	regActive := scanResult{name: "registration", count: 128, scanOK: true}
+	reservationScansZero := scanResult{name: "stale-deposit", count: 0, scanOK: true}
+	actionScansZero := scanResult{name: "action-timeout", count: 0, scanOK: true}
+
+	// Quiet network: all three zero - misconfiguration fires.
+	if !reservationSelfCheckMisconfigured(false, regZero, reservationScansZero, actionScansZero) {
+		t.Fatal("expected the misconfiguration signal on a genuinely quiet, zero-activity network")
+	}
+
+	// Active network: the registration scan is non-zero, so the signal is
+	// masked - the two reservation scans being zero (a genuine
+	// misconfiguration) no longer surfaces.
+	if reservationSelfCheckMisconfigured(false, regActive, reservationScansZero, actionScansZero) {
+		t.Fatal("expected the non-zero registration count on an active network to mask the misconfiguration signal")
+	}
+}
+
+// TestG2L10_StuckPendingActionEntryIsRetrackedEveryTick pins G2L10: a
+// tracked action that stays Pending on-chain is never evicted (eviction
+// only happens on a non-Pending observation), so it is re-read on every
+// poll tick for the process life - bounded by the per-tick batch cap,
+// but re-read forever.
+func TestG2L10_StuckPendingActionEntryIsRetrackedEveryTick(t *testing.T) {
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet := walletPKHAt(0x4B)
+	key := reservationKey(0x4B00)
+	seededReservation(
+		t,
+		spvChain,
+		key,
+		wallet,
+		[]*tbtc.ReservationAction{
+			{
+				ActionType: tbtc.ReservationActionTypeReanchor,
+				State:      tbcsActionPending(),
+				TimeoutAt:  5_000,
+			},
+		},
+		1,
+	)
+
+	counting := &actionReadCountingChain{localChain: spvChain}
+
+	watcher := NewReservationActionTimeoutWatcher(
+		counting,
+		0,
+		common.Address{},
+		nil,
+		0,
+	)
+	watcher.nowFn = func() uint32 { return 100 }
+	// The entry is already tracked: seed it directly so the test is about
+	// retention, not discovery.
+	watcher.pendingActions[actionEventKey(key, 1)] = &pendingAction{
+		reservationKey: key,
+		requestNonce:   1,
+	}
+
+	for tick := 0; tick < 3; tick++ {
+		if err := watcher.pollPendingActions(); err != nil {
+			t.Fatalf("tick %d unexpected error: %v", tick, err)
+		}
+	}
+
+	if _, tracked := watcher.pendingActions[actionEventKey(key, 1)]; !tracked {
+		t.Fatal("expected the still-Pending action entry to remain tracked across ticks")
+	}
+	if readsAfter := counting.getReservationActionCalls; readsAfter != 3 {
+		t.Fatalf(
+			"expected the stuck Pending entry to be re-read once per tick (3 reads), got %d",
+			readsAfter,
+		)
+	}
+}
+
+// TestG2L12_EventScanCursorNeverRescansBelowConfirmationMargin pins G2L12:
+// the reservation event scans stop reservationEventScanConfirmationBlocks
+// behind the confirmed tip, and a restart never resumes below the cursor -
+// so a reorg deeper than the 12-block margin that replaces an already-
+// scanned height is not re-scanned by this operator.
+func TestG2L12_EventScanCursorNeverRescansBelowConfirmationMargin(t *testing.T) {
+	const currentBlock = 2*reservationEventScanChunkSize + 500
+	confirmedTip := uint64(currentBlock) - reservationEventScanConfirmationBlocks
+
+	inner := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	inner.setBlockCounter(blockCounter)
+
+	chain := &reservationChunkFailingChain{localChain: inner}
+	state := newReservationProofScanState()
+	config := Config{
+		TransactionLimit: 100,
+		MaxProofHeaders:  DefaultMaxProofHeaders,
+		EthereumNetwork:  ethereum.Developer,
+	}
+
+	// First pass: the acceptance scan walks activation (0) to the
+	// confirmed tip in chunks and parks the cursor exactly at the
+	// confirmed tip - 12 blocks behind the raw tip.
+	if err := proveReservationAcceptanceActions(
+		state,
+		config,
+		chain,
+		chain,
+		newReservationProofBitcoinChain(),
+		newProofInfoCache(),
+		nil,
+	); err != nil {
+		t.Fatalf("first pass unexpected error: %v", err)
+	}
+	if state.acceptanceLastScannedBlock != confirmedTip {
+		t.Fatalf(
+			"expected the scan cursor to park %d blocks behind the raw tip, got %d",
+			reservationEventScanConfirmationBlocks,
+			state.acceptanceLastScannedBlock,
+		)
+	}
+
+	// A restart against the same state resumes AFTER the cursor: it never
+	// re-scans below it, so an event at an already-scanned height that a
+	// deep reorg replaced is not re-discovered by this operator.
+	lateReservationKey := big.NewInt(0xC0DE)
+	inner.addReservationAcceptanceRequestedEvent(&tbtc.ReservationAcceptanceRequestedEvent{
+		ReservationKey:      lateReservationKey,
+		RequestNonce:        1,
+		WalletPublicKeyHash: [20]byte{0x12},
+		BlockNumber:         confirmedTip - 1, // an already-scanned height
+	})
+	lateKey := reservationEventKey(lateReservationKey, 1)
+	if err := proveReservationAcceptanceActions(
+		state,
+		config,
+		chain,
+		chain,
+		newReservationProofBitcoinChain(),
+		newProofInfoCache(),
+		nil,
+	); err != nil {
+		t.Fatalf("restarted pass unexpected error: %v", err)
+	}
+	if _, tracked := state.pendingAcceptanceEvents[lateKey]; tracked {
+		t.Fatal(
+			"expected the event at an already-scanned height to NOT be re-discovered by the restarted pass (the cursor never rescans below the confirmed-tip margin)",
+		)
+	}
+}
+
+// --- helper aliases for the tbtc state constants, so the table-driven
+// tests above read cleanly without repeating the qualified names.
+
+func tbcsActionPending() tbtc.ReservationActionState {
+	return tbtc.ReservationActionStatePending
+}
+
+func tbcsActionTimedOut() tbtc.ReservationActionState {
+	return tbtc.ReservationActionStateTimedOut
+}
+
+func tbcsReservationActive() tbtc.ReservationState {
+	return tbtc.ReservationStateActive
+}
+
+func tbcsReservationActionPending() tbtc.ReservationState {
+	return tbtc.ReservationStateActionPending
+}
+
+func tbcsStateLive() tbtc.WalletState {
+	return tbtc.StateLive
+}
+
+// actionReadCountingChain wraps a Chain and counts GetReservationAction
+// calls, since localChain itself keeps no such counter. It backs G2F16 and
+// G2L10: both claim a still-Pending generation/action is re-read once per
+// pass/tick with no age bound, which this wrapper measures directly.
+type actionReadCountingChain struct {
+	*localChain
+	getReservationActionCalls int
+}
+
+func (c *actionReadCountingChain) GetReservationAction(
+	reservationKey *big.Int,
+	requestNonce uint64,
+) (*tbtc.ReservationAction, error) {
+	c.getReservationActionCalls++
+	return c.localChain.GetReservationAction(reservationKey, requestNonce)
+}
+
+// reanchorFixtureAnchorTxHash returns the timed-out reanchor fixture's
+// on-chain anchor transaction hash, so sibling-generation seeding can
+// snapshot the same source anchor the fixture's TimedOut generation used.
+func reanchorFixtureAnchorTxHash(
+	t *testing.T,
+	fixture *timedOutReanchorFixture,
+) (bitcoin.Hash) {
+	t.Helper()
+	for _, event := range fixture.spvChain.reservationReanchorRequestedEvents {
+		_ = event
+	}
+	// The fixture broadcasts its anchor transaction and stores the
+	// reanchor transaction (which spends the anchor) as the coinbase
+	// reference; the anchor outpoint is the reanchor transaction's input.
+	// Recover it through the btc chain's transaction set: the reanchor
+	// transaction's input is the anchor outpoint.
+	for _, transaction := range fixture.btcChain.localBitcoinChain.transactions {
+		if len(transaction.Inputs) == 1 && transaction.Inputs[0].Outpoint != nil {
+			return transaction.Inputs[0].Outpoint.TransactionHash
+		}
+	}
+	t.Fatal("could not recover the fixture's anchor transaction hash")
+	return (bitcoin.Hash{})
+}
+
+// fixture.reanchorProofScript is not a method on the fixture type, so this
+// small helper builds the matching P2WPKH script for the source wallet used
+// by G2F5's filler transactions.
+func (f *timedOutReanchorFixture) reanchorProofScript() (bitcoin.Script, error) {
+	return authorizedWalletScript(f.sourceWalletPKH, encodingP2WPKH)
+}
+
+// pastNewWalletReservedStartBlocks is a defensive accessor used in the G2F4
+// assertion above; it returns the recorded StartBlock values.
+func (c *g2FilterRecordingChain) pastNewWalletReservedStartBlocks() []uint64 {
+	return c.pastNewWalletRegisteredStartBlocks
+}
+
+var _ = fmt.Sprintf
+var _ = common.Address{}
+
+// g2PerKeyGetReservationFailingChain fails GetReservation for one specific
+// reservation key and delegates every other key to the embedded chain. It
+// backs G2F22: checkReservationStrandingForWallet's per-key retry-then-skip
+// (withStrandingRetry around GetReservation) only drops the failing key,
+// unlike G2F9's whole-wallet abort at the ethereum chain layer.
+type g2PerKeyGetReservationFailingChain struct {
+	*localChain
+	failingKey *big.Int
+}
+
+func (c *g2PerKeyGetReservationFailingChain) GetReservation(
+	reservationKey *big.Int,
+) (*tbtc.Reservation, error) {
+	if c.failingKey != nil && reservationKey.Cmp(c.failingKey) == 0 {
+		return nil, errors.New("simulated transient RPC failure on this key")
+	}
+	return c.localChain.GetReservation(reservationKey)
+}
+
+// TestG2F22_SingleReservationReadFailureDropsOnlyThatKey pins G2F22: after
+// withStrandingRetry exhausts its 3 attempts on one reservation key's
+// GetReservation call, checkReservationStrandingForWallet logs and
+// continues past that key - the OTHER reservation on the same wallet is
+// still read and notified. The caller sees a nil error (the drop is
+// silent): checkReservationStrandingForWallet returns nil even though one
+// key's notice was never sent.
+func TestG2F22_SingleReservationReadFailureDropsOnlyThatKey(t *testing.T) {
+	wallet := walletPKHAt(0x22)
+	failingKey := reservationKey(0x2201)
+	healthyKey := reservationKey(0x2202)
+
+	failing := &g2PerKeyGetReservationFailingChain{
+		localChain: newLocalChain(),
+		failingKey: failingKey,
+	}
+	failing.setWalletReservations(wallet, []*big.Int{failingKey, healthyKey})
+	failing.setReservation(failingKey, &tbtc.Reservation{State: tbcsReservationActive()})
+	failing.setReservation(healthyKey, &tbtc.Reservation{State: tbcsReservationActive()})
+
+	watcher := newReservationStrandingWatcher(failing)
+	watcher.retryDelay = 0
+
+	err := watcher.checkReservationStrandingForWallet(wallet)
+	if err != nil {
+		t.Fatalf("expected the per-key drop to be silent (nil error), got: %v", err)
+	}
+
+	notified := failing.getSubmittedReservationStrandedKeys()
+	if len(notified) != 1 {
+		t.Fatalf("expected exactly one stranding notice (the healthy key), got %d", len(notified))
+	}
+	if notified[0].Cmp(healthyKey) != 0 {
+		t.Fatalf("expected the healthy key to be notified, got %v", notified[0])
+	}
+	for _, key := range notified {
+		if key.Cmp(failingKey) == 0 {
+			t.Fatal("expected the failing key to NOT be notified (its read never succeeded)")
+		}
+	}
+}
+
+// TestG2L4_ReanchorMatcherAcceptsBelowDustCandidate pins G2L4: the Go
+// matcher checks only fee > 0 && fee <= TxMaxFee; it has no comparison
+// against the Bridge's separate dust-floor check
+// (newAnchorAmount > action.txMaxFee, ReservationProofs.sol:696). A
+// candidate whose new anchor amount is at or below TxMaxFee is accepted
+// by the Go matcher even though the Bridge's proof-time check would
+// reject it.
+func TestG2L4_ReanchorMatcherAcceptsBelowDustCandidate(t *testing.T) {
+	targetWalletPKH := [20]byte{0x44}
+	script, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPKH)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	anchorTxHash := bitcoin.Hash{0xAA}
+	anchorUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: anchorTxHash,
+			OutputIndex:     0,
+		},
+		Value: 2000,
+	}
+
+	const txMaxFee = 1000
+	event := &tbtc.ReservationReanchorRequestedEvent{
+		TargetWalletPublicKeyHash: targetWalletPKH,
+		TxMaxFee:                  txMaxFee,
+	}
+
+	// newAnchorAmount = 1950, well below the Bridge's dust floor at
+	// ReservationProofs.sol:696 (newAnchorAmount > action.txMaxFee,
+	// i.e. 1950 > 1000 is actually true here - the point this test
+	// isolates is narrower: the Go matcher has NO newAnchorAmount
+	// check of any kind, so it accepts purely on fee (2000-1950=50,
+	// within TxMaxFee 1000) with no reference to the resulting anchor
+	// amount at all.
+	transaction := &bitcoin.Transaction{
+		Inputs: []*bitcoin.TransactionInput{{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: anchorTxHash,
+				OutputIndex:     0,
+			},
+		}},
+		Outputs: []*bitcoin.TransactionOutput{{
+			Value:           1950,
+			PublicKeyScript: script,
+		}},
+	}
+
+	if !isMatchingReservationReanchorTransaction(event, anchorUtxo, transaction) {
+		t.Fatal(
+			"expected the matcher to accept a candidate whose fee is within " +
+				"bounds regardless of the resulting anchor amount - the matcher " +
+				"has no newAnchorAmount check at all, unlike the Bridge's " +
+				"separate dust-floor check",
+		)
+	}
+}

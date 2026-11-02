@@ -3,6 +3,7 @@ package ethereum
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"time"
@@ -530,11 +531,21 @@ func decryptKey(config ethereum.Config) (*keystore.Key, error) {
 	)
 }
 
-// gasEstimateWithMargin returns the given gas estimate multiplied by a fixed
-// 20% safety margin. The original contract estimates for some transactions
-// (notably reimbursement flows) turned out to be too low and caused the
-// calls to run out of gas before reimbursement completed.
+// gasEstimateWithMargin returns the given gas estimate increased by a fixed
+// 20% safety margin, rounded up to a whole gas unit so that even tiny
+// estimates carry the full margin. The original contract estimates for some
+// transactions (notably reimbursement flows) turned out to be too low and
+// caused the calls to run out of gas before reimbursement completed.
 func gasEstimateWithMargin(gasEstimate uint64) uint64 {
-	const marginMultiplier = 1.2
-	return uint64(float64(gasEstimate) * marginMultiplier)
+	const marginPercent = 20
+	// For estimates whose +20% product or sum would overflow uint64,
+	// saturate at math.MaxUint64 to avoid a wrapped low limit.
+	if gasEstimate > (math.MaxUint64-99)/marginPercent {
+		return math.MaxUint64
+	}
+	margin := (gasEstimate*marginPercent + 99) / 100
+	if gasEstimate > math.MaxUint64-margin {
+		return math.MaxUint64
+	}
+	return gasEstimate + margin
 }

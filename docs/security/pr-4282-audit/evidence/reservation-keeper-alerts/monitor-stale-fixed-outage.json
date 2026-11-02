@@ -1,0 +1,296 @@
+{
+  "stage": "stale",
+  "runId": "fixed-outage",
+  "startedAt": "2026-10-13T11:47:43.107Z",
+  "options": {
+    "maxAgeSeconds": 1800,
+    "waitSeconds": 10
+  },
+  "assertions": [
+    {
+      "name": "local chain is chain 1 fork",
+      "ok": true,
+      "detail": {
+        "chainId": 1
+      }
+    },
+    {
+      "name": "sentry sink listening",
+      "ok": true,
+      "detail": {
+        "port": 18647
+      }
+    },
+    {
+      "name": "monitoring dist/index.js present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "stage 'stale' precondition observed in real keeper metrics",
+      "ok": true,
+      "detail": {
+        "expected": "endpoint down, or observation older/ahead beyond max age",
+        "observedCategory": "unavailable",
+        "observedGauges": null,
+        "deviationSeconds": null
+      }
+    },
+    {
+      "name": "monitoring process exit acceptable (0, or SIGTERM after report)",
+      "ok": true,
+      "detail": {
+        "code": 0,
+        "exitedBy": "self"
+      }
+    },
+    {
+      "name": "manager report status success with no errors",
+      "ok": true,
+      "detail": {
+        "fromBlock": 26154947,
+        "toBlock": 26154959,
+        "status": "success",
+        "errors": []
+      }
+    },
+    {
+      "name": "checkpoint advanced to scanned toBlock",
+      "ok": true,
+      "detail": {
+        "before": 0,
+        "after": 26154959,
+        "toBlock": 26154959
+      }
+    },
+    {
+      "name": "no pending block range or pending Sentry outbox",
+      "ok": true,
+      "detail": {
+        "pendingBlockRange": null,
+        "pendingCounts": {}
+      }
+    },
+    {
+      "name": "every handled Sentry event reached the local sink",
+      "ok": true,
+      "detail": {
+        "sinkNew": 1,
+        "handledDelta": 1
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] expected for current gauges/stage",
+      "ok": true,
+      "detail": {
+        "allowed": [
+          "metrics endpoint unavailable"
+        ],
+        "forbidden": false
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] Sentry level fatal",
+      "ok": true,
+      "detail": {
+        "level": "fatal"
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] extra.block equals scanned toBlock",
+      "ok": true,
+      "detail": {
+        "block": 26154959,
+        "toBlock": 26154959
+      }
+    },
+    {
+      "name": "[stale] reason matches real endpoint/observer state",
+      "ok": true,
+      "detail": {
+        "reason": "metrics endpoint unavailable",
+        "allowed": [
+          "metrics endpoint unavailable"
+        ]
+      }
+    },
+    {
+      "name": "[stale] chainBlockTime/observationTimestamp extras consistent",
+      "ok": true,
+      "detail": {
+        "chainBlockTime": "1804725604",
+        "observationTimestamp": null
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] message hash matches event payload",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "[Reservation keeper late acceptance proofs at risk] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper re-anchor has no eligible target] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper vault fee debt] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper unrequested deposit deadline at risk] no duplicate",
+      "ok": true,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "[Reservation keeper metrics stale] delivered exactly once",
+      "ok": true,
+      "detail": {
+        "count": 1
+      }
+    }
+  ],
+  "wait": {
+    "attempts": 1,
+    "elapsedMs": 5033,
+    "satisfied": true,
+    "lastSamples": [
+      {
+        "at": "2026-10-13T11:47:48.186Z",
+        "chain": {
+          "number": 26154959,
+          "timestamp": 1804725604
+        },
+        "category": "unavailable",
+        "fetch": {
+          "ok": false,
+          "error": "TimeoutError"
+        },
+        "gauges": null,
+        "observationTimestamp": null,
+        "samples": null
+      }
+    ]
+  },
+  "preSample": {
+    "at": "2026-10-13T11:47:48.186Z",
+    "chain": {
+      "number": 26154959,
+      "timestamp": 1804725604
+    },
+    "category": "unavailable",
+    "fetch": {
+      "ok": false,
+      "error": "TimeoutError"
+    },
+    "gauges": null,
+    "observationTimestamp": null,
+    "samples": null
+  },
+  "electrum": {
+    "source": "sdk-default-mainnet#1",
+    "network": "mainnet"
+  },
+  "postSample": {
+    "at": "2026-10-13T11:48:12.225Z",
+    "chain": {
+      "number": 26154959,
+      "timestamp": 1804725604
+    },
+    "category": "unavailable",
+    "fetch": {
+      "ok": false,
+      "error": "TimeoutError"
+    },
+    "gauges": null,
+    "observationTimestamp": null,
+    "samples": null
+  },
+  "chain": {
+    "before": {
+      "number": 26154959,
+      "timestamp": 1804725604
+    },
+    "after": {
+      "number": 26154959,
+      "timestamp": 1804725604
+    }
+  },
+  "monitor": {
+    "exitCode": 0,
+    "signal": null,
+    "exitedBy": "self",
+    "report": {
+      "fromBlock": 26154947,
+      "toBlock": 26154959,
+      "status": "success",
+      "errors": []
+    },
+    "log": "monitor-stale-fixed-outage.log.txt"
+  },
+  "persistence": {
+    "checkpointBefore": 0,
+    "checkpointAfter": 26154959,
+    "pendingBlockRange": null,
+    "pendingCounts": {},
+    "sentryHandledBefore": 0,
+    "sentryHandledAfter": 1
+  },
+  "sentry": {
+    "sinkOffsetBytes": 26729,
+    "newEvents": 1,
+    "expectedPerTitle": {
+      "Reservation keeper late acceptance proofs at risk": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper re-anchor has no eligible target": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper vault fee debt": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper unrequested deposit deadline at risk": {
+        "required": false,
+        "allowed": []
+      },
+      "Reservation keeper metrics stale": {
+        "required": true,
+        "allowed": [
+          "metrics endpoint unavailable"
+        ]
+      }
+    },
+    "keeperEvents": [
+      {
+        "title": "Reservation keeper metrics stale",
+        "level": "fatal",
+        "extra": {
+          "reason": "metrics endpoint unavailable",
+          "chainBlockTime": "1804725604",
+          "block": 26154959
+        },
+        "receivedAt": "2026-10-13T11:48:07.137Z",
+        "hashVerified": true
+      }
+    ],
+    "otherEvents": []
+  },
+  "finishedAt": "2026-10-13T11:48:12.234Z",
+  "ok": true
+}

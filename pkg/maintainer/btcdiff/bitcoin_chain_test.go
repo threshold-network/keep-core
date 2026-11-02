@@ -3,6 +3,7 @@ package btcdiff
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 )
@@ -11,6 +12,7 @@ var errNoBlocksSet = fmt.Errorf("blockchain does not contain any blocks")
 
 // localBitcoinChain represents a local Bitcoin chain.
 type localBitcoinChain struct {
+	mutex        sync.RWMutex
 	blockHeaders map[uint]*bitcoin.BlockHeader
 }
 
@@ -47,6 +49,9 @@ func (lbc *localBitcoinChain) BroadcastTransaction(
 // GetLatestBlockHeight gets the height of the latest block (tip). If the
 // latest block was not determined, this function returns an error.
 func (lbc *localBitcoinChain) GetLatestBlockHeight() (uint, error) {
+	lbc.mutex.RLock()
+	defer lbc.mutex.RUnlock()
+
 	blockchainTip := uint(0)
 	for blockHeaderHeight := range lbc.blockHeaders {
 		if blockHeaderHeight > blockchainTip {
@@ -120,6 +125,9 @@ func (lbc *localBitcoinChain) GetMempoolUtxosForPublicKeyHash(
 func (lbc *localBitcoinChain) SetBlockHeaders(
 	blockHeaders map[uint]*bitcoin.BlockHeader,
 ) {
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
 	lbc.blockHeaders = blockHeaders
 }
 
