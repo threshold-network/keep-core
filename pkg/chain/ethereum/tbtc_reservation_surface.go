@@ -32,6 +32,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -80,17 +81,6 @@ const (
 	push4Opcode  = 0x63
 	push32Opcode = 0x7f
 )
-
-// The metadata map keys solc writes into the CBOR tail of every deployed
-// contract, as CBOR text-string encodings (one length byte, then the name).
-// "bzzr" is the pre-0.5 key family and "bzzr0"/"bzzr1" its numbered forms.
-var metadataKeys = [...][]byte{
-	{0x64, 'i', 'p', 'f', 's'},
-	{0x64, 'b', 'z', 'z', 'r'},
-	{0x65, 'b', 'z', 'z', 'r', '0'},
-	{0x65, 'b', 'z', 'z', 'r', '1'},
-	{0x64, 's', 'o', 'l', 'c'},
-}
 
 // reservationReadFailure classifies a failed reservation-parameters read.
 //
@@ -241,7 +231,7 @@ func (tc *TbtcChain) eip1967Slot(
 // to every deployed contract, and none of those makes a function callable. The
 // walk therefore moves instruction by instruction, skipping the operands of
 // PUSH1..PUSH32, stops before the metadata tail - and only when that tail
-// parses as Solidity metadata - and accepts only PUSH4 <selector> immediately
+// decodes completely as Solidity metadata - and accepts only PUSH4 <selector> immediately
 // followed by EQ, the compare a compiler emits at a dispatcher entry.
 func dispatchesReservationBuild(code []byte) bool {
 	return hasDispatcherEntry(code, reservationBuildSelector)
@@ -282,7 +272,7 @@ func hasDispatcherEntry(code, selector []byte) bool {
 //
 // The trailing two bytes hold the metadata payload's length, which excludes
 // those two bytes, so a conventional 51-byte metadata map ends in 0x0033. The
-// tail is only excluded when it parses as such a map: a contract's last two
+// tail is only excluded when it decodes, in full, as such a map: a contract's last two
 // bytes can describe anything, and trimming executable bytes because they
 // happen to look like a length would erase an entry point. Unrecognised input
 // keeps the whole code in the search window, where the worst case is a refusal.
@@ -296,7 +286,8 @@ func executableCodeLength(code []byte) int {
 }
 
 // metadataPayloadLength returns the length of the CBOR metadata payload the
-// code ends with, and whether the ending parses as Solidity metadata at all.
+// code ends with, and whether that payload decodes, in full, as the metadata
+// map Solidity writes.
 func metadataPayloadLength(code []byte) (int, bool) {
 	if len(code) < 3 {
 		return 0, false
@@ -308,17 +299,153 @@ func metadataPayloadLength(code []byte) (int, bool) {
 	}
 
 	payload := code[len(code)-length-2 : len(code)-2]
-
-	// Solidity writes the metadata as a CBOR map of at most a handful of keys.
-	if payload[0] < 0xa1 || payload[0] > 0xa5 {
+	if !isSolidityMetadata(payload) {
 		return 0, false
 	}
 
-	for _, key := range metadataKeys {
-		if bytes.Contains(payload, key) {
-			return length, true
+	return length, true
+}
+
+// CBOR major types the metadata map uses (RFC 8949, section 3.1).
+const (
+	cborByteString = 2
+	cborTextString = 3
+	cborMap        = 5
+	cborSimple     = 7
+
+	// cborFalse and cborTrue are the encodings of the simple values false and
+	// true: major type 7, additional information 20 and 21.
+	cborFalse = cborSimple<<5 | 20
+	cborTrue  = cborSimple<<5 | 21
+
+	// maxMetadataEntries is the most keys Solidity writes into the map: ipfs
+	// or a bzzr hash, solc, and experimental.
+	maxMetadataEntries = 5
+)
+
+// isSolidityMetadata reports whether payload is, byte for byte, the CBOR map
+// Solidity appends to deployed code:
+//
+//   - a definite-length map of 1 to 5 entries;
+//   - every key a text string from {ipfs, bzzr0, bzzr1, solc, experimental},
+//     none of them repeated;
+//   - ipfs a 34-byte byte string, bzzr0 and bzzr1 32-byte byte strings, solc
+//     either a 3-byte byte string or a text string, experimental a boolean;
+//   - no byte left over once the entries are read.
+//
+// Every length and count must also use its shortest encoding, which is what
+// Solidity emits. Anything else is not metadata, and the caller keeps the
+// bytes in the search window.
+func isSolidityMetadata(payload []byte) bool {
+	header, next, ok := readCBORHeader(payload, 0)
+	if !ok || header.major != cborMap ||
+		header.value < 1 || header.value > maxMetadataEntries {
+		return false
+	}
+
+	seen := make(map[string]bool, header.value)
+	pos := next
+
+	for range header.value {
+		keyHeader, valuePos, ok := readCBORHeader(payload, pos)
+		if !ok || keyHeader.major != cborTextString ||
+			valuePos+keyHeader.value > len(payload) {
+			return false
+		}
+
+		key := string(payload[valuePos : valuePos+keyHeader.value])
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+
+		pos, ok = skipMetadataValue(payload, key, valuePos+keyHeader.value)
+		if !ok {
+			return false
+		}
+	}
+
+	return pos == len(payload)
+}
+
+// skipMetadataValue checks that the value of key at payload[pos:] has the type
+// and size Solidity gives that key, and returns the position just past it. An
+// unknown key is rejected here.
+func skipMetadataValue(payload []byte, key string, pos int) (int, bool) {
+	if pos >= len(payload) {
+		return 0, false
+	}
+
+	if key == "experimental" {
+		if payload[pos] != cborFalse && payload[pos] != cborTrue {
+			return 0, false
+		}
+		return pos + 1, true
+	}
+
+	header, next, ok := readCBORHeader(payload, pos)
+	if !ok || next+header.value > len(payload) {
+		return 0, false
+	}
+
+	end := next + header.value
+
+	switch key {
+	case "ipfs":
+		return end, header.major == cborByteString && header.value == 34
+	case "bzzr0", "bzzr1":
+		return end, header.major == cborByteString && header.value == 32
+	case "solc":
+		switch header.major {
+		case cborByteString:
+			return end, header.value == 3
+		case cborTextString:
+			return end, utf8.Valid(payload[next:end])
 		}
 	}
 
 	return 0, false
+}
+
+// cborHeader is a decoded CBOR item head: its major type and its argument,
+// which is the entry count of a map and the byte length of a string.
+type cborHeader struct {
+	major byte
+	value int
+}
+
+// readCBORHeader decodes the item head at data[pos:] and returns it with the
+// position of the first byte after it. It accepts only definite-length heads
+// in their shortest form, with an argument that fits in two bytes; indefinite
+// lengths, eight-byte and four-byte arguments and padded arguments are
+// rejected, as is a head cut short by the end of data.
+func readCBORHeader(data []byte, pos int) (cborHeader, int, bool) {
+	if pos >= len(data) {
+		return cborHeader{}, 0, false
+	}
+
+	major := data[pos] >> 5
+	info := int(data[pos] & 0x1f)
+	pos++
+
+	switch {
+	case info < 24:
+		return cborHeader{major, info}, pos, true
+	case info == 24:
+		if pos+1 > len(data) || data[pos] < 24 {
+			return cborHeader{}, 0, false
+		}
+		return cborHeader{major, int(data[pos])}, pos + 1, true
+	case info == 25:
+		if pos+2 > len(data) {
+			return cborHeader{}, 0, false
+		}
+		value := int(data[pos])<<8 | int(data[pos+1])
+		if value < 256 {
+			return cborHeader{}, 0, false
+		}
+		return cborHeader{major, value}, pos + 2, true
+	}
+
+	return cborHeader{}, 0, false
 }

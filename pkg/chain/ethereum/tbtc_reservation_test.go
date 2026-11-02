@@ -667,6 +667,7 @@ func metadataOnlyCode(selector []byte) []byte {
 	return withMetadata(body, solidityMetadata(func(hash []byte) {
 		hash[0] = push4Opcode
 		copy(hash[1:], selector)
+		hash[5] = eqOpcode
 	}))
 }
 
@@ -839,6 +840,12 @@ func TestReservationsVaultTrustedClassifiesReadFailures(t *testing.T) {
 					bridgeAddress,
 					invalidMetadataTailCode(reservationBuildSelector),
 				)
+			},
+		},
+		"reservations deployment: a malformed tail that holds the marker dispatcher": {
+			readErr: emptyRevertErr,
+			deploy: func(t *testing.T, client *reservationFakeClient) {
+				client.setCode(bridgeAddress, malformedMetadataDispatchCode())
 			},
 		},
 		"beacon proxy: the implementation resolves through a beacon": {
@@ -1157,6 +1164,200 @@ func TestExecutableCodeLength(t *testing.T) {
 	}
 }
 
+// cborText and cborBytes encode a CBOR text string and byte string head in
+// its shortest form. cborBytes fills the string with a fixed pattern.
+func cborText(text string) []byte {
+	return append(cborHead(3, len(text)), text...) // major type 3: text string
+}
+
+func cborBytes(length int) []byte {
+	return append(cborHead(2, length), bytes.Repeat([]byte{0x11}, length)...) // major type 2: byte string
+}
+
+func cborHead(major byte, length int) []byte {
+	if length < 24 {
+		return []byte{major<<5 | byte(length)}
+	}
+
+	return []byte{major<<5 | 24, byte(length)}
+}
+
+// cborMapOf encodes a definite-length map head for the given number of
+// entries followed by the concatenated key/value items.
+func cborMapOf(entries int, items ...[]byte) []byte {
+	payload := []byte{5<<5 | byte(entries)} // major type 5: map
+	for _, item := range items {
+		payload = append(payload, item...)
+	}
+
+	return payload
+}
+
+func concat(parts ...[]byte) []byte {
+	var out []byte
+	for _, part := range parts {
+		out = append(out, part...)
+	}
+
+	return out
+}
+
+// malformedMetadataDispatchCode is the 44-byte runtime the round-5 review
+// built. Bytes 3..41 open with a map(1) head, the text key "solc" and a 0x5b
+// value head - a byte string with an eight-byte length that cannot fit - so
+// they are not CBOR metadata, yet they satisfy a header-byte plus
+// key-substring test. Offset 17 holds a working PUSH4 <marker> EQ dispatcher
+// entry, and the last two bytes (0x0027) name a 39-byte tail that starts at
+// offset 3 and covers it.
+func malformedMetadataDispatchCode() []byte {
+	return common.FromHex(
+		"0x600a56a164736f6c635b5b60003560e01c635157ec0a14601f57" +
+			"60006000fd5b600060005260206000f30027",
+	)
+}
+
+// TestMetadataDecoder pins the strict decoder behind executableCodeLength: the
+// tail is removed only when its whole payload decodes as the CBOR map Solidity
+// writes. Every row appends the payload and its footer to a body with an
+// instruction walk of its own, then checks how much of the code is searched.
+func TestMetadataDecoder(t *testing.T) {
+	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x00}
+
+	ipfs := concat(cborText("ipfs"), cborBytes(34))
+	bzzr0 := concat(cborText("bzzr0"), cborBytes(32))
+	bzzr1 := concat(cborText("bzzr1"), cborBytes(32))
+	solcBytes := concat(cborText("solc"), []byte{0x43, 0x00, 0x08, 0x11})
+	solcText := concat(cborText("solc"), cborText("0.8.17-nightly.2022.9.1+commit.abcdef01"))
+	experimental := concat(cborText("experimental"), []byte{0xf5})
+
+	accepted := map[string][]byte{
+		"ipfs and solc bytes":                  cborMapOf(2, ipfs, solcBytes),
+		"ipfs and solc text":                   cborMapOf(2, ipfs, solcText),
+		"ipfs, experimental and solc":          cborMapOf(3, ipfs, experimental, solcBytes),
+		"experimental false":                   cborMapOf(1, cborText("experimental"), []byte{0xf4}),
+		"bzzr0 and solc":                       cborMapOf(2, bzzr0, solcBytes),
+		"bzzr1 alone":                          cborMapOf(1, bzzr1),
+		"keys in any order":                    cborMapOf(2, solcBytes, ipfs),
+		"every key at once":                    cborMapOf(5, ipfs, bzzr0, bzzr1, solcBytes, experimental),
+		"solc text with a one-byte length":     cborMapOf(1, cborText("solc"), cborText("0.8.17-nightly.2022.9.1+commit.abcdef01")),
+		"solc empty text":                      cborMapOf(1, cborText("solc"), cborText("")),
+		"experimental alone, no hash":          cborMapOf(1, experimental),
+		"solc bytes with a leading hash first": cborMapOf(2, solcBytes, bzzr1),
+	}
+
+	rejected := map[string][]byte{
+		"the round-5 counterexample's tail": malformedMetadataDispatchCode()[3:42],
+		"ipfs value is text":                cborMapOf(1, cborText("ipfs"), cborText(strings.Repeat("a", 34))),
+		"ipfs value is 33 bytes":            cborMapOf(1, cborText("ipfs"), cborBytes(33)),
+		"ipfs value is 35 bytes":            cborMapOf(1, cborText("ipfs"), cborBytes(35)),
+		"bzzr0 value is 34 bytes":           cborMapOf(1, cborText("bzzr0"), cborBytes(34)),
+		"bzzr1 value is 31 bytes":           cborMapOf(1, cborText("bzzr1"), cborBytes(31)),
+		"solc is a four-byte string":        cborMapOf(1, cborText("solc"), cborBytes(4)),
+		"solc is an integer":                cborMapOf(1, cborText("solc"), []byte{0x05}),
+		"solc text is not UTF-8":            cborMapOf(1, cborText("solc"), []byte{0x62, 0xc3, 0x28}),
+		"experimental is an integer":        cborMapOf(1, cborText("experimental"), []byte{0x01}),
+		"experimental is null":              cborMapOf(1, cborText("experimental"), []byte{0xf6}),
+		"experimental is a text string":     cborMapOf(1, cborText("experimental"), cborText("true")),
+		"value missing":                     cborMapOf(1, cborText("solc")),
+		"value cut short":                   cborMapOf(1, cborText("ipfs"), cborBytes(34)[:20]),
+		"unknown key":                       cborMapOf(2, ipfs, concat(cborText("foo1"), []byte{0x01})),
+		"unknown key only":                  cborMapOf(1, cborText("abcd"), cborBytes(3)),
+		"legacy bzzr key":                   cborMapOf(1, cborText("bzzr"), cborBytes(32)),
+		"key is a different case":           cborMapOf(1, cborText("Solc"), cborBytes(3)),
+		"key is a byte string":              cborMapOf(1, concat([]byte{0x44}, []byte("solc")), cborBytes(3)),
+		"key is an integer":                 cborMapOf(1, []byte{0x01}, cborBytes(3)),
+		"duplicate solc":                    cborMapOf(2, solcBytes, solcBytes),
+		"duplicate ipfs":                    cborMapOf(2, ipfs, ipfs),
+		"duplicate across value types":      cborMapOf(2, solcBytes, solcText),
+		"trailing byte after the map":       append(cborMapOf(2, ipfs, solcBytes), 0x00),
+		"trailing bytes after one entry":    append(cborMapOf(1, ipfs), solcBytes...),
+		"fewer entries than the head says":  cborMapOf(2, ipfs),
+		"more entries than the head says":   cborMapOf(1, ipfs, solcBytes),
+		"empty map":                         {0xa0},
+		"six entries":                       cborMapOf(6, ipfs, bzzr0, bzzr1, solcBytes, experimental, solcText),
+		"map head with a padded count":      concat([]byte{0xb8, 0x01}, ipfs),
+		"indefinite-length map":             concat([]byte{0xbf}, ipfs, solcBytes, []byte{0xff}),
+		"indefinite-length ipfs value":      cborMapOf(1, cborText("ipfs"), []byte{0x5f, 0x58, 0x22}, bytes.Repeat([]byte{0x11}, 34), []byte{0xff}),
+		"padded ipfs length":                cborMapOf(1, cborText("ipfs"), []byte{0x59, 0x00, 0x22}, bytes.Repeat([]byte{0x11}, 34)),
+		"padded key length":                 cborMapOf(1, []byte{0x78, 0x04}, []byte("solc"), cborBytes(3)),
+		"four-byte length head":             cborMapOf(1, cborText("ipfs"), []byte{0x5a, 0x00, 0x00, 0x00, 0x22}, bytes.Repeat([]byte{0x11}, 34)),
+		"eight-byte length head":            cborMapOf(1, cborText("solc"), []byte{0x5b, 0, 0, 0, 0, 0, 0, 0, 0x03}, []byte{1, 2, 3}),
+		"not a map":                         concat([]byte{0x82}, ipfs, solcBytes),
+		"empty payload byte":                {0x00},
+	}
+
+	for name, payload := range accepted {
+		t.Run("accepts "+name, func(t *testing.T) {
+			code := withMetadata(body, payload)
+			if got := executableCodeLength(code); got != len(body) {
+				t.Fatalf(
+					"executable length %d, want %d: payload %x is metadata",
+					got,
+					len(body),
+					payload,
+				)
+			}
+		})
+	}
+
+	for name, payload := range rejected {
+		t.Run("rejects "+name, func(t *testing.T) {
+			code := withMetadata(body, payload)
+			if got := executableCodeLength(code); got != len(code) {
+				t.Fatalf(
+					"executable length %d, want the whole %d bytes: payload %x is not metadata",
+					got,
+					len(code),
+					payload,
+				)
+			}
+		})
+	}
+}
+
+// TestMetadataDecoderRealTails pins the decoder against the metadata tails of
+// the deployed Bridge proxy, the deployed pre-reservations implementation and
+// the reservations-build Bridge artifact: each is a 51-byte ipfs and solc map
+// ending in 0x0033, and each is removed whole.
+func TestMetadataDecoderRealTails(t *testing.T) {
+	tails := map[string]string{
+		"deployed proxy":                     "a26469706673582212204675187caf3a43285d9a2c1844a981e977bd52a85ff073e7fc649f73847d70a464736f6c63430008090033",
+		"deployed implementation":            "a2646970667358221220a1229a1b8b3ada159804ab52b120bcf68001db932d7d9274616875cd86c9c9c764736f6c63430008110033",
+		"reservations-build Bridge artifact": "a264697066735822122074c4f0bcc671060f0b123c32740d63e0f173aec1624dfc3075d7e9f43d45d40264736f6c63430008110033",
+	}
+	body := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x00}
+
+	for name, tail := range tails {
+		t.Run(name, func(t *testing.T) {
+			code := append(append([]byte{}, body...), common.FromHex("0x"+tail)...)
+
+			if got := len(code) - len(body); got != 53 {
+				t.Fatalf("tail is %d bytes, want 51 + the 2-byte footer", got)
+			}
+			if got := executableCodeLength(code); got != len(body) {
+				t.Fatalf("executable length %d, want %d", got, len(body))
+			}
+		})
+	}
+}
+
+// TestMalformedMetadataTailKeepsDispatcher is the round-5 counterexample: the
+// tail that looks like metadata to a header-and-substring check covers a
+// working marker dispatcher, so it has to stay in the search window.
+func TestMalformedMetadataTailKeepsDispatcher(t *testing.T) {
+	code := malformedMetadataDispatchCode()
+
+	if len(code) != 44 {
+		t.Fatalf("fixture is %d bytes, want the review's 44", len(code))
+	}
+	if got := executableCodeLength(code); got != len(code) {
+		t.Fatalf("executable length %d, want the whole %d bytes", got, len(code))
+	}
+	if !hasDispatcherEntry(code, reservationBuildSelector) {
+		t.Fatal("the dispatcher entry behind the malformed tail was not found")
+	}
+}
+
 // TestHasDispatcherEntry pins the dispatch pattern: the compare is the entry
 // point. Every case here is a slice the walk has to classify without help from
 // a client or an ABI.
@@ -1181,9 +1382,9 @@ func TestHasDispatcherEntry(t *testing.T) {
 	short := []byte{0x60, 0x80, push4Opcode, selector[0], selector[1]}
 
 	// PUSH5 whose operand contains the selector and a following EQ byte.
-	preservedByWiderPush := []byte{0x64}
-	preservedByWiderPush = append(preservedByWiderPush, selector[:3]...)
-	preservedByWiderPush = append(preservedByWiderPush, 0x00, eqOpcode, 0x00)
+	preservedByWiderPush := []byte{0x64, push4Opcode}
+	preservedByWiderPush = append(preservedByWiderPush, selector...)
+	preservedByWiderPush = append(preservedByWiderPush, eqOpcode, 0x00)
 
 	testCases := map[string]struct {
 		code   []byte
