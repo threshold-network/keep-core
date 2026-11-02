@@ -289,7 +289,7 @@ Solidity checks arithmetic overflow; that alone does not prove conservation.
 - **Balance check.** One `+=` per settled re-anchor hop. **Balances.**
 - **Overflow/underflow.** Bounded above by the initial anchor minus the
   minimum (see INV-303). No truncation (uint64).
-- **Test.** `tbtc-v2@72b891eec:solidity/test/audit-poc/ReanchorCumulativeFee.t.sol:105` ("test_reanchor_accumulatesMinerFeeAcrossHops") asserts the running total after two non-zero-fee hops, and the file is the regression guard for the `+= minerFee` mutant; the archived `yarn test:audit-poc` run at the freeze head is green over all 22 audit-poc files. (The grind bound is pinned by `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts` "bounds the grind at a request-time amount floor" and the per-hop `minerFee` by `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts` "should settle re-anchor SPV proof, update reverse anchor index, and strand cleanly".)
+- **Test.** `tbtc-v2@b7aece4bf:solidity/test/audit-poc/ReanchorCumulativeFee.t.sol:105` ("test_reanchor_accumulatesMinerFeeAcrossHops") asserts the running total after two non-zero-fee hops, and the file is the regression guard for the `+= minerFee` mutant; the archived `yarn test:audit-poc` run at the freeze head is green over all 22 audit-poc files. (The grind bound is pinned by `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts` "bounds the grind at a request-time amount floor" and the per-hop `minerFee` by `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts` "should settle re-anchor SPV proof, update reverse anchor index, and strand cleanly".)
 - **Status.** `holds`
 
 ### INV-209 `mintedAmount == anchorAmount`
@@ -323,7 +323,7 @@ Solidity checks arithmetic overflow; that alone does not prove conservation.
   `Reservation.sol:156, 166, 238`). Timestamps `timeoutAt`, `expiresAt`,
   `dissolutionEligibleAt`, `reanchorCooldownUntil` are `uint32` with the 2106
   ceiling documented (`Reservation.sol:170-176, 208-220, 241`).
-- **Test.** `keep-core@680300533:pkg/maintainer/spv/reservation_uint32_horizon_test.go:46` ("TestReservationTimestampHorizon_Uint32MaxBoundary") asserts the saturating conversion at the `type(uint32).max` boundary, and `tbtc-v2@72b891eec:solidity/test-foundry/ReservationTimestampHorizon.t.sol:118` ("test_theDocumentedHorizonIsTheUint32Ceiling") pins the contract side at the same ceiling, with "test_expiresAtAndDissolutionEligibleAtReachTheCeiling" and "test_dissolutionEligibleAtOverflowRevertsOneSecondPastTheCeiling" for the two paths that read the narrowed value; the contract-side `uint32(block.timestamp)` narrowing is documented at `tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:204`. The keep-core branch head is `680300533` on `spec/c-rows-go`, an ancestor of the public keep-core head `e7f483601`, and the tbtc-v2 cases are cited at the public head `72b891eec`; the unpublished `spec/c-rows-sol` branch head `462fdd840` that first carried them is not a public revision, so the row names the public head.
+- **Test.** `keep-core@680300533:pkg/maintainer/spv/reservation_uint32_horizon_test.go:46` ("TestReservationTimestampHorizon_Uint32MaxBoundary") asserts the saturating conversion at the `type(uint32).max` boundary, and `tbtc-v2@b7aece4bf:solidity/test-foundry/ReservationTimestampHorizon.t.sol:118` ("test_theDocumentedHorizonIsTheUint32Ceiling") pins the contract side at the same ceiling, with "test_expiresAtAndDissolutionEligibleAtReachTheCeiling" and "test_dissolutionEligibleAtOverflowRevertsOneSecondPastTheCeiling" for the two paths that read the narrowed value; the contract-side `uint32(block.timestamp)` narrowing is documented at `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:204`. The keep-core branch head is `680300533` on `spec/c-rows-go`, an ancestor of the public keep-core head `e7f483601`, and the tbtc-v2 cases are cited at the public head `b7aece4bf`; the unpublished `spec/c-rows-sol` branch head `462fdd840` that first carried them is not a public revision, so the row names the public head.
 - **Status.** `holds` for the horizon boundary, client side and contract side: the client case fails when the saturating conversion is replaced by a wrapping `uint32(seconds)`, and the Foundry cases fail when the documented ceiling moves or when the two paths that read the narrowed value stop reverting one second past it.
 
 Let `C` be positions in Active or ActionPending (the proven-anchor set).
@@ -343,18 +343,18 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   empty wallet be pushed into the slash-prone moving-funds window, and would
   let a wallet holding a proven anchor close underneath it.
 - **Increment sites** (`Reservation.addAnchoredCustody`).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:577` (acceptance settlement, target wallet).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:308` (late acceptance re-take).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:828` (re-anchor settlement, target wallet).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:576` (acceptance settlement, target wallet).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:308` (late acceptance re-take).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:827` (re-anchor settlement, target wallet).
 - **Decrement sites** (`Reservation.removeAnchoredCustody`).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:823` (re-anchor settlement, source wallet).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1210` (`strandReservation`).
-  - `tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1269` (`closeReservation`, unreachable in M1).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:822` (re-anchor settlement, source wallet).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1229` (`strandReservation`).
+  - `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1288` (`closeReservation`, unreachable in M1).
 - **Consumers.**
-  `moveFunds` routes on it (`tbtc-v2@72b891eec:solidity/contracts/bridge/Wallets.sol:629-631`),
+  `moveFunds` routes on it (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:629-631`),
   `notifyWalletCloseable` adds its amount to the closing threshold
   (`:350-356`), and the wallet-lifecycle invariants read it (INV-102, INV-104).
-- **Storage.** `tbtc-v2@72b891eec:solidity/contracts/bridge/BridgeState.sol:519-524`,
+- **Storage.** `tbtc-v2@b7aece4bf:solidity/contracts/bridge/BridgeState.sol:513-518`,
   a `WalletReservationInfo` mapping appended into the storage gap; `uint32`
   count and `uint64` amount, so INV-210's width argument applies.
 - **Transition check.** An ordinary re-anchor settlement decrements the source
@@ -362,7 +362,7 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   without a replacement; a late acceptance re-take re-adds the anchor its
   position still custodies. No M1 path decrements below zero because every
   decrement is paired with a custody that a prior increment created.
-- **Test.** `tbtc-v2@72b891eec:solidity/test/bridge/Reservation.test.ts:2105` ("routes Live wallet with zero main UTXO and a proven reservation anchor to MovingFunds") and `tbtc-v2@72b891eec:solidity/test/bridge/Reservation.test.ts:2155` ("routes Live wallet with zero main UTXO and pending-only reservations to Closing"); the anchored-custody ledger section of `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts` asserts `walletAnchoredInfo(custodySource)` and `walletAnchoredInfo(custodyTarget)` after each transition, and `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:117` ("notifyReservationStranded decrements counter on a Closed wallet"), `:150` ("notifyReservationStranded decrements counter on a Terminated wallet") and `:263` ("notifyReservationStranded strands a Closing wallet once both dissolution eligibility and the closing period have passed") assert the `removeAnchoredCustody` release stays balanced. `none` identified for a dedicated conservation test of the six mutation sites.
+- **Test.** `tbtc-v2@b7aece4bf:solidity/test/bridge/Reservation.test.ts:2104` ("routes Live wallet with zero main UTXO and a proven reservation anchor to MovingFunds") and `tbtc-v2@b7aece4bf:solidity/test/bridge/Reservation.test.ts:2154` ("routes Live wallet with zero main UTXO and pending-only reservations to Closing"); the anchored-custody ledger section of `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts` asserts `walletAnchoredInfo(custodySource)` and `walletAnchoredInfo(custodyTarget)` after each transition, and `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:117` ("notifyReservationStranded decrements counter on a Closed wallet"), `:150` ("notifyReservationStranded decrements counter on a Terminated wallet") and `:263` ("notifyReservationStranded strands a Closing wallet once both dissolution eligibility and the closing period have passed") assert the `removeAnchoredCustody` release stays balanced. `none` identified for a dedicated conservation test of the six mutation sites.
 - **Status.** `holds` by the routing tests, the anchored-custody ledger and the occupancy release cases; `holds-untested` for an exhaustive conservation test.
 
 ### INV-212 Whole-system fungible supply exceeds backing by exactly the recorded fee debt
@@ -394,15 +394,15 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   unmint and backing change is balanced: Bitcoin in flight for an ordinary
   redemption, an unminted deposit, and any loss outside the reservation path
   break it until they settle, which is the same limit INV-705 records.
-- **Enforcing code.** `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:211-231`
+- **Enforcing code.** `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-251`
   (burn what the reserve covers, record the shortfall as debt),
   `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:354-371`
   (unmint TBTC and decrease the Bank balance in one call),
   `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:237-262`
   (repay: pull, burn, decrement the debt),
-  `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:297-319`
+  `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-340`
   (sweep: repay the debt first, then move the excess).
-- **Test.** `tbtc-v2@72b891eec:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa accounting campaign (10 of 10 properties pass over 1,857,446 calls at `c8350d109`) recomputes the relation over sequences, through `property_supplyStaysInLockstepWithRoutedSatoshi` and the fee-debt properties. `none` identified for an end-to-end check of the bitcoind-backed equality.
+- **Test.** `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa accounting campaign (10 of 10 properties pass over 1,857,446 calls at `c8350d109`) recomputes the relation over sequences, through `property_supplyStaysInLockstepWithRoutedSatoshi` and the fee-debt properties. `none` identified for an end-to-end check of the bitcoind-backed equality.
 - **Status.** `holds` for the at-rest equality as the campaign executes it: the sites above keep it by inspection, INV-705 covers the incremental form, and the campaign covers the whole-system form over sequences. The residual is that the Medusa harness has no Bitcoin side, so there is no bitcoind-backed end-to-end equality.
 
 ---

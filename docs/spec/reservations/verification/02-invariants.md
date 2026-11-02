@@ -99,16 +99,16 @@ pending-deposit state, and vault status are legal.
   would leave a pending authorization without a signer.
 - **Enforcing code.** Routing: `moveFunds` calls `beginWalletClosing` only when
   `mainUtxoHash == 0 && walletAnchoredInfo[w].count == 0`
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Wallets.sol:623-641`,
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:623-641`,
   gate at :629-631); the closing threshold on `notifyWalletCloseable` adds the
   proven-anchor amount (`:350-356`). Finalization:
   `notifyWalletClosingPeriodElapsed` hard-requires
   `walletReservationInfo[w].count == 0` before `finalizeWalletClosing`
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Wallets.sol:392-395`).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:392-395`).
   `beginWalletClosing`/`finalizeWalletClosing` deliberately skip both checks
   (`Wallets.sol:649`, `:668`).
-- **Test.** Routing both ways: `tbtc-v2@72b891eec:solidity/test/bridge/Reservation.test.ts:2105` ("routes Live wallet with zero main UTXO and a proven reservation anchor to MovingFunds") and `:2155` ("routes Live wallet with zero main UTXO and pending-only reservations to Closing"); the `Closing -> Closed` count gate `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation").
-- **Status.** `holds` at `tbtc-v2@72b891eec` for the routed cases and the `Closing -> Closed` count gate. The version recorded before VF-11 named `walletReservationInfo` for the routing clause and did not match the published code (VF-11).
+- **Test.** Routing both ways: `tbtc-v2@b7aece4bf:solidity/test/bridge/Reservation.test.ts:2104` ("routes Live wallet with zero main UTXO and a proven reservation anchor to MovingFunds") and `:2154` ("routes Live wallet with zero main UTXO and pending-only reservations to Closing"); the `Closing -> Closed` count gate `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation").
+- **Status.** `holds` at `tbtc-v2@b7aece4bf` for the routed cases and the `Closing -> Closed` count gate. The version recorded before VF-11 named `walletReservationInfo` for the routing clause and did not match the published code (VF-11).
 
 ### INV-103 Termination permits an unresolved position; cleanup requires an explicit caller
 
@@ -126,8 +126,8 @@ taken on 2026-10-29 and the code does not change.
   Eventual cleanup requires a functioning caller; the EVM does not schedule it.
 - **Why.** Distinguishes available recovery from a guaranteed state transition.
 - **Enforcing code.** `terminateWallet` (`Wallets.sol:690-701`, no count
-  check); `notifyReservationStranded` (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1314-1346`,
-  wallet-state require at :1334-1346); client watcher dispatches
+  check); `notifyReservationStranded` (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1333-1365`,
+  wallet-state require at :1353-1365); client watcher dispatches
   `Closed`/`Terminated` to the stranding check, `Closing` to the
   dissolution-and-closing-period variant, and `Live` to the
   dissolution-eligible variant
@@ -157,22 +157,22 @@ taken on 2026-10-29 and the code does not change.
   right, which `requestReservationReanchor` still accepts from a Closing source.
 - **Why.** A safety gate on closing does not imply automatic cleanup after termination.
 - **Enforcing code.** Normal closing checks zero reserved count
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Wallets.sol:392-395`); the
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:392-395`); the
   routing gate reads the proven-anchor ledger instead
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Wallets.sol:629-631`, INV-102).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:629-631`, INV-102).
   Termination has no such gate (`Wallets.sol:690`).
   Permissionless stranding requires an `Active` position
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1321-1324`).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1340-1343`).
   The settlement hook strands on `Closed` or `Terminated` only
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
-  state check at :243-246; calls at :608 and :772).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:234-253`,
+  state check at :243-246; calls at :607 and :771).
 - **Test.** `Bridge.ReservationStrandingLibrary.test.ts` "strands an Active
   reservation on a Closed wallet" (:471) and "strands an Active reservation on
-  a Terminated wallet" (:357); `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:1308`
+  a Terminated wallet" (:357); `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1308`
   (a Closed target strands on an on-time proof) and
-  `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:1434`
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1434`
   (a Closing target is not stranded, state stays Active, no capacity released).
-- **Status.** holds at `tbtc-v2@72b891eec` for the corrected statement. The
+- **Status.** holds at `tbtc-v2@b7aece4bf` for the corrected statement. The
   version recorded before VF-10 listed Closing among the settlement-strand
   targets and did not match the published code (VF-10).
 
@@ -253,7 +253,7 @@ taken on 2026-10-29 and the code does not change.
   decrements it
   (`tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1445`), and
   the vault-change gate sits at `:1550` (`pendingReservedDeposits == 0`).
-- **Test.** The gate itself: `none` at the pin. At `d20cf74ba`, `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` "lets governance re-point the reservation vault once the last pending reserved deposit is released" (`tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:434`) exercises the gate after a release; at the freeze head the same case is `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:443` ("lets governance re-point the reservation vault once the last pending reserved deposit is released"). The counter's own conservation is pinned (see INV-206).
+- **Test.** The gate itself: `none` at the pin. At `d20cf74ba`, `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` "lets governance re-point the reservation vault once the last pending reserved deposit is released" (`tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:434`) exercises the gate after a release; at the freeze head the same case is `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:443` ("lets governance re-point the reservation vault once the last pending reserved deposit is released"). The counter's own conservation is pinned (see INV-206).
 - **Status.** `holds` (gate, at `d20cf74ba` via tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:434 and at the freeze head via the same case). The counter it reads is `holds` (INV-206).
 
 ### INV-110 Vault status is the only switch that routes a settlement credit to the vault vs. the depositor
@@ -336,7 +336,7 @@ taken on 2026-10-29 and the code does not change.
   whose anchor a wallet may already have signed (`requestNonce != 0`) be
   swept, and without routing pooled credit into the reservation vault, whose
   `receiveBalanceIncrease` mints on any Bank credit (F-1).
-- **Test (all `tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts`).** the guard list keeps its structure and its line numbers are re-pinned at the freeze head: "reverts after a pending acceptance request" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:533`), "reverts after a timed-out acceptance request" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:553`); "reverts when the release vault is the reservation vault" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:576`), "reverts when the release vault is not trusted" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:588`), "cannot be swept with the vault parameter set to the reservation vault after a release" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:637`); "reverts when the deposit was not revealed as reserved" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:496`), "reverts when the deposit is marked stale" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:601`); "reverts when the caller is not the deposit's depositor" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:485`); "reverts when the refund margin for an ordinary sweep is exhausted" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:616`); "reverts for a deposit that was never revealed" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:513`); effects: "releases to a trusted vault, an ordinary sweep proof succeeds and credits the vault through the Bank" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:358`) asserts `pendingReservedDeposits` 1 -> 0, `isReservedDeposit` false and `reservedDepositWallet` zero; "releases to the zero address and an ordinary sweep credits the depositor Bank balance" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:415`); "leaves no acceptance request or stale notification possible after a release" (`tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:657`).
+- **Test (all `tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts`).** the guard list keeps its structure and its line numbers are re-pinned at the freeze head: "reverts after a pending acceptance request" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:533`), "reverts after a timed-out acceptance request" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:553`); "reverts when the release vault is the reservation vault" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:576`), "reverts when the release vault is not trusted" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:588`), "cannot be swept with the vault parameter set to the reservation vault after a release" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:637`); "reverts when the deposit was not revealed as reserved" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:496`), "reverts when the deposit is marked stale" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:601`); "reverts when the caller is not the deposit's depositor" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:485`); "reverts when the refund margin for an ordinary sweep is exhausted" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:616`); "reverts for a deposit that was never revealed" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:513`); effects: "releases to a trusted vault, an ordinary sweep proof succeeds and credits the vault through the Bank" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:358`) asserts `pendingReservedDeposits` 1 -> 0, `isReservedDeposit` false and `reservedDepositWallet` zero; "releases to the zero address and an ordinary sweep credits the depositor Bank balance" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:415`); "leaves no acceptance request or stale notification possible after a release" (`tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:657`).
 - **Status.** `holds` at the freeze head for rules 2 to 6 and the effects; `holds-untested` for rule 1 and for the "no other counter changes" claim (true by construction, see the counter table). Not present at the pin. The refusal of the reservation vault is evaluated at release time only (see F-5).
 
 ---
@@ -367,7 +367,7 @@ taken on 2026-10-29 and the code does not change.
   `ReservationProofs.sol:262-304`, `:473-626`, `:640-821`;
   wallet closing/termination rules in `Wallets.sol:363-389`, `:649-713`.
 - **Test.** The individual transition tests are listed in INV-101 through INV-111. The Medusa accounting campaign (10 of 10 properties pass over 1,857,446 calls at `c8350d109`) recomputes the illegal rows of the table as state relations over transaction sequences; the surface campaign (23 of 23) does the same for the wallet-lifecycle rows. `none` identified for the complete state-relation table.
-- **Status.** `holds` for the state-relation table as the campaigns execute it; the residual is that the Medusa handler mirrors `BridgeState.Storage` and delegatecalls the real router rather than deploying `tbtc-v2@72b891eec:solidity/contracts/bridge/Bridge.sol`, and lab PC-L03 (which declares INV-112) failed.
+- **Status.** `holds` for the state-relation table as the campaigns execute it; the residual is that the Medusa handler mirrors `BridgeState.Storage` and delegatecalls the real router rather than deploying `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Bridge.sol`, and lab PC-L03 (which declares INV-112) failed.
 
 ### INV-113 D31 acceptance reserve is a request-time count bound
 
@@ -424,7 +424,7 @@ Rows where a doc or comment disagrees with the code at the commit named in the r
 |---|---|---|
 | `requirements.md:553` (FR-31) | `releaseReservedDepositToPool(depositKey, vault)` MUST let the depositor release an un-requested reserved deposit to the pool; revert unless the caller is the depositor, the record is pending, `requestNonce` is zero, the refund margin holds and the vault is the zero address or a trusted non-reservation vault. | Matches the code at `d20cf74ba`: `tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1373-1451` (guards :1379-1433, effects :1441-1446), router `tbtc-v2@d20cf74ba:solidity/contracts/bridge/ReservationRouter.sol:433-437`. Not in the pinned commit `9d2086965` (0 matches). No drift against `d20cf74ba`; the doc is ahead of the pin only. |
 | `architecture.md:600` | Lists `releaseReservedDepositToPool` as a milestone-1 pending-deposit transition: record fully cleared, deposit re-routed to the chosen vault or the zero address, normal sweep can settle it. | Matches `d20cf74ba` (all four record fields cleared, tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1441-1444; `deposits[k].vault` rewritten, tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1446). Absent at the pin. |
-| `m1-b-implementation.md:306-308` (old text) | "B deletes its only reader - re-anchor's `< dissolutionEligibleAt` gate". | Fixed in the chapter: M1's only reader is the shared `eligible` flag in `notifyReservationStranded` (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1337-1349`), which reads for `Live` and `Closing` wallets. The old text at the pin claimed the Closing branch was the sole reader. |
+| `m1-b-implementation.md:306-308` (old text) | "B deletes its only reader - re-anchor's `< dissolutionEligibleAt` gate". | Fixed in the chapter: M1's only reader is the shared `eligible` flag in `notifyReservationStranded` (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1356-1368`), which reads for `Live` and `Closing` wallets. The old text at the pin claimed the Closing branch was the sole reader. |
 | `test/bridge/Bridge.ReservationStranding.test.ts:16-18` (header comment) | `Closing`/`Closed` unreachable for an Active reservation because `beginWalletClosing`/`finalizeWalletClosing` unconditionally require zero count. | The zero-count gate is in `moveFunds` (`Wallets.sol:618`) and `notifyWalletClosingPeriodElapsed` (`Wallets.sol:385`); `beginWalletClosing`/`finalizeWalletClosing` skip it, and `terminateWallet` (`Wallets.sol:690`) is ungated so a Terminated wallet can hold an Active reservation. |
 | `m1-b-implementation.md` (stranding-watcher row, text before keep-core #4365) | The keep-core stranding watcher "triggers only on `StateClosed`/`StateTerminated`; no client path triggers the Closing-eligible branch - permissionless `notifyReservationStranded` is the backstop." | At the pinned keep-core (`f99ef96e3`) the watcher *does* handle `Closing`: `checkReservationStrandingForClosingWallet` (`keep-core:pkg/maintainer/spv/reservation_stranding_watch.go:139-147`, dispatch at `:148-162`) strands a Closing wallet's reservation once the chain head reaches `DissolutionEligibleAt`. The "no client path triggers it" claim is stale. |
 | `tbtc-v2@d20cf74ba:solidity/contracts/bridge/BridgeState.sol:33` (struct doc) | "`isReserved` is permanent; the remaining fields ... may be cleared after acceptance or staleness." | `releaseReservedDepositToPool` clears `isReserved` too (`tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1441`). The field-level comment at `tbtc-v2@d20cf74ba:solidity/contracts/bridge/BridgeState.sol:37-45` was updated; this struct doc and the mapping comment at `tbtc-v2@d20cf74ba:solidity/contracts/bridge/BridgeState.sol:474-477` ("permanent classification ... making a reserved deposit eligible for an ordinary sweep") were not. |

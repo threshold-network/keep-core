@@ -739,7 +739,7 @@ governance change to the delay. The re-anchor eligibility gate the reference des
 has been removed in milestone 1 (re-anchor is unbounded in time), but `dissolutionEligibleAt` is
 not unread: `notifyReservationStranded` requires
 `block.timestamp >= reservation.dissolutionEligibleAt` for a `Live` or `Closing` custodying
-wallet (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1330-1343`), so those
+wallet (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1349-1362`), so those
 two branches are the milestone-1 on-chain readers. It is still a commitment recorded in storage for
 milestone 2 to honour more broadly, not dead code to drop. `cumulativeReanchorFee` and
 `reanchorCooldownUntil` are appended at

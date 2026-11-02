@@ -153,7 +153,7 @@ User impact: the retiring wallet cannot accept new positions.
 Existing anchors remain under its Bitcoin key until they move.
 Stranding releases protocol accounting; it does not transfer Bitcoin to the owner.
 
-Test: the Closing-source request and stranding tests cited in the user stories cover individual transitions. The `Closing -> Closed` count gate is executed by `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation"); the opt-in `tbtc-v2@72b891eec:solidity/test/audit-poc/F08StrandBeforeReanchor.t.sol:320` ("test_F08_strandedWalletClosesWithAnchorUnspent") asserts the revert and the close after the strand. No named test covers this entire saturated recovery.
+Test: the Closing-source request and stranding tests cited in the user stories cover individual transitions. The `Closing -> Closed` count gate is executed by `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation"); the opt-in `tbtc-v2@b7aece4bf:solidity/test/audit-poc/F08StrandBeforeReanchor.t.sol:320` ("test_F08_strandedWalletClosesWithAnchorUnspent") asserts the revert and the close after the strand. No named test covers this entire saturated recovery.
 
 Status: `holds`.
 
@@ -205,7 +205,7 @@ Write-time guards:
 term within [90d, 730d]
 (`tbtc-v2:solidity/contracts/bridge/Reservation.sol:1383`),
 timeout above `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`
-(smallest accepted value 14,402 s; `tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1653-1657`), the
+(smallest accepted value 14,402 s; `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1669-1673`), the
 feasibility guard on both setters and `updateDepositParameters` while
 a vault is set (`tbtc-v2:solidity/contracts/bridge/BridgeState.sol:681`),
 and the slot-capacity invariant

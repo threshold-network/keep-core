@@ -301,16 +301,16 @@ Acceptance sets
 `< dissolutionEligibleAt` gate, so an essentials-only rewrite would naturally drop
 the write as dead code. **It was not dropped**: the field's own storage comment
 states the policy directly — "Two of the four wallet states `notifyReservationStranded`
-admits read this field, through the shared `eligible` flag" (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:221-234`).
+admits read this field, through the shared `eligible` flag" (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:221-234`).
 Without it, m2's dissolution would have no eligibility date for any m1-era position,
 and the snapshot semantics that keep governance changes non-retroactive ("later
 governance changes never move the eligibility time of a term already granted",
-could not be reconstructed. `tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:198-202`) could not be reconstructed.
+could not be reconstructed. `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:198-202`) could not be reconstructed.
 
 The general rule: **storage-complete means written, not merely declared.**
 
 shared by the Live and Closing branches of `notifyReservationStranded`
-(`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1337-1349`): `Live` strands once `block.timestamp >= dissolutionEligibleAt`,
+(`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1356-1368`): `Live` strands once `block.timestamp >= dissolutionEligibleAt`,
 `Closing` additionally waits out the wallet closing period; `Terminated` and `Closed`
 strand without it. Every other reader of `expiresAt` and `dissolutionEligibleAt` is cut
 or deleted: redemption's strict `< expiresAt` check, renewal — or was deliberately

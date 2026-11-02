@@ -107,7 +107,7 @@ all-gaps report:
   write sites present and paired: acceptance-settlement write in
   `ReservationProofs.sol`, stranding delete in `Reservation.sol`.
 - **`dissolutionEligibleAt` write survives** in acceptance settlement
-despite having no m1 reader after PR #1120 removed the re-anchor gate — at the freeze pin `72b891eec` the stranding flag in `notifyReservationStranded` (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1337`) reads it, so it is not unread; retained for M2's dissolution.
+despite having no m1 reader after PR #1120 removed the re-anchor gate — at the freeze pin `b7aece4bf` the stranding flag in `notifyReservationStranded` (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1356`) reads it, so it is not unread; retained for M2's dissolution.
 - **Storage layout parity** — `Bridge.StorageLayout.test.ts` exists and is
   an append-only layout-parity assertion suite, consistent with §4.5's
   launch gate.

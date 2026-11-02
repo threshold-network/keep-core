@@ -35,7 +35,7 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
   `:1193-1195`, `:1275-1277`), and the older `TimedOut` generation that this
   settlement leaves behind can then never settle, because the position's
   anchor has moved away from the source anchor that generation recorded
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:321-330`),
   which INV-503 and EC-14 already accept.
 - **Enforcing code.** On-time current-generation check
   (`ReservationProofs.sol:482-487` acceptance, `:663-667` re-anchor);
@@ -111,11 +111,11 @@ taken on 2026-10-29 and the code does not change.
     `block.timestamp >= dissolutionEligibleAt`; `Closing` once **both**
     `block.timestamp >= dissolutionEligibleAt` **and**
     `block.timestamp >= closingStartedAt + walletClosingPeriod`
-    (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1331-1342`).
+    (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1350-1361`).
     The closing-period half is an exclusive re-anchor window, not an extra
     delay on dissolution.
   - Late acceptance settlement is allowed iff
-    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@72b891eec:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
+    `block.timestamp <= timeoutAt + termSeconds` (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationProofs.sol:204-211`,
     equality allowed, `"Late acceptance settlement window expired"` at
     :210). Late re-anchor settlement carries no such bound.
   - Reveal caps the refund deadline: `refundDeadline <= now + term +
@@ -132,7 +132,7 @@ taken on 2026-10-29 and the code does not change.
   a `Closing` wallet additionally has to be past
   `closingStartedAt + walletClosingPeriod` (`:379-392`), so the client no longer
   sends the notification the contract would revert
-  (`tbtc-v2@72b891eec:solidity/contracts/bridge/Reservation.sol:1330-1342`).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1349-1361`).
   A wallet that fails either gate sets the `recheck` flag and is retried on a
   later pass. Before keep-core #4365 the `Closing` check read the
   dissolution-eligible time alone and logged the revert without setting the
@@ -142,16 +142,16 @@ taken on 2026-10-29 and the code does not change.
   refundDeadline (close bound exact)" (:405) and "should revert when
   timeoutAt + 24h == refundDeadline + 1s" (:433);
   `Bridge.ReservationStrandingLibrary.test.ts` "succeeds when reservation is
-  dissolution-eligible" (:1366); at `tbtc-v2@72b891eec`:
-  `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
+  dissolution-eligible" (:1366); at `tbtc-v2@b7aece4bf`:
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:222`
   (Closing rejected past dissolution eligibility while the closing period runs),
   `:263` and `:313` (stranding once both conditions hold, inclusive at the end
   of the closing period), `:386` and `:397` (a `Live` wallet before and after
   dissolution eligibility), and
-  `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:446`
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:446`
   (late acceptance one second past the window reverts), `:456`
   (`"Late acceptance settlement window expired"`).
-- **Status.** holds at `tbtc-v2@72b891eec` for the corrected windows. The
+- **Status.** holds at `tbtc-v2@b7aece4bf` for the corrected windows. The
   `Closing` clause recorded before VF-10 named dissolution eligibility only and
   did not match the published code (VF-10).
 
@@ -223,7 +223,7 @@ taken on 2026-10-29 and the code does not change.
   The fee remains in the vault unless a later explicit operation moves or burns it.
 - **Enforcing code.** `tbtc-v2:solidity/contracts/vault/ReservationVault.sol:175-196`
   computes the gross mint and depositor transfer.
-- **Test.** `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:131` ("TestSatoshiToTbtcBaseUnits_Vector") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:170` ("TestSatoshiToTbtcBaseUnits_Constant") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:334` ("TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale"); and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:94` ("test_vectorFileStatesTheAgreedFactor") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:118` ("test_vectorFileContainsTheDefiningPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:138` ("test_vaultSatoshiMultiplierIsTenToTheTen") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:159` ("test_vaultMultiplierMatchesEverySharedVectorPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:192` ("test_vaultFeeArithmeticOnASharedVectorPair") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:266` ("test_tbtcVaultConstantAndConversionUseTheSameFactor") and `tbtc-v2@72b891eec:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:321` ("test_conversionTruncatesTheRemainderLikeTheSdk") tie the satoshi to the TBTC base unit and to the vault's fee-reserve scale; the contract half is the vault's `SATOSHI_MULTIPLIER` at `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:85` and the net-transfer and fee-retention cases cited in INV-701. The branch head is `680300533` on keep-core `spec/c-rows-go`, an ancestor of the held keep-core head `prep/kc-freeze-candidates` at `8e7e2b30f`; the freeze-day keep-core push publishes both.
+- **Test.** `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:131` ("TestSatoshiToTbtcBaseUnits_Vector") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:170` ("TestSatoshiToTbtcBaseUnits_Constant") and `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:334` ("TestSatoshiToTbtcBaseUnits_VaultFeeReserveScale"); and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:94` ("test_vectorFileStatesTheAgreedFactor") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:118` ("test_vectorFileContainsTheDefiningPair") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:138` ("test_vaultSatoshiMultiplierIsTenToTheTen") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:159` ("test_vaultMultiplierMatchesEverySharedVectorPair") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:192` ("test_vaultFeeArithmeticOnASharedVectorPair") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:266` ("test_tbtcVaultConstantAndConversionUseTheSameFactor") and `tbtc-v2@b7aece4bf:solidity/test-foundry/reservations/ReservationSatoshiUnits.t.sol:321` ("test_conversionTruncatesTheRemainderLikeTheSdk") tie the satoshi to the TBTC base unit and to the vault's fee-reserve scale; the contract half is the vault's `SATOSHI_MULTIPLIER` at `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:84` and the net-transfer and fee-retention cases cited in INV-701. The branch head is `680300533` on keep-core `spec/c-rows-go`, an ancestor of the held keep-core head `prep/kc-freeze-candidates` at `8e7e2b30f`; the freeze-day keep-core push publishes both.
 - **Status.** `holds` for the combined cross-repo unit property, client side and contract side: the three client cases fail on every pair when the factor is changed from 1e10 to 1e9, and the seven Foundry cases fail when the vault's `SATOSHI_MULTIPLIER` stops being 10^10, when the shared vector stops matching the vault, when the vault fee arithmetic stops matching a shared vector pair, or when the contract conversion stops truncating the remainder the way the SDK does. The shared vector file is the single source both sides read, which is what makes the cross-repo property checkable rather than asserted.
 
 ### INV-705 Miner-fee shortfall is an incremental backing difference, not the only possible system loss
@@ -237,9 +237,9 @@ taken on 2026-10-29 and the code does not change.
   A later debt repayment burns supply without another Bitcoin miner fee.
   This does not assert that fee debt captures every possible pooled loss or uncredited spend.
 - **Enforcing code.** `financeInKindFee` records the shortfall
-  (`tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:211-229`).
-  Repayment and debt-first sweeping decrease it (:237-261, :297-318).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-249`).
+  Repayment and debt-first sweeping decrease it (tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:237-261, tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-339).
   `_burnFromReserve` floors fractional-satoshi token balance before coverage
-  (:354-371). A fractional satoshi does not cover a whole-satoshi fee.
-- **Test.** `tbtc-v2@72b891eec:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa surface campaign (23 of 23 properties pass over 1,000,600 calls at `c8350d109`) executes `property_inKindFeeDebtMatchesFinancing`. `none` identified for the complete Bitcoin-plus-token conservation property.
+  (tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:354-371). A fractional satoshi does not cover a whole-satoshi fee.
+- **Test.** `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa surface campaign (23 of 23 properties pass over 1,000,600 calls at `c8350d109`) executes `property_inKindFeeDebtMatchesFinancing`. `none` identified for the complete Bitcoin-plus-token conservation property.
 - **Status.** `holds` for the incremental monetary property as the campaign executes it. The residual is that the conservation property is a vault-stack statement, not a Bitcoin-plus-token one, so no end-to-end Bitcoin-backed equality exists.

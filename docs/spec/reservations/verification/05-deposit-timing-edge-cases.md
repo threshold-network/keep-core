@@ -41,7 +41,7 @@ Equality passes the cooldown check; all other request guards still apply.
 The client uses chain time for the same deadline
 (`keep-core:pkg/tbtcpg/reservation_reanchor.go:472`).
 
-Test: `tbtc-v2@72b891eec:solidity/test/audit-poc/RequireBoundaryGuards.t.sol:61` ("test_reanchor_allowedExactlyAtCooldownEnd") (revert one second before, success at equality, permissionless caller); the Hardhat negative `tbtc-v2@72b891eec:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1717` ("rejects when source wallet is Live and call is not privileged") covers the inside-cooldown side; `keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime` (`keep-core@e7f483601:pkg/tbtcpg/reservation_reanchor_custody_test.go:265`). The archived `yarn test:audit-poc` run at the freeze head is green.
+Test: `tbtc-v2@b7aece4bf:solidity/test/audit-poc/RequireBoundaryGuards.t.sol:61` ("test_reanchor_allowedExactlyAtCooldownEnd") (revert one second before, success at equality, permissionless caller); the Hardhat negative `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1706` ("rejects when source wallet is Live and call is not privileged") covers the inside-cooldown side; `keep-core` `TestReservationReanchorTask_CooldownGateUsesChainTime` (`keep-core@e7f483601:pkg/tbtcpg/reservation_reanchor_custody_test.go:265`). The archived `yarn test:audit-poc` run at the freeze head is green.
 
 Status: `holds`
 
@@ -87,7 +87,7 @@ generation's window. The client evicts a tracked TimedOut candidate on
 the same chain-head comparison
 (`keep-core:pkg/maintainer/spv/reservation_proof_loop.go:547`).
 
-Test: `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:434` ("should still load a late acceptance at the last second of the window") and `:446` ("should reject a late acceptance one second after the window closes"); the existing late-settlement case is `tbtc-v2@72b891eec:solidity/test/bridge/ReservationProofs.test.ts:930` ("should settle a timed-out older generation without newer generation (late settlement)").
+Test: `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:434` ("should still load a late acceptance at the last second of the window") and `:446` ("should reject a late acceptance one second after the window closes"); the existing late-settlement case is `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:930` ("should settle a timed-out older generation without newer generation (late settlement)").
 
 Status: `holds` (the two cases above pin the inclusive boundary second of the late window, which the row's hedge said no test covered).
 
