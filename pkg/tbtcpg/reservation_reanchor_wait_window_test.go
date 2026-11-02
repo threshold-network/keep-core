@@ -184,3 +184,117 @@ func TestWaitForReservationReanchorRequestMined_IgnoresCurrentGeneration(t *test
 		)
 	}
 }
+
+// TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockRange
+// pins that a single-block range where startBlock == endBlock is queried
+// rather than being skipped as empty. A boundary mutation from > to >=
+// treats startBlock == endBlock as an empty range and returns false without
+// querying the block, dropping events occurring on that single block.
+func TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockRange(t *testing.T) {
+	const block = 100
+	fetchCalled := false
+
+	found, err := reservationHistoryExistsInChunks(
+		block,
+		block,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]int, error) {
+			fetchCalled = true
+			if chunkStartBlock != block || chunkEndBlock != block {
+				t.Fatalf("expected query on [%d..%d], got [%d..%d]", block, block, chunkStartBlock, chunkEndBlock)
+			}
+			return []int{1}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fetchCalled {
+		t.Fatal("expected fetch to be called for single-block range startBlock == endBlock")
+	}
+	if !found {
+		t.Fatal("expected event on single block to be found")
+	}
+}
+
+// TestReservationHistoryExistsInChunks_MutationSurvivors_ContiguousChunkProgression
+// pins that successive chunks progress strictly contiguously without overlapping
+// the previous chunk's end block (chunkStartBlock = chunkEndBlock + 1). An arithmetic
+// mutation from + 1 to - 1 sets chunkStartBlock = chunkEndBlock - 1, causing redundant
+// overlapping queries and corrupting chunk boundaries.
+func TestReservationHistoryExistsInChunks_MutationSurvivors_ContiguousChunkProgression(t *testing.T) {
+	originalSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = 100
+	t.Cleanup(func() { tbtc.ReservationEventScanMaxBlockSpan = originalSpan })
+
+	const start = 1000
+	const end = 1250 // produces 3 chunks: [1000..1099], [1100..1199], [1200..1250]
+
+	var queries [][2]uint64
+
+	found, err := reservationHistoryExistsInChunks(
+		start,
+		end,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]string, error) {
+			queries = append(queries, [2]uint64{chunkStartBlock, chunkEndBlock})
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no events found")
+	}
+
+	expected := [][2]uint64{
+		{1000, 1099},
+		{1100, 1199},
+		{1200, 1250},
+	}
+	if len(queries) != len(expected) {
+		t.Fatalf("expected %d queries, got %d: %v", len(expected), len(queries), queries)
+	}
+	for i, exp := range expected {
+		if queries[i] != exp {
+			t.Fatalf("query %d mismatch: expected %v, got %v", i, exp, queries[i])
+		}
+	}
+}
+
+// TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan
+// pins that a chunk span of one block yields one query per block. With a
+// span of one, chunkEndBlock equals chunkStartBlock, so a boundary mutation
+// from < to <= on the wrap guard widens every chunk to the whole remaining
+// range and breaks the provider cap the span exists to honour.
+func TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan(t *testing.T) {
+	originalSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = 1
+	t.Cleanup(func() { tbtc.ReservationEventScanMaxBlockSpan = originalSpan })
+
+	var queries [][2]uint64
+
+	found, err := reservationHistoryExistsInChunks(
+		500,
+		502,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]string, error) {
+			queries = append(queries, [2]uint64{chunkStartBlock, chunkEndBlock})
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no events found")
+	}
+
+	expected := [][2]uint64{{500, 500}, {501, 501}, {502, 502}}
+	if len(queries) != len(expected) {
+		t.Fatalf("expected %d queries, got %d: %v", len(expected), len(queries), queries)
+	}
+	for i, exp := range expected {
+		if queries[i] != exp {
+			t.Fatalf("query %d mismatch: expected %v, got %v", i, exp, queries[i])
+		}
+	}
+}

@@ -44,6 +44,10 @@ equivalent_mutants:
     line: 'if err != nil {'
     mutator: CONDITIONALS_NEGATION
     reason: 'The notification has already been submitted; the mutant moves one log line and nothing else.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if max <= 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At max == 0 both branches return a zero-length slice (nil vs make([]..., 0, 0)); len(batch) == 0 and range iteration are identical for all callers.'
   - file: pkg/maintainer/spv/reservation_event_scan.go
     line: 'if currentBlock > reservationEventScanConfirmationBlocks {'
     mutator: CONDITIONALS_BOUNDARY
@@ -241,3 +245,7 @@ equivalent_mutants:
     line: '); err != nil {'
     mutator: CONDITIONALS_NEGATION
     reason: 'The block is an error log plus a return, so the mutant moves logging between the error log and the closing info line.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Covers only the > to >= mutant: at equality chunkEndBlock == endBlock the branch assigns chunkEndBlock = endBlock, setting the variable to the value it already holds. The < to <= mutant on the same line is not equivalent (a span of one makes chunkEndBlock equal chunkStartBlock) and is killed by TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan.'
