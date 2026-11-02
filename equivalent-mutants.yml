@@ -260,4 +260,4 @@ equivalent_mutants:
   - file: pkg/tbtcpg/reservation_reanchor.go
     line: 'if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {'
     mutator: CONDITIONALS_BOUNDARY
-    reason: 'Covers both mutants on this line: at equality chunkEndBlock == endBlock the branch assigns chunkEndBlock = endBlock, setting the variable to the value it already holds; and chunkSpan >= 1 with chunkStartBlock <= endBlock ensures chunkEndBlock = chunkStartBlock + chunkSpan - 1 cannot equal chunkStartBlock without uint64 overflow, so the second equality is unreachable.'
+    reason: 'Covers only the > to >= mutant: at equality chunkEndBlock == endBlock the branch assigns chunkEndBlock = endBlock, setting the variable to the value it already holds. The < to <= mutant on the same line is not equivalent (a span of one makes chunkEndBlock equal chunkStartBlock) and is killed by TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan.'

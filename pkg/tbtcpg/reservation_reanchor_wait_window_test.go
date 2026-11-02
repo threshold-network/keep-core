@@ -260,3 +260,41 @@ func TestReservationHistoryExistsInChunks_MutationSurvivors_ContiguousChunkProgr
 		}
 	}
 }
+
+// TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan
+// pins that a chunk span of one block yields one query per block. With a
+// span of one, chunkEndBlock equals chunkStartBlock, so a boundary mutation
+// from < to <= on the wrap guard widens every chunk to the whole remaining
+// range and breaks the provider cap the span exists to honour.
+func TestReservationHistoryExistsInChunks_MutationSurvivors_SingleBlockChunkSpan(t *testing.T) {
+	originalSpan := tbtc.ReservationEventScanMaxBlockSpan
+	tbtc.ReservationEventScanMaxBlockSpan = 1
+	t.Cleanup(func() { tbtc.ReservationEventScanMaxBlockSpan = originalSpan })
+
+	var queries [][2]uint64
+
+	found, err := reservationHistoryExistsInChunks(
+		500,
+		502,
+		func(chunkStartBlock, chunkEndBlock uint64) ([]string, error) {
+			queries = append(queries, [2]uint64{chunkStartBlock, chunkEndBlock})
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no events found")
+	}
+
+	expected := [][2]uint64{{500, 500}, {501, 501}, {502, 502}}
+	if len(queries) != len(expected) {
+		t.Fatalf("expected %d queries, got %d: %v", len(expected), len(queries), queries)
+	}
+	for i, exp := range expected {
+		if queries[i] != exp {
+			t.Fatalf("query %d mismatch: expected %v, got %v", i, exp, queries[i])
+		}
+	}
+}
