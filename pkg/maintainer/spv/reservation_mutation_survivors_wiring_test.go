@@ -628,3 +628,106 @@ func TestWireReservationWatchers_MutationSurvivors_RestartsAfterRunError(t *test
 		}
 	})
 }
+
+// TestRetryReservationStrandingStartupScan_MutationSurvivors_CheckErrorQueued
+// pins that when a wallet's stranding check in the second-chance startup scan
+// returns an error (err != nil), the wallet is queued on the actionTimeoutWatcher
+// (actionTimeoutWatcher != nil) for subsequent poll tick rechecks.
+func TestRetryReservationStrandingStartupScan_MutationSurvivors_CheckErrorQueued(t *testing.T) {
+	spvChain := newLocalChain()
+	strandingWatcher := newReservationStrandingWatcher(spvChain)
+	watcher := NewReservationActionTimeoutWatcher(
+		spvChain,
+		0,
+		common.Address{},
+		strandingWatcher,
+		0,
+		nil,
+	)
+
+	wallet := walletPKHAt(0x71)
+	spvChain.setWallet(wallet, &tbtc.WalletChainData{State: tbtc.StateClosed})
+	// Fail the stranding check's reservations fetch with an error, while recheck is false.
+	spvChain.setWalletReservationsErr(errors.New("RPC failure fetching reservations"))
+
+	retryReservationStrandingStartupScan(
+		context.Background(),
+		spvChain,
+		strandingWatcher,
+		watcher,
+		[][20]byte{wallet},
+		0,
+	)
+
+	if !strandingRecheckQueued(watcher, wallet) {
+		t.Fatal(
+			"expected wallet to be scheduled on stranding recheck queue " +
+				"when checkStrandingForWalletState returns an error",
+		)
+	}
+}
+
+// TestSubscribeReservationWalletClosed_MutationSurvivors_CheckErrorQueued
+// pins that when OnWalletClosed fires and checkReservationStrandingForWallet
+// returns an error (err != nil), the wallet is queued on the actionTimeoutWatcher
+// (actionTimeoutWatcher != nil) for subsequent poll tick rechecks.
+func TestSubscribeReservationWalletClosed_MutationSurvivors_CheckErrorQueued(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(1000)
+	spvChain.setBlockCounter(blockCounter)
+
+	wallet := walletPKHAt(0x72)
+	walletID := [32]byte{0x72}
+
+	// Install the registration event so resolveWalletPublicKeyHash succeeds.
+	spvChain.addNewWalletRegisteredEvent(&tbtc.NewWalletRegisteredEvent{
+		EcdsaWalletID:       walletID,
+		WalletPublicKeyHash: wallet,
+		BlockNumber:         100,
+	})
+
+	strandingWatcher := newReservationStrandingWatcher(spvChain)
+	strandingWatcher.retryDelay = time.Millisecond
+
+	ratw := NewReservationActionTimeoutWatcher(
+		spvChain,
+		0,
+		common.Address{},
+		strandingWatcher,
+		0,
+		nil,
+	)
+
+	walletClosedChain := &mockWalletClosedChain{}
+	subscribeReservationWalletClosed(
+		ctx,
+		walletClosedChain,
+		spvChain,
+		strandingWatcher,
+		ratw,
+	)
+
+	// Make checkReservationStrandingForWallet fail with an error when reading reservations.
+	spvChain.setWalletReservationsErr(errors.New("RPC failure in stranding check"))
+
+	walletClosedChain.onWalletClosedHandler(&tbtc.WalletClosedEvent{
+		WalletID: walletID,
+	})
+
+	waitForReservationWiringCondition(
+		t,
+		2*time.Second,
+		func() bool { return strandingRecheckQueued(ratw, wallet) },
+	)
+
+	if !strandingRecheckQueued(ratw, wallet) {
+		t.Fatal(
+			"expected closed wallet to be scheduled on stranding recheck queue " +
+				"when checkReservationStrandingForWallet returns an error",
+		)
+	}
+}

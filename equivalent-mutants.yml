@@ -44,6 +44,22 @@ equivalent_mutants:
     line: 'if err != nil {'
     mutator: CONDITIONALS_NEGATION
     reason: 'The notification has already been submitted; the mutant moves one log line and nothing else.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if q.head >= 64 && q.head*2 >= len(q.order) {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Covers both boundary mutants on this line: compaction is an internal memory optimization of the FIFO slice backing array; whether compaction runs at head == 64 or 65, and whether it requires head*2 >= len or > len, all queue operations (push, pop, popBatch, len, has) yield identical elements and state.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if q.head >= 64 && q.head*2 >= len(q.order) {'
+    mutator: CONDITIONALS_NEGATION
+    reason: 'Covers both negation mutants on this line: internal compaction heuristic; the queue interface contract is unchanged whether compaction runs or is skipped.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if q.head >= 64 && q.head*2 >= len(q.order) {'
+    mutator: ARITHMETIC_BASE
+    reason: 'Mutates head*2 to head/2 in the compaction threshold, altering only the memory recycling frequency without observable effect on queue contents or ordering.'
+  - file: pkg/maintainer/spv/reservation_action_timeout_watch.go
+    line: 'if max <= 0 {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'At max == 0 both branches return a zero-length slice (nil vs make([]..., 0, 0)); len(batch) == 0 and range iteration are identical for all callers.'
   - file: pkg/maintainer/spv/reservation_event_scan.go
     line: 'if currentBlock > reservationEventScanConfirmationBlocks {'
     mutator: CONDITIONALS_BOUNDARY
@@ -241,3 +257,7 @@ equivalent_mutants:
     line: '); err != nil {'
     mutator: CONDITIONALS_NEGATION
     reason: 'The block is an error log plus a return, so the mutant moves logging between the error log and the closing info line.'
+  - file: pkg/tbtcpg/reservation_reanchor.go
+    line: 'if chunkEndBlock > endBlock || chunkEndBlock < chunkStartBlock {'
+    mutator: CONDITIONALS_BOUNDARY
+    reason: 'Covers both mutants on this line: at equality chunkEndBlock == endBlock the branch assigns chunkEndBlock = endBlock, setting the variable to the value it already holds; and chunkSpan >= 1 with chunkStartBlock <= endBlock ensures chunkEndBlock = chunkStartBlock + chunkSpan - 1 cannot equal chunkStartBlock without uint64 overflow, so the second equality is unreachable.'
