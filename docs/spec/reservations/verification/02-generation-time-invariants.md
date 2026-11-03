@@ -89,12 +89,13 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
 - **Statement.** A timed-out re-anchor sets
   `reanchorCooldownUntil = now + (timeoutAt - requestedAt)`.
   An ordinary request requires `now >= reanchorCooldownUntil`.
-  Only the governance-discriminated request bypasses this check.
-  Owner, maintainer and source-member hold-cap exemptions do not bypass it.
-- **Enforcing code.** `Reservation.sol:758-762` checks the governance flag.
-  `Reservation.sol:984-986` writes the new deadline.
-- **Test.** `Bridge.ReservationStrandingLibrary.test.ts` "rejects when
-  reanchor cooldown is in effect" (:1610).
+  A privileged request bypasses this check: the governance-discriminated request,
+  the owner, an SPV maintainer and a caller with a proven source-wallet member proof.
+  At `9d2086965` only the governance flag bypassed it.
+- **Enforcing code.** `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:849-854` checks `isPrivileged`, built at `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:831-835`.
+  `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1067-1068` writes the new deadline.
+- **Test.** `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1670` "rejects when
+  reanchor cooldown is in effect"; `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:1429` ("lets the reservation owner request past a running cooldown").
 - **Status.** holds.
 
 ### INV-603 Term / dissolution-eligible / refund-deadline windows

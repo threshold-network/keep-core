@@ -138,8 +138,8 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
   (`ReservationRouter.sol:247-252`).
   The separate `isPrivileged` expression includes owner, maintainer and
   proven source members (`Reservation.sol:786-790`).
-  It exempts them from the hold cap, not Live-source rotation or cooldown.
-  Retiring-source and target guards are at :802, :810 and :814 (at `9d2086965`).
+  It exempts them from the hold cap and, at `b7aece4bf`, from the cooldown (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:849-854`), but not from Live-source rotation.
+  Retiring-source and target guards are at `tbtc-v2@9d2086965:solidity/contracts/bridge/Reservation.sol:802`, `:810` and `:814` (at `9d2086965`).
   At `tbtc-v2@806b1106f` the same `isPrivileged` expression
   (`tbtc-v2@806b1106f:solidity/contracts/bridge/Reservation.sol:814-818`) also
   exempts a request off a non-Live source from the target count and amount

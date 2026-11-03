@@ -234,7 +234,7 @@ leaves Live), `:379` (blocks every acceptance while `L <= R`); SDK mirror
 
 ### PAR-X5 Action-timeout vs REQUEST_TIMEOUT_SAFETY_MARGIN
 `reservationActionTimeout > REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1`
-(2h + 2h + 1 s) at `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1669-1673`,
+(2h + 2h + 1 s) at `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1669-1673` (the floor; the ceiling `reservationActionTimeout <= MAX_RESERVATION_TERM` (730 days, `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1686-1689`) keeps the `uint32` `timeoutAt` snapshot from overflowing),
 so the wallet validator always has a signing window before the action can time
 out, including for a deposit revealed in the same block as the request: the
 first admissible signing timestamp is `revealedAt + DEPOSIT_MIN_AGE + 1` and the
@@ -462,7 +462,7 @@ A mainnet value set is valid iff it satisfies, simultaneously:
    below `maxActive` is only admissible while `(L - R) * N` leaves room.
 5. PAR-6: `maxReservationsPerWallet > 0`; PAR-13: `maxActiveReservations > 0`;
    PAR-F1: `handoffReserveWallets > 0` (`806b1106f` caps setter).
-6. PAR-3: term within [90d, 730d]; PAR-7: `reservationActionTimeout > REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1` (2h + 2h + 1 s).
+6. PAR-3: term within [90d, 730d]; PAR-7: `reservationActionTimeout > REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1` (2h + 2h + 1 s) and `<= MAX_RESERVATION_TERM` (730 days).
 
 ## Findings
 - None `violated`. At the original pins PAR-X4 (saturation sizing) was a

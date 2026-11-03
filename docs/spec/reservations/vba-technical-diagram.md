@@ -241,7 +241,7 @@ The position is Active. The owner holds ordinary tBTC: the anchor amount minus t
      the meantime onto the new wallet.
   IF THE REQUEST TIMES OUT: anyone can file the timeout. The target slot is
   released, the position returns to Active on the same source wallet, and a
-  cooldown applies to the next non-governance request. No one is slashed.
+  cooldown applies to the next non-privileged request (not governance, the owner, an SPV maintainer or a proven source-wallet member). No one is slashed.
 ```
 
 Once a retiring wallet holds no reservations and its remaining balance is below the dust threshold, signer software reports that, so the wallet can begin closing.
@@ -373,7 +373,7 @@ Both shapes are enforced at proof time by the Bridge: exactly one input, exactly
 | Situation | Who can act | Result |
 |-----------|-------------|--------|
 | Acceptance not signed in time | Anyone files the timeout; the depositor can request again | Capacity released; new request with fresh nonce while refund window open; no slashing. |
-| Re-anchor not completed in time | Anyone files the action timeout | Target slot released; position back to Active on same source; cooldown on next non-governance request; no slashing. |
+| Re-anchor not completed in time | Anyone files the action timeout | Target slot released; position back to Active on same source; cooldown on next non-privileged request; no slashing. |
 | Deposit never accepted | Anyone marks it stale after refund deadline; governance can force it earlier | Pending record cleared; bitcoin refunded via the deposit script refund path on Bitcoin. |
 | Custodying wallet terminated | Anyone files the stranding | Capacity released, position Stranded. Owner's tBTC unchanged; no compensation. |
 | Proof arrives late or after wallet stopped | SPV maintainer submits it | Timed-out acceptance provable within deadline plus term; re-anchor provable anytime; wallet already Closing/Closed/Terminated means stranded. |
@@ -401,7 +401,7 @@ All values below are set by the Threshold Council through Bridge governance: beg
 | `reservationMaxSingleAmount` | Cap on a single position; 0 turns it off. |
 | `maxActiveReservations` | Global cap on open positions; must be greater than 0. |
 
-Enforced relations: max fee > 0; minimum > max fee; term 90-730 days; renewal window > 0 and < term; action timeout > `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1` (2h + 2h + 1 s); per-wallet count > 0; total cap <= max open positions x single cap (when both set); vault address can only change when no reservation is open and no reserved deposit is pending.
+Enforced relations: max fee > 0; minimum > max fee; term 90-730 days; renewal window > 0 and < term; action timeout > `REQUEST_TIMEOUT_SAFETY_MARGIN + DEPOSIT_MIN_AGE + 1` (2h + 2h + 1 s) and <= `MAX_RESERVATION_TERM` (730 days); per-wallet count > 0; total cap <= max open positions x single cap (when both set); vault address can only change when no reservation is open and no reserved deposit is pending.
 
 Launch posture: M1 launches with a small total cap, limited to a small set of integrators, with `maxReservationsPerWallet` set to 1 and a planned custody term of 365 days (12 months, confirmed on 2026-10-29). Quotable code defaults: initiation fee 0.40% at deploy, hard-capped at 5%; minimum deposit age 2 hours; refund safety margin 24 hours; term range 90-730 days; signers wait 6 Bitcoin confirmations before proposing. The other values above are governance-set.
 

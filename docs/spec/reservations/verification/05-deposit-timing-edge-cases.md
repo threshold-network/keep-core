@@ -32,11 +32,11 @@ the cooldown deadline. Equality passes this guard.
 Actual: timeout sets `reanchorCooldownUntil = now + (timeoutAt - requestedAt)`
 (`tbtc-v2:solidity/contracts/bridge/Reservation.sol:984`).
 The request requires `block.timestamp >= reanchorCooldownUntil`
-when its `privileged` argument is false
-(`tbtc-v2:solidity/contracts/bridge/Reservation.sol:758-762`).
-Only the governance-discriminated router entry supplies true.
-The owner, SPV maintainer and proven source member bypass the hold cap,
-not the cooldown. They must also wait.
+when `isPrivileged` is false
+(`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:849-854`).
+`isPrivileged` is true for the governance-discriminated router entry, the
+owner, an SPV maintainer and a caller with a proven source-wallet member
+proof (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:831-835`). Only a caller who is not privileged waits.
 Equality passes the cooldown check; all other request guards still apply.
 The client uses chain time for the same deadline
 (`keep-core:pkg/tbtcpg/reservation_reanchor.go:472`).

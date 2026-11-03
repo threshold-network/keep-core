@@ -53,7 +53,7 @@ A pending third-party hold cannot block this separate privileged request merely 
 The exception does not bypass other authorization requirements.
 The source must be retiring and the target must be a different Live wallet.
 The reservation must be Active and its anchor must satisfy the amount floor.
-Only the governance-discriminated call bypasses the re-anchor cooldown.
+A privileged caller bypasses the re-anchor cooldown: the governance-discriminated call, the reservation owner, an SPV maintainer or a proven source-wallet member (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:849-854`).
 A caller cannot replace an already-pending action on the same reservation.
 
 The proposal validator checks the authorized action, wallet states, signing window, source anchor and fee rules.

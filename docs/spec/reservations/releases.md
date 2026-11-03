@@ -154,7 +154,7 @@ obligations rather than M1 behaviour.
 | AR-11 | Expiry does not automatically release an accepted position | holds | `verification/10-accepted-risks.md:113` |
 | AR-12 | Fee debt can grow while the reserve target is zero | holds | `verification/10-accepted-risks.md:143` |
 | AR-13 | The stranding startup scan only looks back 30 days | holds-untested | `verification/10-accepted-risks.md:152` |
-| AR-14 | A re-anchor timeout starts a cooldown that blocks everyone but governance | holds | `verification/10-accepted-risks.md:161` |
+| AR-14 | A re-anchor timeout starts a cooldown that blocks every caller who is not privileged | holds | `verification/10-accepted-risks.md:161` |
 | AR-15 | `activeReservationsCount` under-reports slot pressure during pending re-anchors | holds-untested | `verification/10-accepted-risks.md:170` |
 | AR-16 | The `receiveBalanceIncrease` ordering gap is enforced by the deploy script | holds-untested | `verification/10-accepted-risks.md:179` |
 | AR-17 | An anchor output above the action amount reverts with an arithmetic panic | holds | `verification/10-accepted-risks.md:189` |
