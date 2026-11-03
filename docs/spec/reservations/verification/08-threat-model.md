@@ -144,7 +144,7 @@ Attack steps.
 
 Impact: unbacked TBTC mint.
 
-Mitigations: `validateProof` checks the input/output vectors, the transaction merkle inclusion, the coinbase merkle inclusion, and the header-chain difficulty against the relay's current/previous epoch difficulty, gated by `txProofDifficultyFactor` (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:188`); `evaluateProofDifficulty` reverts "Insufficient accumulated difficulty in header chain" when work is below the relay's epoch (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:325`). Reorg protection comes from the confirmation depth: the SPV maintainer scans to tip-minus-12 and requires `requiredConfirmations` before building a proof (`keep-core:pkg/maintainer/spv/reservation_event_scan.go:27`).
+Mitigations: `validateProof` checks the input/output vectors, the transaction merkle inclusion, the coinbase merkle inclusion, and the header-chain difficulty against the relay's current/previous epoch difficulty, gated by `txProofDifficultyFactor` (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:188`); `evaluateProofDifficulty` reverts "Insufficient accumulated difficulty in header chain" when work is below the relay's epoch (`tbtc-v2:solidity/contracts/bridge/BitcoinTx.sol:325`). Reorg protection comes from the confirmation depth: the SPV maintainer scans to tip-minus-12 and requires `requiredConfirmations` before building a proof (`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:36`).
 
 Residual: the relay difficulty oracle is trusted (Trust assumption); a maintainer cannot forge a valid-enough proof, but the *trust* in the relay is the boundary. Compromising the relay to understate difficulty reopens this.
 
@@ -444,7 +444,7 @@ Status: `holds`. The residual is that the owner's ability to pull earmarked fee 
 
 ## TM-20 Bitcoin reorg or fee manipulation
 
-Attacker: a Bitcoin miner. Entry point: the SPV confirmation depth used to settle anchors/re-anchors (`keep-core:pkg/maintainer/spv/reservation_event_scan.go:27`). Preconditions: a recent block can be orphaned.
+Attacker: a Bitcoin miner. Entry point: the SPV confirmation depth used to settle anchors/re-anchors (`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:36`). Preconditions: a recent block can be orphaned.
 
 Attack steps.
 1. Build a competing chain and orphan the block that confirmed a reservation anchor or re-anchor.

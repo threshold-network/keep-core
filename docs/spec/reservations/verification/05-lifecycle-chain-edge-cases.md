@@ -50,7 +50,7 @@ Expected: shallow unprocessed reorgs should not produce premature event processi
 Recovery from a deeper processed-history reorg needs a separate cursor/state policy.
 
 Actual: the shared scan range stays 12 blocks behind the head
-(`keep-core:pkg/maintainer/spv/reservation_event_scan.go:21`).
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:30-36`).
 The proof loop retains a scan cursor and retries chunks.
 These facts do not prove rewind after a reorg deeper than that lag.
 If Ethereum unmines a settlement transaction, its state writes and logs are undone.
@@ -163,7 +163,7 @@ A coordination window at B qualifies; if B is between windows, work starts at a 
 Leader and followers agree only when their builds contain the same network entry.
 A rolling upgrade with mismatched activation tables does not ensure agreement.
 Scan ranges begin at the configured B and stay behind the tip
-(`keep-core:pkg/maintainer/spv/reservation_event_scan.go:43`).
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:44-74`).
 An unconfigured network instead returns `math.MaxUint64`
 (`keep-core:pkg/tbtc/coordination.go:119`).
 
