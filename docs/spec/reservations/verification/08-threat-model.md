@@ -306,7 +306,7 @@ Unspent funding retains its refund path after locktime.
 Confirmed acceptance spends need proof recovery, not a refund.
 No attacker-amplified workload was demonstrated in this review.
 
-Mitigations: all hot-path scans are activation-block-bounded, chunked, and stop 12 blocks behind the tip (`keep-core:pkg/maintainer/spv/reservation_event_scan.go:19`); candidate discovery is capped (`maxReservationAcceptanceCandidatesPerRun = 50`, `keep-core:pkg/tbtcpg/reservation_acceptance.go:120`); per-tick watcher budgets (`keep-core:pkg/maintainer/spv/reservation_action_timeout_watch.go:37`); the re-anchor target search is bounded to `ReservationReanchorLookBackBlocks = 216000` blocks (`keep-core:pkg/tbtcpg/reservation_reanchor.go:21`).
+Mitigations: all hot-path scans are activation-block-bounded, chunked, and stop 12 blocks behind the tip (`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:36`); candidate discovery is capped (`maxReservationAcceptanceCandidatesPerRun = 50`, `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:121`); per-tick watcher budgets (`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:37`); the re-anchor target search is bounded to `ReservationReanchorLookBackBlocks = 216000` blocks (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:23`).
 
 D28 adds historical wallet discovery outside the reservation activation boundary, still in bounded chunks
 (`keep-core@9c4e1b221:pkg/maintainer/spv/reservation_keeper_risk.go:48-82`).

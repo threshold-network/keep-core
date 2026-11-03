@@ -102,7 +102,7 @@ keep-core attaches the router ABI to `bridgeAddress`
 (`keep-core:pkg/chain/ethereum/tbtc.go:369-378`).
 Indexing below preserves declaration order; non-indexed fields remain data.
 SPV and timeout scans use 10,000-block chunks
-(`keep-core:pkg/maintainer/spv/reservation_event_scan.go:19`, `:115-133`).
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:26-28`, `:115-129`).
 `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` `WalletReservations` further bounds a
 wallet's scan by that wallet's earliest `NewWalletRegistered` block
 (`keep-core:pkg/chain/ethereum/tbtc.go:1335`, resolver under `:1335`).
