@@ -709,9 +709,9 @@ the contract's design and an actual client duty.
 - `mapping(bytes20 => WalletReservationInfo) walletReservationInfo` — per-wallet `{ uint64 amount;
   uint32 count; }` packed into a single 12-byte, one-slot struct (`BridgeState.sol:61-64`).
 - `mapping(uint256 => PendingReservedDeposit) pendingReservedDeposit` — reveal-time facts
-  (`{ bool isReserved; bytes20 walletPubKeyHash; uint32 refundDeadline; bool
-  refundDeadlineValidated; }`, one slot, `BridgeState.sol:36-58`); `isReserved` is permanent, the
-  other three fields are cleared by staleness/acceptance but the permanent flag keeps the record
+  (`{ bool isReserved; bytes20 walletPubKeyHash; uint32 refundDeadline; }`, one slot,
+  `tbtc-v2@b7aece4bf:solidity/contracts/bridge/BridgeState.sol:36-54`); `isReserved` is permanent, the
+  other two fields are cleared by staleness/acceptance but the permanent flag keeps the record
   recognizable as reservation-routed for the deposit's whole life.
 - `mapping(bytes20 => uint32) pendingThirdPartyReanchorHolds` (`BridgeState.sol:496-504`) — one
   slot per target wallet, counting the concurrently pending third-party re-anchor holds that

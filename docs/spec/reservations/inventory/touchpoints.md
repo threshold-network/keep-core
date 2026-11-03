@@ -21,7 +21,7 @@ The deposit reveal path is the primary integration seam. A deposit is classified
 | `DepositRevealed` event includes `vault` param | `Deposit.sol:134` | #1088 | event | yes | yes | The `vault` parameter is the last field in the event, emitted at `Deposit.sol:404`. Off-chain consumers read this to determine reserved classification. |
 | `isReservedDeposit` local variable in `_revealDeposit` | `Deposit.sol:210-211` | #1094 | internal | yes | yes | `bool isReservedDeposit = reveal.vault != address(0) && reveal.vault == self.reservationVault`. This is the reveal-time classification. It reads `self.reservationVault` from `BridgeState`. |
 | Reserved-deposit refund deadline extraction | `Deposit.sol:220-226` | #1094 | internal | yes | yes | When `depositRevealAheadPeriod == 0` (ordinary deposits skip validation), reserved deposits still extract the refund deadline via `BTCUtils.reverseUint32(reveal.refundLocktime)`. This prevents acceptance requests for deposits whose script deadline the wallet can never sign. |
-| `pendingReservedDeposit` mapping write | `Deposit.sol:361-369` | #1094 | storage | yes | yes | If `isReservedDeposit`, writes `BridgeState.PendingReservedDeposit(true, reveal.walletPubKeyHash, refundDeadline, refundDeadlineValidated)` and increments `self.pendingReservedDeposits`. The `isReserved` flag is permanent; the remaining fields may be cleared after acceptance or staleness. |
+| `pendingReservedDeposit` mapping write | `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Deposit.sol:385-393` | #1094 | storage | yes | yes | If reserved (`isReserved`), writes `BridgeState.PendingReservedDeposit(true, reveal.walletPubKeyHash, refundDeadline)` (three fields; the `refundDeadlineValidated` field of the #1094 tip no longer exists) and increments `self.pendingReservedDeposits`. The `isReserved` flag is permanent; the remaining fields may be cleared after acceptance or staleness. |
 | `deposit.vault = reveal.vault` storage write | `Deposit.sol:355` | #1088 | storage | yes | yes | Every deposit stores its vault address, not just reserved ones. |
 
 ### Reveal path summary (item 2)
@@ -33,7 +33,7 @@ A deposit is revealed with a reservation and a designated wallet through the `_r
 3. Classifies the deposit: `isReservedDeposit = reveal.vault != address(0) && reveal.vault == self.reservationVault` (`:210-211`).
 4. For reserved deposits, extracts the refund deadline even when `depositRevealAheadPeriod` is zero (`:220-226`).
 5. Stores the deposit request with `deposit.vault = reveal.vault` (`:355`).
-6. If reserved, writes `self.pendingReservedDeposit[depositKey] = PendingReservedDeposit(true, reveal.walletPubKeyHash, refundDeadline, refundDeadlineValidated)` and increments `self.pendingReservedDeposits` (`:361-369`).
+6. If reserved, writes `self.pendingReservedDeposit[depositKey] = PendingReservedDeposit(true, reveal.walletPubKeyHash, refundDeadline)` and increments `self.pendingReservedDeposits` (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Deposit.sol:385-393`; the `refundDeadlineValidated` field of the #1094 tip no longer exists).
 7. Emits `DepositRevealed` with the vault address (`:404`).
 
 The `isReserved` flag in `PendingReservedDeposit` (`BridgeState.sol:38`) is permanent: it is never cleared, even after acceptance or staleness. This is the reveal-time classification that makes the deposit permanently ineligible for ordinary sweep and permanently eligible for reservation anchoring. The `Bridge.isReservedDeposit(uint256)` view (`Bridge.sol:1632-1638`) reads `self.pendingReservedDeposit[depositKey].isReserved`.

@@ -325,7 +325,7 @@ Every Bitcoin-side action against a position is an explicit, nonce-keyed
 
 - `PendingReservedDeposit` (`BridgeState.sol`): `isReserved`,
   `walletPubKeyHash` (designated wallet, from the reveal script commitment),
-  `refundDeadline`, `refundDeadlineValidated`
+  `refundDeadline`
 - `pendingReservedDeposits` counter — incremented on reveal, decremented on
   acceptance or on being marked stale
 
