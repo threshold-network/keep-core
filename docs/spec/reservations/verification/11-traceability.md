@@ -137,7 +137,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [INV-502](02-generation-time-invariants.md) | On-time settlement must name the current generation; late settlement names an older timed-out one | holds | `ReservationProofs.test.ts` "should unwind pending newer acceptance generation when settling older generation late" (:920) ... |
 | [INV-503](02-generation-time-invariants.md) | A timed-out generation remains settleable only within its window; a re-anchored anchor cannot be replayed | holds | `Bridge.ReservationSourceAnchorBinding.test.ts` "rejects a timed-out re-anchor replay against a later anchor" (:412). |
 | [INV-601](02-generation-time-invariants.md) | `timeoutAt` and the timeout notification boundary | holds | `Bridge.ReservationStrandingLibrary.test.ts` "reverts when action has not timed out" (:1027). |
-| [INV-602](02-generation-time-invariants.md) | Re-anchor cooldown | holds | `Bridge.ReservationStrandingLibrary.test.ts` "rejects when reanchor cooldown is in effect" (:1610). |
+| [INV-602](02-generation-time-invariants.md) | Re-anchor cooldown | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1670` "rejects when reanchor cooldown is in effect" ... |
 | [INV-603](02-generation-time-invariants.md) | Term / dissolution-eligible / refund-deadline windows | holds | `Reservation.test.ts` "should succeed when timeoutAt + 24h == refundDeadline (close bound exact)" (:405) and ... |
 | [INV-701](02-generation-time-invariants.md) | The vault mints gross and retains the fee; debt is the only mechanism that can under-cover a miner fee | holds | `ReservationVault.test.ts` "should transfer the net amount (gross minus fee) to the depositor" (:201), "should retain the fee in the vault" (:205) ... |
 | [INV-702](02-generation-time-invariants.md) | Acceptance settlement uses the deposit's stored vault, subject to current trust | holds | `ReservationProofs.test.ts` "should credit the deposit's immutable vault, not a reservationVault repointed mid-flight" (:1757). |
@@ -441,7 +441,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [AR-11](10-accepted-risks.md) | Expiry does not automatically release an accepted position | holds | none recorded |
 | [AR-12](10-accepted-risks.md) | Fee debt can grow while the reserve target is zero | holds | none recorded |
 | [AR-13](10-accepted-risks.md) | The stranding startup scan only looks back 30 days | holds | none recorded |
-| [AR-14](10-accepted-risks.md) | A re-anchor timeout starts a cooldown that blocks everyone but governance | holds | none recorded |
+| [AR-14](10-accepted-risks.md) | A re-anchor timeout starts a cooldown that blocks every caller who is not privileged | holds | none recorded |
 | [AR-15](10-accepted-risks.md) | `activeReservationsCount` under-reports per-wallet slot pressure during pending re-anchors | holds-untested | none recorded |
 | [AR-16](10-accepted-risks.md) | The `receiveBalanceIncrease` ordering gap is enforced by the deploy script, not on-chain | holds-untested | none recorded |
 | [AR-17](10-accepted-risks.md) | An anchor output above the action amount reverts with an arithmetic panic | holds | none recorded |
