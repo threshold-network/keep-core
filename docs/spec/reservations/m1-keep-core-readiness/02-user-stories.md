@@ -8,11 +8,11 @@ This document enumerates the M1 reservation scenarios keep-core's client must ha
 - Actor: Reservation Owner
 - Goal: Have a revealed reserved deposit turned into a live, custodied reservation without manual intervention.
 - Benefit: The owner's deposit is trustlessly anchored to a wallet the moment the Bridge authorizes it, with no separate claim step.
-- Precondition: Bridge issued a `ReservationAnchorProposal` (`keep-core@96530a787:pkg/tbtc/reservation.go:281-296`)
+- Precondition: Bridge issued a `ReservationAnchorProposal` (`keep-core@f66f11240:pkg/tbtc/reservation.go:257-272`)
 - Trigger: Client receives proposal and successfully constructs SPV proof.
-- Expected keep-core behavior: Construct unsigned anchor transaction, assemble transaction builder (`keep-core@96530a787:pkg/tbtc/reservation.go:343`, `AssembleReservationAnchorTransaction`), submit to Bitcoin chain, and return to Bridge.
-- Acceptance criteria: the assembled transaction has exactly one input and one output paying the target wallet (`TestAssembleReservationTransactions_HappyPathShape`); `ReservationAcceptanceTask.Run` (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:243`) is reachable from the coordination checklist (see `01-gap-analysis.md` Blocker row, resolved) and produces a proposal that passes `ValidateReservationAnchorProposal`.
-- Current status: implemented (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:243` `Run`, the `ReservationAcceptanceTask` entry point)
+- Expected keep-core behavior: Construct unsigned anchor transaction, assemble transaction builder (`keep-core@f66f11240:pkg/tbtc/reservation.go:319`, `AssembleReservationAnchorTransaction`), submit to Bitcoin chain, and return to Bridge.
+- Acceptance criteria: the assembled transaction has exactly one input and one output paying the target wallet (`TestAssembleReservationTransactions_HappyPathShape`); `ReservationAcceptanceTask.Run` (`keep-core@f66f11240:pkg/tbtcpg/reservation_acceptance.go:243`) is reachable from the coordination checklist (see `01-gap-analysis.md` Blocker row, resolved) and produces a proposal that passes `ValidateReservationAnchorProposal`.
+- Current status: implemented (`keep-core@f66f11240:pkg/tbtcpg/reservation_acceptance.go:243` `Run`, the `ReservationAcceptanceTask` entry point)
 - Test level needed: unit
 - Why: Logic for proposal acceptance and transaction assembly is complex and needs isolated verification.
 
@@ -20,11 +20,11 @@ This document enumerates the M1 reservation scenarios keep-core's client must ha
 - Actor: Client
 - Goal: Stop tracking an acceptance proposal once its validity window has elapsed, instead of waiting indefinitely.
 - Benefit: Frees the coordinator to retry acceptance on a fresh proposal instead of getting stuck behind a stale one.
-- Precondition: `ReservationAnchorProposal` issued and received (`keep-core@96530a787:pkg/tbtc/reservation.go:281-296`).
-- Trigger: `ValidityBlocks` (`keep-core@96530a787:pkg/tbtc/reservation.go:304-306`) elapsed before proposal is submitted.
+- Precondition: `ReservationAnchorProposal` issued and received (`keep-core@f66f11240:pkg/tbtc/reservation.go:257-272`).
+- Trigger: `ValidityBlocks` (`keep-core@f66f11240:pkg/tbtc/reservation.go:280-282`) elapsed before proposal is submitted.
 - Expected keep-core behavior: Client aborts acceptance; reservation state remains `ReservationStatePending` or transitions to `ReservationStateTerminated` if anchor is abandoned.
-- Acceptance criteria: `CheckReservationActionTimeouts` (`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:589`) notifies the Bridge exactly once per expired action; `Run` (`:224`) polls continuously and returns promptly on `ctx` cancellation.
-- Current status: implemented and unit-tested (`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:297` `CheckReservationActionTimeouts`; poll loop in `Run` — PR #4276). `Run` is invoked directly by `WireReservationWatchers` (`reservation_wiring.go:451-466`), which runs an initial synchronous `pollPendingActions` pass before starting the loop — fully wired in production, no outstanding integration gap.
+- Acceptance criteria: `CheckReservationActionTimeouts` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_action_timeout_watch.go:478`) notifies the Bridge exactly once per expired action; `Run` (`:224`) polls continuously and returns promptly on `ctx` cancellation.
+- Current status: implemented and unit-tested (`keep-core@f66f11240:pkg/maintainer/spv/reservation_action_timeout_watch.go:478` `CheckReservationActionTimeouts`; poll loop in `Run` — PR #4276). `Run` is invoked directly by `WireReservationWatchers` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_wiring.go:451-466`; the freeze head runs the same pass and `Run` inside a supervised goroutine that restarts after a panic or a `Run` error, `keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go:565-632`), which runs an initial synchronous `pollPendingActions` pass before starting the loop — fully wired in production, no outstanding integration gap.
 - Test level needed: unit
 - Why: Action timeout monitoring ensures proposals don't linger beyond their expiry.
 
@@ -45,11 +45,11 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Benefit: The owner's minted tBTC balance is never orphaned behind a wallet that can no longer sign for it — it converts to an ordinary pooled claim.
 - Precondition: Wallet is `Terminated` (one of the three on-chain-eligible
   wallet states; see the stranding-precondition note above) due to
-  moving-funds timeout (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:64-66`).
-- Trigger: Wallet transitions to `StateTerminated` due to moving-funds timeout — surfaced to the client via `OnWalletClosed` (`chain.go:238-264`: fires "when the wallet is closed or terminated"), the stranding startup scan, or `drainStrandingRechecks` (`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:777-824`); all three gate on `wallet.State == StateClosed || StateTerminated`.
-- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
+  moving-funds timeout (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-162`).
+- Trigger: Wallet transitions to `StateTerminated` due to moving-funds timeout — surfaced to the client via `OnWalletClosed` (`keep-core@f66f11240:pkg/tbtc/chain.go:260-265`: fires "when the wallet is closed or terminated"), the stranding startup scan, or `drainStrandingRechecks` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_action_timeout_watch.go:666-713`); all three gate on `wallet.State == StateClosed || StateTerminated`.
+- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
 - Acceptance criteria: `checkReservationStrandingForWallet` notifies the Bridge for every `Active` reservation custodied by the terminated wallet, and is idempotent if the Bridge already marked it `Stranded`.
-- Current status: implemented (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
+- Current status: implemented (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
 - Test level needed: unit
 - Why: Cause-agnostic stranding watcher detects all termination causes identically.
 
@@ -57,11 +57,11 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Actor: Client
 - Goal: Same as Story 3, for the moved-funds-sweep-timeout termination cause.
 - Benefit: Same as Story 3.
-- Precondition: Wallet is `Terminated` due to moved-funds sweep timeout (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:64-66`).
+- Precondition: Wallet is `Terminated` due to moved-funds sweep timeout (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-162`).
 - Trigger: same three trigger paths as Story 3.
-- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
+- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
 - Acceptance criteria: same as Story 3.
-- Current status: implemented (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
+- Current status: implemented (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
 - Test level needed: unit
 - Why: Same cause-agnostic stranding watcher as Story 3.
 
@@ -69,11 +69,11 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Actor: Client
 - Goal: Same as Story 3, for the fraud-challenge-defeat termination cause.
 - Benefit: Same as Story 3.
-- Precondition: Wallet is `Terminated` due to fraud-challenge defeat (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:64-66`).
+- Precondition: Wallet is `Terminated` due to fraud-challenge defeat (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-162`).
 - Trigger: same three trigger paths as Story 3.
-- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
+- Expected keep-core behavior: Client notifies Bridge via `NotifyReservationStranded` (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:28-30`).
 - Acceptance criteria: same as Story 3.
-- Current status: implemented (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
+- Current status: implemented (`keep-core@f66f11240:pkg/maintainer/spv/reservation_stranding_watch.go:97`, `checkReservationStrandingForWallet`)
 - Test level needed: unit
 - Why: Same cause-agnostic stranding watcher as Story 3.
 
@@ -82,8 +82,8 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Goal: Move a reservation's custody from a wallet that is rotating out (`MovingFunds`/`Closing`) to a healthy `Live` wallet, and prove it on-chain promptly.
 - Benefit: The reservation survives wallet rotation without stranding, and the source wallet can finish closing once it sheds all reservations.
 - Precondition: Wallet rotation triggered; new wallet is assigned.
-- Trigger: `WalletMovingFunds` state transition. `ReservationReanchorTask` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:65-83`) generates and broadcasts the re-anchor proposal on this trigger; the gap was downstream, in SPV proof submission (`pkg/maintainer/spv/spv.go`'s generic proof loop could not supply the `(reservationKey, requestNonce)` pair `SubmitReservationReanchorProof` needs — see `01-gap-analysis.md` Major row, resolved), not in the trigger/proposal path itself.
-- Expected keep-core behavior: Client constructs and submits `ReservationReanchorProposal` promptly (`keep-core@96530a787:pkg/tbtc/reservation.go:308-361`), then the SPV maintainer submits the re-anchor proof once the transaction confirms.
+- Trigger: `WalletMovingFunds` state transition. `ReservationReanchorTask` (`keep-core@f66f11240:pkg/tbtcpg/reservation_reanchor.go:139`) generates and broadcasts the re-anchor proposal on this trigger; the gap was downstream, in SPV proof submission (`pkg/maintainer/spv/spv.go`'s generic proof loop could not supply the `(reservationKey, requestNonce)` pair `SubmitReservationReanchorProof` needs — see `01-gap-analysis.md` Major row, resolved), not in the trigger/proposal path itself.
+- Expected keep-core behavior: Client constructs and submits `ReservationReanchorProposal` promptly (`keep-core@f66f11240:pkg/tbtc/reservation.go:285-311`), then the SPV maintainer submits the re-anchor proof once the transaction confirms.
 - Acceptance criteria: `submitReservationActionProof` re-derives the `(reservationKey, requestNonce)` pair for the confirmed re-anchor transaction and calls `SubmitReservationReanchorProof`, submitting exactly once per re-anchor.
 - Current status: implemented (the reservation proof loop in `pkg/maintainer/spv/reservation_proof_loop.go` discovers the unproven transaction from `ReservationReanchorRequested` events, matching the authorized source outpoint, target-wallet output and fee bound; it does not use `ReservationByAnchorUtxo` (corrected 2026-10-12). `SubmitReservationReanchorProof` (`pkg/maintainer/spv/reservation_reanchor_proof.go`) re-derives the key/nonce pair and submits — PR #4276)
 - Test level needed: unit
@@ -97,7 +97,7 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Trigger: A pending acceptance generation is being considered for proposal.
 - Expected keep-core behavior: Propose the anchor when the generation targets this wallet, the wallet is `Live` or `MovingFunds` (mirroring the validator's `requireWalletLiveOrMovingFunds`), the signing window still has more than `REQUEST_TIMEOUT_SAFETY_MARGIN` left, and the deposit clears the generation's snapshotted minimum (`action.MinAmount` plus the estimated anchor fee, mirroring the on-chain validator, which compares against the action's snapshot rather than the live `reservationMinAmount`). The request-time caps (`MaxReservationsPerWallet`, per-wallet amount, single-reservation amount, global total) are NOT re-checked for an existing Pending Acceptance; the zero-cap parity note (a zero cap is "disabled", not an error) applies only where caps are still read - the re-anchor task's target headroom pre-check.
 - Acceptance criteria: a pending generation is proposed even when the request-time caps are saturated (`TestReservationAcceptanceTask_IgnoresRequestTimeCaps`); the snapshotted minimum passes at `action.MinAmount + fee` and fails below it; boundary fixture rows for `MaxReservationsPerWallet`/`ReservationMinAmount`/`ReservationMaxTotalAmount` pass with headroom and exercise the re-anchor cap-boundary checks (`TestReservationAcceptanceTask_BoundaryChecks`); a generation inside the timeout safety margin is skipped (`TestReservationAcceptanceTask_SkipsCandidateInsideTimeoutSafetyMargin`).
-- Current status: implemented. `checkReservationAcceptanceEligibility` was deleted from `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go` on `reservations-epic` (the earlier fix-branch snapshot had it at `:1020-1100`; the M1 pinned tip had it at `:977-1078`); the remaining candidate checks live in candidate selection (`:340-947`, wallet state check `:456-470`, margin skip `:761-780`, snapshotted minimum `:825-826` on the fix branch; the M1 pinned tip used live `ReservationMinAmount` at `:539` and `:731`). Re-anchor headroom checks live in `walletHasReanchorHeadroom` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:874-899`). (line citations corrected 2026-09-29; previously cited `:424`, `:443`, `:475-478` and `:807-822`, which were the earlier snapshot's cap-comparison and minimum lines)
+- Current status: implemented. `checkReservationAcceptanceEligibility` was deleted from `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go` on `reservations-epic` (the earlier fix-branch snapshot had it at lines 1020-1100; the M1 pinned tip had it at `keep-core@f66f11240:pkg/tbtcpg/reservation_acceptance.go:977-1058`); the remaining candidate checks live in candidate selection (lines 340-947, wallet state check 456-470, margin skip 761-780, snapshotted minimum 825-826 on the fix branch; the M1 pinned tip used live `ReservationMinAmount` at `:539` and `:731`). Re-anchor headroom checks live in `reanchorTargetSearch.pick` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:1331-1412`). (line citations corrected 2026-09-29; previously cited `:424`, `:443`, `:475-478` and `:807-822`, which were the earlier snapshot's cap-comparison and minimum lines)
 - Test level needed: unit
 - Why: The cap boundary conditions moved to the re-anchor headroom check and the validator; the acceptance side needs one regression test pinning that request-time caps are not re-checked.
 
@@ -107,9 +107,9 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Benefit: Avoids wasting a signing round on a proposal the Bridge would reject, and catches proposal-generation bugs before they reach the network.
 - Precondition: An acceptance or re-anchor proposal has been generated.
 - Trigger: Client validates the proposal against current chain state before broadcasting.
-- Expected keep-core behavior: Call `ValidateReservationAnchorProposal` (`pkg/chain/ethereum/tbtc.go:492-522` on `reservations-epic`; the M1 pinned tip had it at `:482-512`) or `ValidateReservationReanchorProposal` (`:583-607` on the fix branch; tip at `:573-597`), both real calls into `tc.walletProposalValidator`.
+- Expected keep-core behavior: Call `ValidateReservationAnchorProposal` (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go:576-606` on `reservations-epic`; the M1 pinned tip had it at `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:482-512`) or `ValidateReservationReanchorProposal` (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go:667-691`; tip at `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:573-597`), both real calls into `tc.walletProposalValidator`.
 - Acceptance criteria: a proposal that violates a Bridge-side rule is rejected before broadcast; both validators are real on-chain calls, not local approximations. Correction 2026-09-28 (fix branch): the direct unit tests now exist — `keep-core@96530a787:pkg/chain/ethereum/tbtc_validator_harness_test.go` deploys the real `WalletProposalValidator` against a stub Bridge in an in-memory go-ethereum EVM (`core/vm/runtime`, chosen because `ethclient/simulated` cannot link under Go 1.24 due to `fjl/memsize`) and covers both wrappers plus revert-reason propagation (`TestValidateReservationAnchorProposal`, `TestValidateReservationReanchorProposal`); prior to the fix branch, coverage was indirect through `pkg/tbtcpg`'s interface-fake tests.
-- Current status: implemented (`pkg/chain/ethereum/tbtc.go:492-607` on `reservations-epic`; the M1 pinned tip had both wrappers at `:482-597`) (line citations corrected 2026-09-28: previously cited `:2541-2647`, past the end of the 1,820-line file; re-corrected against `reservations-epic`)
+- Current status: implemented (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go:576-691` on `reservations-epic`; the M1 pinned tip had both wrappers at `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:482-597`) (line citations corrected 2026-09-28: previously cited `:2541-2647`, past the end of the 1,820-line file; re-corrected against `reservations-epic`)
 - Test level needed: unit
 - Why: Essential security gate before any proposal is broadcast to the wallet signing group.
 
@@ -121,7 +121,7 @@ trigger note). The one on-chain-eligible case with **no** client trigger is
 - Trigger: A new acceptance proposal generation begins.
 - Expected keep-core behavior: Fetch `ReservationParameters` fresh via `rat.chain.ReservationParameters()` for every generation, not a cached/stale copy.
 - Acceptance criteria: two sequential generations with an intervening parameter change each observe the parameter value in effect at that generation, not the first generation's value (`TestReservationAcceptanceTask_ReservationParametersFetchedLive`).
-- Current status: implemented (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:349` on `reservations-epic`; the M1 pinned tip had the fetch at `:339`) (line citation corrected 2026-09-28: previously cited `:133`, which is the unrelated `reservationAcceptanceFundingTxCandidate` type declaration; re-corrected against `reservations-epic`)
+- Current status: implemented (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:317` on `reservations-epic`; the M1 pinned tip had the fetch at `keep-core@f66f11240:pkg/tbtcpg/reservation_acceptance.go:339`) (line citation corrected 2026-09-28: previously cited `:133`, which is the unrelated `reservationAcceptanceFundingTxCandidate` type declaration; re-corrected against `reservations-epic`)
 - Test level needed: unit
 - Why: A cached-parameters bug would silently let stale caps/fees apply after a governance update — a live-fetch-vs-cache regression is exactly what a unit test with two sequential fetches and an intervening parameter change would catch.
 
@@ -134,7 +134,7 @@ These scenarios are real and eventually need coverage, but are M2 per the settle
 | Renewal window handling | Renewal is M2; "They cannot... renew" (`roadmap.md:12`); `renewalsPaused = true` at the vault (`roadmap.md:107`). |
 | Dissolution (incl. `dissolutionEligibleAt` gate) | Dissolution is M2; "nothing in m1 B reads `expiresAt` or `dissolutionEligibleAt`" (`roadmap.md:77-83`). |
 | Whole-redemption | Redemption is M2; no coordinator/executor wiring exists by design (see `01-gap-analysis.md` Out of M1 scope). |
-| Partial-redemption (1-in-2-out remainder) | Same as whole-redemption; only the `IsPartial bool` field is retained on `ReservationAction` (`keep-core@96530a787:pkg/tbtc/reservation.go:242-244`, alongside the `ReservationActionTypeRedemption`/`ReservationActionTypeDissolution` enum values at `:92,94`) to satisfy the enum-positional storage rule — no partial-redemption assembler exists anywhere in `keep-core@96530a787:pkg/tbtc/reservation.go` (correction 2026-09-28: previously cited a non-existent assembler at `:449-552`, which is the unrelated M1-scoped `reservationAnchorAction` internal type). |
+| Partial-redemption (1-in-2-out remainder) | Same as whole-redemption; only the `IsPartial bool` field is retained on `ReservationAction` (`keep-core@f66f11240:pkg/tbtc/reservation.go:218-220`, alongside the `ReservationActionTypeRedemption`/`ReservationActionTypeDissolution` enum values at `:92,94`) to satisfy the enum-positional storage rule — no partial-redemption assembler exists anywhere in `keep-core@96530a787:pkg/tbtc/reservation.go` (correction 2026-09-28: previously cited a non-existent assembler at `keep-core@f66f11240:pkg/tbtc/reservation.go:449-552`, which is the unrelated M1-scoped `reservationAnchorAction` internal type). |
 | Watchtower-delay gating / veto | M2; "vacuous — no redemptions exist" in M1 (`roadmap.md:66`). |
 
 ## Coverage summary

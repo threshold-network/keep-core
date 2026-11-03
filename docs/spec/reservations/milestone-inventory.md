@@ -738,7 +738,7 @@ executor PRs #4274/#4276-#4280/#4284/#4324). The rows below are corrected agains
 
 | Item | Source | PR | m1 | m2 | Note |
 |---|---|---|---|---|---|
-| `ReservationState`, `ReservationActionType`, `ReservationActionState` enums | `keep-core@96530a787:pkg/tbtc/reservation.go:30`, `:86`, `:98` | #4238 | yes | yes | Mirror the Solidity enums |
+| `ReservationState`, `ReservationActionType`, `ReservationActionState` enums | `keep-core@b4f639442:pkg/tbtc/reservation.go:30`, `:86`, `:98` | #4238 | yes | yes | Mirror the Solidity enums |
 | `Reservation`, `ReservationAction`, `ReservationParameters` structs | `:56`, `:112`, `:147` | #4238 | yes | yes | Chain-state mirrors |
 | `ReservationAnchorProposal` + 4 methods | design-time `:181-231` | #4238 | yes | yes | Carries `RequestNonce` |
 | `ReservationReanchorProposal` + 4 methods | design-time `:287-340` | #4238 | yes | yes | Carries `RequestNonce`; m1's unpin |
@@ -749,11 +749,11 @@ executor PRs #4274/#4276-#4280/#4284/#4324). The rows below are corrected agains
 | `computeReservationRedeemerOutputScriptHash` | design-time `:557` | #4238 | yes | yes | Shared helper |
 | `assembleReservedRedemptionTransaction` | design-time `:449` | #4238 | no | yes | **M1 code:** removed along with the redemption proposal type |
 | `assembleReservationDissolutionTransaction` | design-time `:628` | #4238 | no | yes | **M1 code:** removed along with the dissolution proposal type |
-| `GetReservation` | `chain.go:653-654` | #4238 | yes | yes | **M1 code:** implemented (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go:400-406`, calls `reservationRouter.Reservations`), not an error stub. |
+| `GetReservation` | `keep-core@f66f11240:pkg/tbtc/chain.go:653-654` | #4238 | yes | yes | **M1 code:** implemented (`keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:395-401`, calls `reservationRouter.Reservations`), not an error stub. |
 | `GetReservationAction(key, nonce)` | `chain.go:656-660` | #4238 | yes | yes | Implemented. Two-phase construct; see C-8 |
 | `ReservationParameters` | `chain.go:662-664` | #4238 | yes | yes | Implemented |
-| `ValidateReservationAnchorProposal` | design-time `chain.go:449` | #4238 | yes | yes | **M1 code:** implemented (`ethereum/tbtc.go:482-570`, builds a real ABI proposal), not an error stub. |
-| `ValidateReservationReanchorProposal` | design-time `chain.go:469` | #4238 | yes | yes | **M1 code:** implemented (`keep-core@96530a787:pkg/chain/ethereum/tbtc.go:573-...`), not an error stub |
+| `ValidateReservationAnchorProposal` | design-time `keep-core@b4f639442:pkg/tbtc/chain.go:449` | #4238 | yes | yes | **M1 code:** implemented (`keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:482-567`, builds a real ABI proposal), not an error stub. |
+| `ValidateReservationReanchorProposal` | design-time `keep-core@b4f639442:pkg/tbtc/chain.go:469` | #4238 | yes | yes | **M1 code:** implemented (`keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:573-...`), not an error stub |
 | `ValidateReservedRedemptionProposal` | design-time `chain.go` | #4238 | no | yes | **M1 code:** removed from the chain interface entirely (not present, not an error stub) — grep of `chain.go` and `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` returns zero hits. |
 | `ValidateReservationDissolutionProposal` | design-time `chain.go:477` | #4238 | no | yes | **M1 code:** same — removed from the interface |
 | `ActionReservationAnchor` (6), `ActionReservationReanchor` (8) | `wallet.go:34-38` | #4238 | yes | yes | Plus string and metrics names |
@@ -978,7 +978,7 @@ The fragments found several current claims to be wrong. Each is collected below 
 |---|---|
 | **Claim** | `#4238` implements the original single-phase design and needs rework for "nonce-carrying proposals, a watchtower-delay-respecting executor, and partial-redemption awareness". |
 | **Doc and line** | `feature-spec.md` section 16; `roadmap.md` section 5; `epic-merge-plan.md` section 3 (keep-core subsection) |
-| **What the source says** | Nonces are already present: `RequestNonce` appears 14 times and is a field on **all four** proposal structs (`keep-core@96530a787:pkg/tbtc/reservation.go:205`, `:233`, `:287`, `:342`), and the chain interface reads action records by generation via `GetReservationAction(reservationKey, requestNonce)` (`chain.go:437-440`). Both are two-phase constructs. Separately, the gap is larger than "rework": `pkg/tbtcpg` contains a proposal-generator task per wallet action and has **no reservation task at all** (zero reservation mentions in the package), and the chain interface's reservation region contains only reads and validators with no `Submit*`, `Request*` or `Notify*` method. (keep-core.md sections 1-3) |
+| **What the source says** | Nonces are already present: `RequestNonce` appears 14 times and is a field on **all four** proposal structs (`keep-core@b4f639442:pkg/tbtc/reservation.go:181`, `:233`, `:287`, `:342`), and the chain interface reads action records by generation via `GetReservationAction(reservationKey, requestNonce)` (`keep-core@b4f639442:pkg/tbtc/chain.go:437-440`). Both are two-phase constructs. Separately, the gap is larger than "rework": `pkg/tbtcpg` contains a proposal-generator task per wallet action and has **no reservation task at all** (zero reservation mentions in the package), and the chain interface's reservation region contains only reads and validators with no `Submit*`, `Request*` or `Notify*` method. (keep-core.md sections 1-3) |
 | **Corrected statement** | `#4238` is a types-and-assembly foundation, not a single-phase client. It already carries the two-phase nonce constructs. What it lacks is the entire executor: no proposal generation and no on-chain submission, so it cannot participate in the protocol. m1's Go work is therefore mostly new code rather than rework, which changes both the risk profile and the sizing. See D-25 and D-26. |
 | **Applied? (2026-09-28)** | Yes — `feature-spec.md` (lines ~949-953, 1236-1240), `roadmap.md` (lines ~661-663, 697-706, 838-839) and `epic-merge-plan.md` (lines ~35-39, 116-120) all state `#4238` is not single-phase, carries `RequestNonce`, and needs an executor rather than a full rework. |
 

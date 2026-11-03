@@ -11,7 +11,7 @@ all of `pkg/maintainer/spv/reservation_*.go`) — see the status banner below.
 
 **PR #4238's own branch (`feat/utxo-reservation-wallet-support`) is superseded.** GitHub (checked 2026-09-28): the PR's title now reads "draft: UTXO reservation wallet-side foundations (previous end-to-end attempt — see #4282 for M1)" — its author has explicitly framed it as historical, pointing to #4282 (head branch `reservations-epic`) for the current M1 work.
 
-**§3's central finding — that the executor is entirely absent — is now historical, not current.** At the M1 tip (`reservations-epic`@`f66f11240`, tracked by #4282, MERGED-in commit #4274 "wire reservation executors and watchers", 2026-09-03): the executor exists. `keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go` (1209 ln) and `keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go` (806 ln) are wired into `NewProposalGenerator` behind a `reservationsEnabled` flag (`pkg/tbtcpg/tbtcpg.go:90-127`). `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` implements all the write methods §3 said were missing, as real on-chain calls: `RequestReservationAcceptance` (:822), `RequestReservationReanchor` (:851), `SubmitReservationAcceptanceProof` (:882), `SubmitReservationReanchorProof` (:937), `NotifyReservationActionTimeout` (:985), `NotifyReservationStranded` (:1035), `NotifyReservationAcceptanceTimedOut` (:1172). `pkg/maintainer/spv/reservation_*.go` (action-timeout watch, stale-deposit watch, stranding watch, proof loop, wiring, acceptance/reanchor proof submission — ~9,700 lines incl. tests) implement the surrounding watchers this document's §4 work-item table lists as "New". This work landed on `reservations-epic`, not on #4238's own branch — the executor was built *elsewhere*, which is why #4238 itself still looks, in isolation, exactly as this document describes it.
+**§3's central finding — that the executor is entirely absent — is now historical, not current.** At the M1 tip (`reservations-epic`@`f66f11240`, tracked by #4282, MERGED-in commit #4274 "wire reservation executors and watchers", 2026-09-03): the executor exists. `keep-core@f66f11240:pkg/tbtcpg/reservation_acceptance.go` (1209 ln) and `keep-core@f66f11240:pkg/tbtcpg/reservation_reanchor.go` (806 ln) are wired into `NewProposalGenerator` behind a `reservationsEnabled` flag (`pkg/tbtcpg/tbtcpg.go:90-127`). `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go` implements all the write methods §3 said were missing, as real on-chain calls: `RequestReservationAcceptance` (:822), `RequestReservationReanchor` (:851), `SubmitReservationAcceptanceProof` (:882), `SubmitReservationReanchorProof` (:937), `NotifyReservationActionTimeout` (:985), `NotifyReservationStranded` (:1035), `NotifyReservationAcceptanceTimedOut` (:1172). `pkg/maintainer/spv/reservation_*.go` (action-timeout watch, stale-deposit watch, stranding watch, proof loop, wiring, acceptance/reanchor proof submission — ~9,700 lines incl. tests) implement the surrounding watchers this document's §4 work-item table lists as "New". This work landed on `reservations-epic`, not on #4238's own branch — the executor was built *elsewhere*, which is why #4238 itself still looks, in isolation, exactly as this document describes it.
 
 **§4's work-item table is accordingly historical**, not a current gap list: every row marked "New" (proposal-generator task, chain-interface write methods, re-anchor executor, below-dust report, stranding watcher, stale-deposit cleanup, action-timeout watch) has been built, on `reservations-epic`. Only "Regenerated ABI bindings" and "Redemption and dissolution proposal generation and execution" (correctly, still "Not m1") remain open in the sense this table intended.
 
@@ -20,11 +20,11 @@ all of `pkg/maintainer/spv/reservation_*.go`) — see the status banner below.
 | File | Change |
 |---|---|
 | `pkg/tbtc/reservation_test.go` | +770 |
-| `keep-core@96530a787:pkg/tbtc/reservation.go` | +729 |
-| `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` | +93 |
-| `keep-core@96530a787:pkg/tbtc/chain.go` | +52 |
+| `keep-core@b4f639442:pkg/tbtc/reservation.go` | +729 |
+| `keep-core@b4f639442:pkg/chain/ethereum/tbtc.go` | +93 |
+| `keep-core@b4f639442:pkg/tbtc/chain.go` | +52 |
 | `pkg/clientinfo/performance_test.go` | +51 |
-| `keep-core@96530a787:pkg/tbtc/chain_test.go` | +49 |
+| `keep-core@b4f639442:pkg/tbtc/chain_test.go` | +49 |
 | `pkg/tbtc/wallet_test.go` | +46 -? |
 | `pkg/tbtc/wallet.go` | +28 |
 | `pkg/tbtc/marshaling.go` | +16 -? |
@@ -45,13 +45,13 @@ understated in the other.
 
 | Proposal | Line | Fields |
 |---|---|---|
-| `ReservationAnchorProposal` | `keep-core@96530a787:pkg/tbtc/reservation.go:205` | `DepositFundingTxHash`, `DepositFundingOutputIndex`, **`RequestNonce`**, `AnchorTxFee` |
+| `ReservationAnchorProposal` | `keep-core@b4f639442:pkg/tbtc/reservation.go:181` | `DepositFundingTxHash`, `DepositFundingOutputIndex`, **`RequestNonce`**, `AnchorTxFee` |
 | `ReservedRedemptionProposal` | `:233` | `ReservationKey`, **`RequestNonce`**, `RedemptionTxFee` |
 | `ReservationReanchorProposal` | `:287` | `ReservationKey`, **`RequestNonce`**, `TargetWalletPublicKeyHash`, `ReanchorTxFee` |
 | `ReservationDissolutionProposal` | `:342` | `ReservationKey`, **`RequestNonce`**, `DissolutionTxFee` |
 
 And the chain interface reads action records by generation:
-`GetReservationAction(reservationKey, requestNonce)` (`keep-core@96530a787:pkg/tbtc/chain.go:437-440`). Both
+`GetReservationAction(reservationKey, requestNonce)` (`keep-core@b4f639442:pkg/tbtc/chain.go:437-440`). Both
 are two-phase constructs. A purely single-phase client would have neither.
 
 **The real gap is larger and different: there is no client at all.** See §3.
@@ -60,7 +60,7 @@ are two-phase constructs. A purely single-phase client would have neither.
 
 | Item | Source | Kind | m1 | m2 | Note |
 |---|---|---|---|---|---|
-| `ReservationState` enum | `reservation.go:30-54` | type | yes | yes | Mirrors Solidity `ReservationState` |
+| `ReservationState` enum | `keep-core@b4f639442:pkg/tbtc/reservation.go:30-48` | type | yes | yes | Mirrors Solidity `ReservationState` |
 | `ReservationActionType` enum | `:86-96` | type | yes | yes | Mirrors `ActionType` |
 | `ReservationActionState` enum | `:98-110` | type | yes | yes | Mirrors `ActionState` |
 | `Reservation` struct | `:56-84` | type | yes | yes | The position record |
@@ -75,19 +75,19 @@ are two-phase constructs. A purely single-phase client would have neither.
 | `computeReservationRedeemerOutputScriptHash` | `:557` | internal | yes | yes | Shared helper |
 | `assembleReservedRedemptionTransaction` | `:449` | internal | no | yes | |
 | `assembleReservationDissolutionTransaction` | `:628` | internal | no | yes | |
-| `GetReservation` | `keep-core@96530a787:pkg/tbtc/chain.go:432` | interface | yes | yes | Bound at `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` |
-| `GetReservationAction` | `keep-core@96530a787:pkg/tbtc/chain.go:437-440` | interface | yes | yes | Two-phase read |
-| `ReservationParameters` | `keep-core@96530a787:pkg/tbtc/chain.go:444` | interface | yes | yes | |
-| `ValidateReservationAnchorProposal` | `keep-core@96530a787:pkg/tbtc/chain.go:449` | interface | yes | yes | Interface method present; `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` implementation is an **error stub** (`:2415-2499`) - m1 must implement |
-| `ValidateReservationReanchorProposal` | `keep-core@96530a787:pkg/tbtc/chain.go:469` | interface | yes | yes | Interface method present; `keep-core@96530a787:pkg/chain/ethereum/tbtc.go` implementation is an **error stub** (`:2415-2499`) - m1 must implement |
-| `ValidateReservedRedemptionProposal` | `keep-core@96530a787:pkg/tbtc/chain.go` | interface | no | yes | Bound; m2 only |
-| `ValidateReservationDissolutionProposal` | `keep-core@96530a787:pkg/tbtc/chain.go:477` | interface | no | yes | Bound; m2 only |
+| `GetReservation` | `keep-core@b4f639442:pkg/tbtc/chain.go:432` | interface | yes | yes | Bound at `keep-core@b4f639442:pkg/chain/ethereum/tbtc.go` |
+| `GetReservationAction` | `keep-core@b4f639442:pkg/tbtc/chain.go:437-440` | interface | yes | yes | Two-phase read |
+| `ReservationParameters` | `keep-core@b4f639442:pkg/tbtc/chain.go:444` | interface | yes | yes | |
+| `ValidateReservationAnchorProposal` | `keep-core@b4f639442:pkg/tbtc/chain.go:449` | interface | yes | yes | Interface method present; `keep-core@b4f639442:pkg/chain/ethereum/tbtc.go` implementation is an **error stub** (`:2449-2464`) - m1 must implement (implemented on `reservations-epic`: `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:482-512`) |
+| `ValidateReservationReanchorProposal` | `keep-core@b4f639442:pkg/tbtc/chain.go:469` | interface | yes | yes | Interface method present; `keep-core@b4f639442:pkg/chain/ethereum/tbtc.go` implementation is an **error stub** (`:2479-2490`) - m1 must implement (implemented on `reservations-epic`: `keep-core@f66f11240:pkg/chain/ethereum/tbtc.go:573-597`) |
+| `ValidateReservedRedemptionProposal` | `keep-core@b4f639442:pkg/tbtc/chain.go` | interface | no | yes | Bound; m2 only |
+| `ValidateReservationDissolutionProposal` | `keep-core@b4f639442:pkg/tbtc/chain.go:477` | interface | no | yes | Bound; m2 only |
 | `ActionReservationAnchor` (enum 6) | `wallet.go` | type | yes | yes | Plus string and metrics names |
 | `ActionReservationReanchor` (enum 8) | `wallet.go` | type | yes | yes | |
 | `ActionReservedRedemption` (enum 7) | `wallet.go` | type | **declare only** | yes | Positional: cannot be renumbered |
 | `ActionReservationDissolution` (enum 9) | `wallet.go` | type | **declare only** | yes | Positional |
 
-`keep-core@96530a787:pkg/tbtc/reservation.go` has **21 functions**: 19 touch m1-relevant paths (mostly the
+`keep-core@b4f639442:pkg/tbtc/reservation.go` has **21 functions**: 19 touch m1-relevant paths (mostly the
 four proposals' `Marshal`/`Unmarshal`/`ActionType`/`ValidityBlocks` sets, which
 m1 needs for at least two of the four), and 2 are m2-exclusive assemblers.
 
@@ -111,9 +111,9 @@ Consequence: nothing ever *decides* to propose a reservation action. The
 proposal types exist and can be marshalled, but no code produces one.
 
 **No submission methods.** The chain interface's reservation region
-(`keep-core@96530a787:pkg/tbtc/chain.go:430-480`) contains only reads and validators. There is no
+(`keep-core@b4f639442:pkg/tbtc/chain.go:430-480`) contains only reads and validators. There is no
 `Submit*`, `Request*` or `Notify*` method. The Ethereum binding
-(`keep-core@96530a787:pkg/chain/ethereum/tbtc.go`) implements exactly six reservation methods, all
+(`keep-core@b4f639442:pkg/chain/ethereum/tbtc.go`) implements exactly six reservation methods, all
 read or validate:
 
 ```
@@ -151,7 +151,7 @@ more greenfield, and no reviewed baseline to inherit.
 | Types, enums, proposals, assemblers | **Reusable from `#4238`** | The genuine salvage |
 | Redemption and dissolution proposal generation and execution | **Not m1** | B's saving, roughly 300-500 production Go |
 
-Existing test coverage: `reservation_test.go` (+770) and `keep-core@96530a787:pkg/tbtc/chain_test.go` (+49)
+Existing test coverage: `reservation_test.go` (+770) and `keep-core@b4f639442:pkg/tbtc/chain_test.go` (+49)
 cover the types, marshalling and validators - which is precisely the part that
 survives. **None of it covers an executor, because there is no executor.**
 
@@ -166,7 +166,7 @@ survives. **None of it covers an executor, because there is no executor.**
    safe if the enum constants remain. Recommend keeping them - they are already
    written and tested, and deleting then restoring them is churn.
    **M1 code (2026-09-28):** decided the opposite of this recommendation. At
-   `reservations-epic`@`f66f11240`, `keep-core@96530a787:pkg/tbtc/reservation.go` no longer
+   `reservations-epic`@`f66f11240`, `keep-core@f66f11240:pkg/tbtc/reservation.go` no longer
    declares `ReservedRedemptionProposal` or `ReservationDissolutionProposal`
    at all (grep across non-test `pkg/tbtc/*.go` returns zero hits; only
    `ReservationAnchorProposal` at `:259` and `ReservationReanchorProposal` at
