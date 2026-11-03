@@ -223,7 +223,7 @@ moving-funds/moved-funds-sweep task list only when `reservationsEnabled` is true
   (`privileged`) caller, which the client's ordinary operator key can never satisfy, so this
   task never attempts one. The Bridge accepts a permissionless re-anchor request from a
   `Closing` source wallet exactly as readily as a `MovingFunds` one
-  (`tbtc-v2@72b891eec:Reservation.sol:722-858`), and this task's own trigger accepts both states:
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:857-873`), and this task's own trigger accepts both states:
   it proceeds when the wallet is `StateMovingFunds` or `StateClosing`
   (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:175-176`; the M1 pinned tip used `:172-173`).
   A `Closing` wallet still custodying reservations therefore has an automated

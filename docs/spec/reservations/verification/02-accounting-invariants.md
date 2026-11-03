@@ -374,13 +374,13 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   `feeDebt` is the vault's `inKindFeeDebtSat` (INV-207).
 - **Why the reservation subsystem satisfies it.** A credit mints TBTC gross
   against the same gross of new backing, so the two move together
-  (`tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:173-174`).
+  (`tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:192-194`).
   A financed miner fee lowers backing by the whole fee and supply by whatever
-  the reserve could burn (`_burnFromReserve`, `:354-371`), so the uncovered part
-  lands in the debt (`financeInKindFee`, `:211-231`); the function's doc block
+  the reserve could burn (`_burnFromReserve`, `:392-407`), so the uncovered part
+  lands in the debt (`financeInKindFee`, `:231-250`); the function's doc block
   states that while the debt is non-zero "the system is over-supplied by
-  exactly that amount" (`:207-210`). A repayment (`repayInKindFeeDebt`,
-  `:237-262`) and the debt-first half of `sweepFees` (`:297-319`) lower supply
+  exactly that amount" (`:227-230`). A repayment (`repayInKindFeeDebt`,
+  `:257-283`) and the debt-first half of `sweepFees` (`:318-340`) lower supply
   and debt by the same amount. A sweep of the excess above
   `feeReserveTarget` moves tokens and changes neither term.
   INV-705 states this same relation per fee increment; this entry states the
@@ -394,11 +394,11 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   unmint and backing change is balanced: Bitcoin in flight for an ordinary
   redemption, an unminted deposit, and any loss outside the reservation path
   break it until they settle, which is the same limit INV-705 records.
-- **Enforcing code.** `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-251`
+- **Enforcing code.** `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-250`
   (burn what the reserve covers, record the shortfall as debt),
-  `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:354-371`
+  `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:392-407`
   (unmint TBTC and decrease the Bank balance in one call),
-  `tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:237-262`
+  `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:257-283`
   (repay: pull, burn, decrement the debt),
   `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-340`
   (sweep: repay the debt first, then move the excess).

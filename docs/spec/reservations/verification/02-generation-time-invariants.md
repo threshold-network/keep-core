@@ -238,8 +238,8 @@ taken on 2026-10-29 and the code does not change.
   This does not assert that fee debt captures every possible pooled loss or uncredited spend.
 - **Enforcing code.** `financeInKindFee` records the shortfall
   (`tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-249`).
-  Repayment and debt-first sweeping decrease it (tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:237-261, tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-339).
+  Repayment and debt-first sweeping decrease it (tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:257-283, tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-339).
   `_burnFromReserve` floors fractional-satoshi token balance before coverage
-  (tbtc-v2@72b891eec:solidity/contracts/vault/ReservationVault.sol:354-371). A fractional satoshi does not cover a whole-satoshi fee.
+  (tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:392-407). A fractional satoshi does not cover a whole-satoshi fee.
 - **Test.** `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa surface campaign (23 of 23 properties pass over 1,000,600 calls at `c8350d109`) executes `property_inKindFeeDebtMatchesFinancing`. `none` identified for the complete Bitcoin-plus-token conservation property.
 - **Status.** `holds` for the incremental monetary property as the campaign executes it. The residual is that the conservation property is a vault-stack statement, not a Bitcoin-plus-token one, so no end-to-end Bitcoin-backed equality exists.

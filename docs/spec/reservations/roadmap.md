@@ -1215,7 +1215,7 @@ and are recorded as resolved rather than deleted.
    example calldata. The live risk is therefore an operator supplying the
    wrong value, not a placeholder being copied; the per-wallet count is the
    one value hard-enforced by the script (`= 1`,
-   `tbtc-v2@72b891eec:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:709-716`),
+   `tbtc-v2@b7aece4bf:solidity/deploy/98_generate_reservation_mainnet_calldata.ts:1226-1231`),
    and the total amount is not pinned by the script at all.
 3. Should reservation-eligible **wallets be allowlisted** at activation?
    Depositors pick the designated wallet at reveal, so any Live wallet can be
