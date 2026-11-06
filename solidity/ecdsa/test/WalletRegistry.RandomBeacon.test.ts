@@ -12,11 +12,10 @@ import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
   IRandomBeacon,
   RandomBeaconStub,
-  RandomBeaconStub__factory,
   WalletRegistry,
   WalletRegistryStub,
 } from "../typechain"
-import type { BigNumber, ContractTransaction } from "ethers"
+import type { ContractTransaction } from "ethers"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
@@ -210,10 +209,12 @@ describe("WalletRegistry - Random Beacon", async () => {
           await restoreSnapshot()
         })
 
+        it("should use the Amsterdam-compatible callback budget", async () => {
+          expect(await randomBeaconMock.callbackGasLimit()).to.equal(300_000)
+        })
+
         it("should succeed", async () => {
-          const entry: BigNumber = ethers.BigNumber.from(
-            ethers.utils.randomBytes(32)
-          )
+          const entry = ethers.utils.randomBytes(32)
 
           const tx = await randomBeaconMock.submitRelayEntry(entry)
 

@@ -449,11 +449,10 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Relay entry hard timeout is set to ~48h assuming 15s block time.
         relay.setTimeouts(1_280, 5_760);
 
-        // Callback gas limit is set to 56k units of gas. As of April 2022, it
-        // is enough to store new entry and block number on-chain.
-        // If the cost of EVM opcodes change over time, these parameters will
-        // have to be updated.
-        _callbackGasLimit = 64_000;
+        // Includes margin above the 240,768 gas measured for the deployed
+        // WalletRegistry proxy callback under the Amsterdam gas schedule.
+        // Existing deployments require a governance parameter update.
+        _callbackGasLimit = 300_000;
 
         // Group lifetime is set to 45 days assuming 15s block time.
         //
@@ -468,7 +467,10 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Gas parameters were adjusted based on Ethereum state in April 2022.
         // If the cost of EVM opcodes change over time, these parameters will
         // have to be updated.
-        _dkgResultSubmissionGas = 237_650;
+        // Amsterdam adds 175,840 gas for the two fresh DKG result slots.
+        // This provisional budget includes margin and must be rebenchmarked
+        // against the final fork rules before activation.
+        _dkgResultSubmissionGas = 450_000;
         _dkgResultApprovalGasOffset = 41_500;
         _notifyOperatorInactivityGasOffset = 54_500;
         _relayEntrySubmissionGasOffset = 11_250;
@@ -900,7 +902,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Refund msg.sender's ETH for DKG result submission and result approval
         reimbursementPool.refund(
             _dkgResultSubmissionGas +
-                (gasStart - gasleft()) +
+                _gasSpent(gasStart) +
                 _dkgResultApprovalGasOffset,
             msg.sender
         );
@@ -1057,7 +1059,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         callback.executeCallback(uint256(keccak256(entry)), _callbackGasLimit);
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _relayEntrySubmissionGasOffset,
+            _gasSpent(gasStart) + _relayEntrySubmissionGasOffset,
             msg.sender
         );
     }
@@ -1123,7 +1125,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
 
         callback.executeCallback(uint256(keccak256(entry)), _callbackGasLimit);
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _relayEntrySubmissionGasOffset,
+            _gasSpent(gasStart) + _relayEntrySubmissionGasOffset,
             msg.sender
         );
     }
@@ -1323,7 +1325,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         );
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _notifyOperatorInactivityGasOffset,
+            _gasSpent(gasStart) + _notifyOperatorInactivityGasOffset,
             msg.sender
         );
     }

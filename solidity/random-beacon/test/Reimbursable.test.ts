@@ -28,6 +28,31 @@ describe("Reimbursable", () => {
     )) as ReimbursableImplStub
   })
 
+  describe("gas measurement after state-gas credits", () => {
+    it("clamps a reading larger than the starting gas to zero", async () => {
+      expect(await reimbursableImplStub.gasSpent(0)).to.equal(0)
+    })
+
+    it("keeps a positive execution-gas delta", async () => {
+      const spent = await reimbursableImplStub.gasSpent(1_000_000, {
+        gasLimit: 100_000,
+      })
+      expect(spent).to.be.gt(900_000)
+      expect(spent).to.be.lt(1_000_000)
+    })
+
+    it("clamps a negative offset larger than the measured gas", async () => {
+      expect(await reimbursableImplStub.gasSpentAfterOffset(0, 2_300)).to.equal(
+        0
+      )
+      expect(
+        await reimbursableImplStub.gasSpentAfterOffset(1_000_000, 1_000_000, {
+          gasLimit: 100_000,
+        })
+      ).to.equal(0)
+    })
+  })
+
   describe("updateReimbursementPool", () => {
     context("when a caller is the deployer", () => {
       it("should revert", async () => {

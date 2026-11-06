@@ -34,7 +34,7 @@ export const params = {
   governanceDelay: 604_800, // 1 week
   relayEntrySoftTimeout: 35,
   relayEntryHardTimeout: 100,
-  callbackGasLimit: 200_000,
+  callbackGasLimit: 300_000,
   groupCreationFrequency: 10,
   groupLifetime: 5761, // 1 day in blocks assuming 15s block time
   dkgResultChallengePeriodLength: 100,
@@ -53,7 +53,7 @@ export const params = {
   authorizationDecreaseChangePeriod: 403_200,
   reimbursementPoolStaticGas: 40_800,
   reimbursementPoolMaxGasPrice: ethers.utils.parseUnits("500", "gwei"),
-  dkgResultSubmissionGas: 237_650,
+  dkgResultSubmissionGas: 450_000,
   dkgResultApprovalGasOffset: 41_500,
   notifyOperatorInactivityGasOffset: 54_500,
   relayEntrySubmissionGasOffset: 11_250,
