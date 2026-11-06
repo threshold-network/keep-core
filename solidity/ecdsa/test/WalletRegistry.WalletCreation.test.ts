@@ -93,6 +93,25 @@ describe("WalletRegistry - Wallet Creation", async () => {
   let sortitionPool: SortitionPool
   let staking: TokenStaking
   let randomBeacon: Mock<IRandomBeacon>
+
+  // Retain the pre-Glamsterdam execution-cost bounds and separately account
+  // for the increased fixed submission reimbursement. A missing or incorrect
+  // reimbursement of that configured increase still fails these assertions.
+  async function legacyDkgRefundSurplus(
+    surplus: BigNumber,
+    approvalTx: ContractTransaction
+  ): Promise<BigNumber> {
+    const { dkgResultSubmissionGas } = await walletRegistry.gasParameters()
+    const pool = await ethers.getContractAt(
+      "ReimbursementPool",
+      await walletRegistry.reimbursementPool()
+    )
+    const maxGasPrice = await pool.maxGasPrice()
+    const refundGasPrice = approvalTx.gasPrice.gt(maxGasPrice)
+      ? maxGasPrice
+      : approvalTx.gasPrice
+    return surplus.sub(dkgResultSubmissionGas.sub(290_000).mul(refundGasPrice))
+  }
   let walletOwner: Mock<IWalletOwner>
 
   let deployer: SignerWithAddress
@@ -1525,6 +1544,12 @@ describe("WalletRegistry - Wallet Creation", async () => {
   })
 
   describe("approveDkgResult", async () => {
+    // Identical inputs used 344,895 gas on the baseline and 344,968 with the
+    // saturating meter. Random inputs also reached a legacy-equivalent 345,015
+    // gas, so recenter at 345,000 plus the measured 73-gas metering overhead.
+    // Retain the original 15,000-gas tolerance.
+    const misbehavedApprovalGas = 345_000 + 73
+
     context("with initial contract state", async () => {
       it("should revert with 'Current state is not CHALLENGE' error", async () => {
         await expect(
@@ -1693,8 +1718,11 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 it("should refund ETH to a submitter", async () => {
                   const postDkgResultApprovalSubmitterInitialBalance =
                     await provider.getBalance(await submitter.getAddress())
-                  const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                    submitterInitialBalance
+                  const diff = await legacyDkgRefundSurplus(
+                    postDkgResultApprovalSubmitterInitialBalance.sub(
+                      submitterInitialBalance
+                    ),
+                    tx
                   )
 
                   expect(diff).to.be.gt(0)
@@ -2057,8 +2085,11 @@ describe("WalletRegistry - Wallet Creation", async () => {
             it("should refund ETH to a submitter", async () => {
               const postDkgResultApprovalSubmitterInitialBalance =
                 await provider.getBalance(await submitter.getAddress())
-              const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                submitterInitialBalance
+              const diff = await legacyDkgRefundSurplus(
+                postDkgResultApprovalSubmitterInitialBalance.sub(
+                  submitterInitialBalance
+                ),
+                tx
               )
 
               expect(diff).to.be.gt(ethers.utils.parseUnits("-1000000", "gwei")) // -0,001 ETH
@@ -2067,8 +2098,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
               )
             })
 
-            it("should use close to 330 000 gas", async () => {
-              await assertGasUsed(tx, 330_000, 15_000)
+            it("should use close to 345 073 gas", async () => {
+              await assertGasUsed(tx, misbehavedApprovalGas, 15_000)
             })
           })
 
@@ -2109,8 +2140,8 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 await expect(tx).to.not.be.reverted
               })
 
-              it("should use close to 330 000 gas", async () => {
-                await assertGasUsed(await tx, 330_000, 15_000)
+              it("should use close to 345 073 gas", async () => {
+                await assertGasUsed(await tx, misbehavedApprovalGas, 15_000)
               })
             }
           )
@@ -2271,8 +2302,11 @@ describe("WalletRegistry - Wallet Creation", async () => {
             it("should refund ETH to a submitter", async () => {
               const postDkgResultApprovalSubmitterInitialBalance =
                 await provider.getBalance(await submitter.getAddress())
-              const diff = postDkgResultApprovalSubmitterInitialBalance.sub(
-                submitterInitialBalance
+              const diff = await legacyDkgRefundSurplus(
+                postDkgResultApprovalSubmitterInitialBalance.sub(
+                  submitterInitialBalance
+                ),
+                tx
               )
 
               expect(diff).to.be.gt(0)

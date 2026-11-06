@@ -80,7 +80,8 @@ jobs:
     if: |
       github.event_name != 'pull_request'
         || needs.contracts-detect-changes.outputs.path-filter == 'true'
-    runs-on: ubuntu-latest
+    # Python 3.10.8 has an official Actions build for this runner image.
+    runs-on: ubuntu-22.04
     defaults:
       run:
         working-directory: ./solidity/ecdsa
