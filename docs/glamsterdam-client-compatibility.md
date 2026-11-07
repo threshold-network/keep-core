@@ -42,6 +42,36 @@ add an application activation gate; release owners must resolve the
 transition before deploying it on an already forked network. The header
 hash correction itself requires no smart-contract upgrade.
 
+## Transactions across activation
+
+Generated contract `ForceMining` replacement callbacks still preserve an
+original nonzero `GasLimit`. Raising the replacement fee therefore does not
+refresh that gas limit after repricing. The geth update does not fix this
+behavior.
+
+As an interim release gate, release owners must rehearse and document a
+bounded, coordinated drain of pending calls and calls estimated before the
+fork:
+
+1. Choose a bounded submission pause and resumption plan for affected
+   Ethereum calls. Inventory outstanding transactions by sender and nonce,
+   and drain or reconcile them across the activation boundary.
+2. Do not use pre-fork gas estimates for post-fork inclusion. Estimate new
+   submissions against the active post-fork rules and current business state.
+3. Before retrying unresolved work, check its receipt, the account's confirmed
+   and pending nonces, and current contract/business state. Distinguish mined,
+   still-pending, replaced, and dropped transactions; a missing receipt alone
+   does not establish that the original call is safe to repeat.
+4. Only after that reconciliation, obtain a fresh estimate and choose a
+   nonce-appropriate retry for work that is still needed. Do not blindly
+   rebroadcast work that may remain pending or may already have succeeded.
+   Resume affected submissions under the bounded plan once these checks and
+   post-fork estimation are in place.
+
+This runbook is a release prerequisite, not an implemented transaction-drain
+mechanism. This patch performs no live action and chooses no fork date or
+activation block.
+
 ## Regression coverage
 
 `TestGetBlockHashByNumber_Glamsterdam` serves a real public Sepolia header
