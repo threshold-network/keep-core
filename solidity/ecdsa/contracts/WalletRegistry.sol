@@ -902,7 +902,7 @@ contract WalletRegistry is
         // Refund msg.sender's ETH for DKG result submission and result approval
         reimbursementPool.refund(
             _dkgResultSubmissionGas +
-                (gasStart - gasleft()) +
+                _registryGasSpent(gasStart) +
                 _dkgResultApprovalGasOffset,
             msg.sender
         );
@@ -917,7 +917,7 @@ contract WalletRegistry is
         dkg.notifySeedTimeout();
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _notifySeedTimeoutGasOffset,
+            _registryGasSpent(gasStart) + _notifySeedTimeoutGasOffset,
             msg.sender
         );
     }
@@ -932,7 +932,10 @@ contract WalletRegistry is
         // performed on DKG timeout notification removes data from the storage
         // which is recovering gas for the transaction.
         reimbursementPool.refund(
-            (gasStart - gasleft()) - _notifyDkgTimeoutNegativeGasOffset,
+            _registryGasSpentAfterOffset(
+                gasStart,
+                _notifyDkgTimeoutNegativeGasOffset
+            ),
             msg.sender
         );
     }
@@ -1123,7 +1126,7 @@ contract WalletRegistry is
         }
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _notifyOperatorInactivityGasOffset,
+            _registryGasSpent(gasStart) + _notifyOperatorInactivityGasOffset,
             msg.sender
         );
     }
@@ -1478,6 +1481,26 @@ contract WalletRegistry is
         returns (uint96 maliciousDkgResultSlashingAmount)
     {
         return _maliciousDkgResultSlashingAmount;
+    }
+
+    /// @dev Keep the meter local so this upgrade does not require a new
+    ///      random-beacon npm dependency. Reservoir state gas is invisible.
+    function _registryGasSpent(uint256 gasStart)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 gasEnd = gasleft();
+        return gasStart > gasEnd ? gasStart - gasEnd : 0;
+    }
+
+    function _registryGasSpentAfterOffset(uint256 gasStart, uint256 offset)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 spent = _registryGasSpent(gasStart);
+        return spent > offset ? spent - offset : 0;
     }
 
     /// @notice Retrieves gas-related parameters.

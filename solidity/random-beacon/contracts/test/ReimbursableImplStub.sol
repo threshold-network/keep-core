@@ -14,4 +14,16 @@ contract ReimbursableImplStub is Reimbursable {
         require(admin == msg.sender, "Caller is not the admin");
         _;
     }
+
+    function gasSpent(uint256 gasStart) external view returns (uint256) {
+        return _gasSpent(gasStart);
+    }
+
+    function gasSpentAfterOffset(uint256 gasStart, uint256 offset)
+        external
+        view
+        returns (uint256)
+    {
+        return _gasSpentAfterOffset(gasStart, offset);
+    }
 }

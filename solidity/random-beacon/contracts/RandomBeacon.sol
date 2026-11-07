@@ -900,7 +900,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Refund msg.sender's ETH for DKG result submission and result approval
         reimbursementPool.refund(
             _dkgResultSubmissionGas +
-                (gasStart - gasleft()) +
+                _gasSpent(gasStart) +
                 _dkgResultApprovalGasOffset,
             msg.sender
         );
@@ -1057,7 +1057,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         callback.executeCallback(uint256(keccak256(entry)), _callbackGasLimit);
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _relayEntrySubmissionGasOffset,
+            _gasSpent(gasStart) + _relayEntrySubmissionGasOffset,
             msg.sender
         );
     }
@@ -1123,7 +1123,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
 
         callback.executeCallback(uint256(keccak256(entry)), _callbackGasLimit);
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _relayEntrySubmissionGasOffset,
+            _gasSpent(gasStart) + _relayEntrySubmissionGasOffset,
             msg.sender
         );
     }
@@ -1323,7 +1323,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         );
 
         reimbursementPool.refund(
-            (gasStart - gasleft()) + _notifyOperatorInactivityGasOffset,
+            _gasSpent(gasStart) + _notifyOperatorInactivityGasOffset,
             msg.sender
         );
     }
