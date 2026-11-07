@@ -449,10 +449,11 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Relay entry hard timeout is set to ~48h assuming 15s block time.
         relay.setTimeouts(1_280, 5_760);
 
-        // Includes margin above the 240,768 gas measured for the deployed
-        // WalletRegistry proxy callback under the Amsterdam gas schedule.
-        // Existing deployments require a governance parameter update.
-        _callbackGasLimit = 300_000;
+        // Callback gas limit is set to 56k units of gas. As of April 2022, it
+        // is enough to store new entry and block number on-chain.
+        // If the cost of EVM opcodes change over time, these parameters will
+        // have to be updated.
+        _callbackGasLimit = 64_000;
 
         // Group lifetime is set to 45 days assuming 15s block time.
         //
@@ -467,10 +468,7 @@ contract RandomBeacon is IRandomBeacon, IApplication, Governable, Reimbursable {
         // Gas parameters were adjusted based on Ethereum state in April 2022.
         // If the cost of EVM opcodes change over time, these parameters will
         // have to be updated.
-        // Amsterdam adds 175,840 gas for the two fresh DKG result slots.
-        // This provisional budget includes margin and must be rebenchmarked
-        // against the final fork rules before activation.
-        _dkgResultSubmissionGas = 450_000;
+        _dkgResultSubmissionGas = 237_650;
         _dkgResultApprovalGasOffset = 41_500;
         _notifyOperatorInactivityGasOffset = 54_500;
         _relayEntrySubmissionGasOffset = 11_250;

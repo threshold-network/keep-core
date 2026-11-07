@@ -82,25 +82,6 @@ describe("RandomBeacon - Group Creation", () => {
   let staking: TokenStaking
   let t: T
 
-  // These balance bounds were calibrated on the pre-Glamsterdam EVM. Keep
-  // checking the same execution-cost surplus while requiring the configured
-  // increase in the fixed DKG submission reimbursement to be paid in full.
-  async function legacyDkgRefundSurplus(
-    surplus: BigNumber,
-    approvalTx: ContractTransaction
-  ): Promise<BigNumber> {
-    const { dkgResultSubmissionGas } = await randomBeacon.gasParameters()
-    const pool = await ethers.getContractAt(
-      "ReimbursementPool",
-      await randomBeacon.reimbursementPool()
-    )
-    const maxGasPrice = await pool.maxGasPrice()
-    const refundGasPrice = approvalTx.gasPrice.gt(maxGasPrice)
-      ? maxGasPrice
-      : approvalTx.gasPrice
-    return surplus.sub(dkgResultSubmissionGas.sub(237_650).mul(refundGasPrice))
-  }
-
   before(async () => {
     ;[thirdParty] = await helpers.signers.getUnnamedSigners()
     let randomBeaconStub: RandomBeaconTest
@@ -1596,10 +1577,7 @@ describe("RandomBeacon - Group Creation", () => {
 
               it("should refund ETH", async () => {
                 const postBalance = await provider.getBalance(submitter.address)
-                const diff = await legacyDkgRefundSurplus(
-                  postBalance.sub(submitterInitialBalance),
-                  tx
-                )
+                const diff = postBalance.sub(submitterInitialBalance)
 
                 expect(diff).to.be.gt(0)
                 expect(diff).to.be.lt(
@@ -1804,10 +1782,7 @@ describe("RandomBeacon - Group Creation", () => {
               const postBalance = await provider.getBalance(
                 anotherSubmitter.address
               )
-              const diff = await legacyDkgRefundSurplus(
-                postBalance.sub(anotherSubmitterInitialBalance),
-                tx
-              )
+              const diff = postBalance.sub(anotherSubmitterInitialBalance)
 
               expect(diff).to.be.gt(0)
               expect(diff).to.be.lt(
@@ -1920,10 +1895,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         it("should refund ETH", async () => {
           const postBalance = await provider.getBalance(submitter.address)
-          const diff = await legacyDkgRefundSurplus(
-            postBalance.sub(submitterInitialBalance),
-            tx
-          )
+          const diff = postBalance.sub(submitterInitialBalance)
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(
@@ -1971,10 +1943,7 @@ describe("RandomBeacon - Group Creation", () => {
 
           it("should refund ETH", async () => {
             const postBalance = await provider.getBalance(submitter.address)
-            const diff = await legacyDkgRefundSurplus(
-              postBalance.sub(submitterInitialBalance),
-              await tx
-            )
+            const diff = postBalance.sub(submitterInitialBalance)
 
             expect(diff).to.be.gt(0)
             expect(diff).to.be.lt(
@@ -2019,10 +1988,7 @@ describe("RandomBeacon - Group Creation", () => {
 
         it("should refund ETH", async () => {
           const postBalance = await provider.getBalance(submitter.address)
-          const diff = await legacyDkgRefundSurplus(
-            postBalance.sub(submitterInitialBalance),
-            await tx
-          )
+          const diff = postBalance.sub(submitterInitialBalance)
 
           expect(diff).to.be.gt(0)
           expect(diff).to.be.lt(

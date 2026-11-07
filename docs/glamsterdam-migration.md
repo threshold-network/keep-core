@@ -1,89 +1,107 @@
 # Glamsterdam gas compatibility
 
-The current EIP-8037/EIP-8038 proposal changes storage and gas accounting.
-These changes are provisional until the fork specification is finalized.
+The current Amsterdam gas rules are provisional until the fork specification is
+finalized. This draft provides defensive gas-meter arithmetic and review tooling;
+it does not establish a required mainnet contract upgrade.
 
-## Existing deployments
+## Live wallet-creation wiring
 
-Changing constructor/initializer defaults does not update an existing contract.
-Before activation, use the existing governance setters for these parameters:
+At mainnet block 26,363,834, WalletRegistry
+`0x46d52E41C2F300BC82217Ce22b920c34995204eb` returned
+`0xF23fc18EcE6Afe7fb57ba59979e8600bb4B0294a` from `randomBeacon()`.
+That provider is RandomBeaconChaosnet, whose callback forwards available gas
+without a fixed 64k cap. The registry switched to it on January 25, 2023 in
+[this transaction](https://etherscan.io/tx/0xa7314c468cb059867cb9d544b964754ca95d228aa72d6d74e9c40e419083304a).
 
-| Contract | Parameter | Previous mainnet value | Proposed draft value |
-| --- | --- | ---: | ---: |
-| RandomBeacon | callbackGasLimit | 64,000 | 300,000 |
-| RandomBeacon | dkgResultSubmissionGas | 237,650 | 450,000 |
-| WalletRegistry | dkgResultSubmissionGas | 290,000 | 500,000 |
+The separate RandomBeacon at `0x5499f54b4A1CB4816eefCf78962040461be3D80b`
+has a 64k callback parameter, but it is not the live registry's provider.
+Consequently, this draft does not change callback defaults or generate callback
+governance updates. Always read the registry's actual provider before assessing
+callback limits.
 
-The callback limit includes margin over 240,768 gas measured with the deployed
-WalletRegistry proxy and implementation under Amsterdam EELS. At 64,000 gas the
-callback runs out of gas while writing `startBlock` and `seed`; the beacon catches
-the failure, leaving WalletRegistry awaiting its seed until timeout recovery.
+The EELS fixture in `solidity/ecdsa/test/glamsterdam/` uses verified deployed
+registry bytecode with **synthetic storage assigning the capped beacon** and a
+stub sortition pool. It demonstrates a hypothetical capped-callback failure,
+not the current mainnet wallet-creation path. Its 240,768 threshold and 300k
+success must not be used to justify a live callback update.
 
-The DKG reimbursement values are provisional budgets, not measured exact costs.
-Both result-submission paths create two fresh slots. Their storage costs alone
-increase by 175,840 gas versus Osaka. The proposed budgets add margin above the
-old budgets plus that delta. Benchmark both complete paths under the final fork
-schedule before signing updates; also remeasure every approval/timeout/inactivity
-offset and ReimbursementPool.staticGas. Do not blindly add a single opcode delta
-to staticGas because refunds and their cap affect the total.
+## DKG reimbursement: calldata floor matters
 
-Generate reviewable begin/finalize calls from live governance references:
+DKG submission can succeed while its fixed reimbursement underpays operators.
+The draft leaves the historical defaults unchanged: 237,650 gas for RandomBeacon
+and 290,000 for WalletRegistry. These are not post-fork recommendations.
+
+For a WalletRegistry result with 100 members, 100 signatures and no misbehaved
+members, both submission and approval calldata are 13,412 bytes. With no value
+or access list, the pinned Amsterdam transaction floor is:
+
+```text
+12,000 base + 3,000 recipient access + 64 × 13,412 bytes = 873,368 gas
+```
+
+The floor depends on the actual encoding and signature count. It is imposed at
+final transaction settlement, so `gasleft()` cannot observe it even below a
+`2^24` transaction gas limit. Adding only the two fresh-slot cost increases
+misses this mechanism; the earlier 450k/500k proposals were not justified.
+
+A supplied Sepolia lab report says a WalletRegistry allowance of 920k covered
+the full cost of a real 100-member DKG, and was then restored. Treat 920k as a
+reported benchmark candidate until its receipts, signature count, gas prices,
+approval measurement and reimbursement are independently checked. Do not copy it
+to RandomBeacon: that DKG uses a different result shape and 64 members.
+
+Benchmark the complete submission **and** approval transactions, using actual
+receipts and credited ETH at the pool's capped reimbursement gas price. Include
+the approval offset and `ReimbursementPool.staticGas` (40,800 in the observed
+mainnet deployment). Recheck all timeout/inactivity offsets separately. Existing
+governance setters can change reimbursement parameters without upgrading the
+contract implementation.
+
+## Read-only governance preparation
+
+The script prints the actual registry provider, current gas parameters, owners,
+delays and optional refund-update calldata at one pinned block. With neither
+environment variable set, it prints no update calls. Supply a separately
+benchmarked positive integer for each parameter you intend to review:
 
 ```sh
 cd solidity/ecdsa
-yarn hardhat run scripts/prepare-glamsterdam.ts --network mainnet
+GLAMSTERDAM_WALLET_DKG_SUBMISSION_GAS=<benchmarked-value> \
+  yarn hardhat run scripts/prepare-glamsterdam.ts --network mainnet
 ```
 
-The script only reads chain state and prints calldata. It does not sign or send.
-Review chain ID, owners, current parameters, and any already-pending updates.
-Submit the begin calls through the relevant governance owner, wait the on-chain
-delay (currently seven days on mainnet), verify each pending value, then submit
-the matching finalize calls. Re-read `relayEntryParameters()` and both
-`gasParameters()` getters afterward. Never finalize an unrelated pending update.
+Use `GLAMSTERDAM_BEACON_DKG_SUBMISSION_GAS` only after a separate RandomBeacon
+benchmark. The script never signs or broadcasts. Review the chain ID, live
+provider, owners and pending updates; submit approved begin calls, wait the
+on-chain governance delay, verify pending values, then submit matching finalize
+calls. Never finalize an unrelated pending update. Read `gasParameters()` again
+afterward. Neither historical defaults nor supplied environment values become
+automatically validated by generating calldata.
 
-Run a full RandomBeacon -> WalletRegistry proxy callback on a fork using the new
-rules with transaction gas below and above 2^24. Check that `DkgStarted` occurs,
-`CallbackFailed` does not occur, and both startBlock and seed are recorded. Ensure
-the outer relay submission has enough gas for its own state changes and refund.
+## Gas measurement and payout limitations
 
-The public deployed bytecode regression is reproducible separately from Hardhat:
+The updated meter clamps a negative `gasStart - gasleft()` delta to zero,
+including the negative DKG-timeout offset. This prevents arithmetic underflow
+from reverting otherwise successful work. It adds no storage fields and preserves
+proxy storage layouts. No ordinary production transaction has been demonstrated
+to trigger such an underflow; this is defensive compatibility work.
 
-```sh
-python3 -m venv /tmp/keep-glamsterdam-eels
-/tmp/keep-glamsterdam-eels/bin/pip install 'ethereum-execution @ git+https://github.com/ethereum/execution-specs.git@a7dbafac0c0ec82e7b2e20959cc7c00ce958442a'
-/tmp/keep-glamsterdam-eels/bin/python solidity/ecdsa/test/glamsterdam/wallet_registry_callback_eels.py
-```
+Saturation does not make reimbursement exact. Besides the settlement floor,
+reservoir-paid new-state gas above `2^24` is invisible to `gasleft()`. Monitor
+actual transaction costs and use ordinary fresh estimates. A reimbursement
+redesign needs an agreed capped fee or a state-aware quote; this draft does not
+provide one.
 
-The fixture contains only the verified mainnet implementation runtime for
-`0x420c99a4B0e4CB65c4CaBf2b4D2526372aA1ac6e`, obtained from Sourcify; the script
-embeds proxy runtime read from `0x46d52E41C2F300BC82217Ce22b920c34995204eb`.
-It models the required `AWAITING_SEED` state and a locked sortition-pool response.
-Assertions cover Osaka success, Amsterdam failure without a reservoir, Amsterdam
-success at 300k, reservoir behavior, and the pinned proxy threshold. It excludes
-the outer RandomBeacon frame and does not prove a production relay gas estimate.
-
-## Gas measurement
-
-The updated meter clamps a negative `gasStart - gasleft()` delta to zero, including
-the negative DKG-timeout offset. This prevents a gas credit from reverting otherwise
-successful work. It adds no storage fields and preserves proxy storage layouts.
-
-This does **not** measure reservoir-paid state gas. For transaction gas above 2^24,
-EIP-8037 pays new-state charges from a reservoir invisible to `gasleft()`. Operators
-must not expect exact reimbursement for that gas. Use ordinary estimated gas
-limits, monitor actual transaction cost, and do not rely on a reservoir to bypass
-the old callback cap. A future reimbursement redesign needs an explicitly agreed,
-capped fee or a state-aware quote; fixed offsets cannot reconstruct hidden dynamic
-state costs.
-
-ReimbursementPool deliberately treats failed ETH sends as best effort. Contract
-operators should use a storage-free receiver and alert on `SendingEtherFailed`.
-Adding a fresh retry-credit slot after an out-of-gas receiver call could itself
-run out of gas and revert protocol work; this patch does not add that failure path.
-A pull-payment replacement pool requires a separate migration and gas benchmark.
+ReimbursementPool treats failed ETH sends as best effort. Contract operators
+should use a storage-free receiver and monitor `SendingEtherFailed`. Adding a
+fresh retry-credit slot after an out-of-gas receiver call can itself exhaust gas
+and revert protocol work; this draft does not add that failure path. A replacement
+pool requires separate migration and gas benchmarks.
 
 ## References
 
+- https://eips.ethereum.org/EIPS/eip-7976
+- https://eips.ethereum.org/EIPS/eip-2780
 - https://eips.ethereum.org/EIPS/eip-8037
 - https://eips.ethereum.org/EIPS/eip-8038
 - https://github.com/ethereum/glamsterdam-gas-invariants

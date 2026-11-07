@@ -351,7 +351,7 @@ inactive for other reasons.
 |Calculated gas cost for submitting a DKG result. This will be refunded as part
 of the DKG approval process.
 |Yes
-|`500_000` (provisional Glamsterdam budget; see `docs/glamsterdam-migration.md`)
+|`290_000`
 
 |dkgResultApprovalGasOffset
 |Gas that is meant to balance the DKG result approval's overall cost.

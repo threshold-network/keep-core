@@ -15,7 +15,7 @@ contract RandomBeaconStub is IRandomBeacon {
     Callback.Data internal callback;
 
     // This value has to reflect the one set in the Random Beacon contract!
-    uint256 public callbackGasLimit = 300000;
+    uint256 public callbackGasLimit = 64000;
 
     event CallbackFailed(uint256 entry, uint256 entrySubmittedBlock);
 

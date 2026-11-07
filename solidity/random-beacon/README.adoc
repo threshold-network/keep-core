@@ -375,7 +375,7 @@ _~24h assuming 15s block time_
 |callbackGasLimit
 |Relay entry callback gas limit.
 |Yes
-d|`300_000`
+d|`64_000`
 
 4+s|Slashing
 
@@ -428,7 +428,7 @@ inactive for other reasons.
 |Calculated gas cost for submitting a DKG result. This will be refunded as part
 of the DKG approval process.
 |Yes
-|`450_000` (provisional Glamsterdam budget; see `docs/glamsterdam-migration.md`)
+|`235_000`
 
 |dkgResultApprovalGasOffset
 |Gas that is meant to balance the DKG result approval's overall cost.

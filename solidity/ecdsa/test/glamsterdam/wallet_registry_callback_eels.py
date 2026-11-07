@@ -1,4 +1,9 @@
-"""Run the deployed WalletRegistry callback bytecode under Osaka/Amsterdam."""
+"""Test deployed registry bytecode with hypothetical capped-beacon wiring.
+
+This fixture assigns synthetic registry storage to the capped RandomBeacon.
+The live mainnet registry has used uncapped RandomBeaconChaosnet since January
+2023. These assertions do not reproduce its current wallet-creation path.
+"""
 
 import json
 from pathlib import Path
@@ -87,6 +92,7 @@ def make_pre_state(use_proxy: bool = False) -> State:
     # WalletRegistry layout: dkg begins at slot 151; its sortitionPool is +0,
     # startBlock is +8 and seed is +9. randomBeacon is slot 262.
     set_storage(state, TARGET, slot(151), U256.from_be_bytes(SORTITION_POOL))
+    # Synthetic provider wiring, NOT the current live registry storage value.
     set_storage(state, TARGET, slot(262), U256.from_be_bytes(ORIGIN))
     return state
 

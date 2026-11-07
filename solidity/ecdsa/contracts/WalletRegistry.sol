@@ -413,10 +413,7 @@ contract WalletRegistry is
         // Gas parameters were adjusted based on Ethereum state in April 2022.
         // If the cost of EVM opcodes change over time, these parameters will
         // have to be updated.
-        // Amsterdam adds 175,840 gas for the two fresh DKG result slots.
-        // This provisional budget includes margin and must be rebenchmarked
-        // against the final fork rules before activation.
-        _dkgResultSubmissionGas = 500_000;
+        _dkgResultSubmissionGas = 290_000;
         _dkgResultApprovalGasOffset = 72_000;
         _notifyOperatorInactivityGasOffset = 93_000;
         _notifySeedTimeoutGasOffset = 7_250;
