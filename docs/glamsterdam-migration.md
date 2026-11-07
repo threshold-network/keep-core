@@ -44,11 +44,13 @@ final transaction settlement, so `gasleft()` cannot observe it even below a
 `2^24` transaction gas limit. Adding only the two fresh-slot cost increases
 misses this mechanism; the earlier 450k/500k proposals were not justified.
 
-A supplied Sepolia lab report says a WalletRegistry allowance of 920k covered
-the full cost of a real 100-member DKG, and was then restored. Treat 920k as a
-reported benchmark candidate until its receipts, signature count, gas prices,
-approval measurement and reimbursement are independently checked. Do not copy it
-to RandomBeacon: that DKG uses a different result shape and 64 members.
+A supplied Sepolia benchmark proposes a WalletRegistry allowance of 920k.
+Treat it as a candidate for that measured path, not a mainnet quote. Covering
+gas units does not guarantee full ETH reimbursement: submission and approval
+can use different effective gas prices, and the pool pays at its capped
+approval-transaction price. Check both receipts, signature count, implementation,
+approval measurement and credited ETH. Do not copy the value to RandomBeacon:
+that DKG uses a different result shape and 64 members.
 
 Benchmark the complete submission **and** approval transactions, using actual
 receipts and credited ETH at the pool's capped reimbursement gas price. Include
