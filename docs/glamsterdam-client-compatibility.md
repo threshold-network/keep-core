@@ -25,6 +25,10 @@ headers. It must be included in a coordinated client release:
   a coordinated fleet transition or a compatible activation gate, with a
   rehearsal that verifies the same seed, leader, and heartbeat choice across
   the fleet.
+- Before release, the coordinated corrected fleet must also complete an
+  actual heartbeat and deposit-sweep signing and live execution rehearsal.
+  Agreement on the computed leader alone does not satisfy this gate. This
+  patch does not claim that this release rehearsal has been completed.
 - Before release, compare the corrected client's computed hashes with the
   canonical hashes returned by the actual RPC providers operators use,
   across shared post-fork block numbers. Include more than the saved fixture
