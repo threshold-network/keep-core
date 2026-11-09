@@ -279,9 +279,14 @@ so a non-conforming deposit vault makes settlement revert. This is scoped to
 governance miswiring: it arises only if governance wires a vault that does not
 implement `financeInKindFee`.
 
-Test: `test/bridge/ReservationProofs.test.ts:1757` ("should credit the
-deposit's immutable vault, not a reservationVault repointed
-mid-flight").
+Test: the routing half is `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998`
+("should credit the deposit's immutable vault, not a reservationVault
+repointed mid-flight"). The revoked-trust turn of this case is a separate
+branch and is exercised by
+`tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:71-120`
+("test_acceptanceProof_creditsDepositorDirectlyWhenVaultUntrusted"), with the
+trusted control at
+`tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:127-175`.
 
 Status: holds.
 
