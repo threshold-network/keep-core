@@ -107,10 +107,15 @@ D31 (hand-off reserve gate, at `tbtc-v2@806b1106f`, includes the SDK floor `dc5c
   reports which on-chain request rule would fail without submitting: vault
   set, deposit revealed, not swept, caller-is-depositor, flagged reserved,
   no request already made, wallet is the designated wallet, wallet Live,
-  amount >= min+fee, single-amount cap, global-count cap, per-wallet count
+  amount > min + 2*fee, single-amount cap, global-count cap, per-wallet count
   and amount caps. The deadline-based signing-window rules are NOT checked
   (the snapshotted refund deadline is not a public view). The owner address is
-  read as `reservationRecord.owner` (zero -> `undefined`).
+  read as `reservationRecord.owner` (zero -> `undefined`). The amount rule is
+  `amount > minAmount + 2 * txMaxFee` on both sides, not the older
+  `>= minAmount + txMaxFee`: the contract requires it
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:597-600`) and the
+  SDK's `meetsReservationMinimum` applies it
+  (`tbtc-v2@b7aece4bf:typescript/src/services/reservations/reservations-service.ts:144-149`).
 - **Functions:** `ReservationsService.requestAcceptance`
   (`tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:456`); `checkAcceptancePreflight` `tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:478`;
   owner/depositor match `tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:505`; designated-wallet `tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:521`; Live `tbtc-v2@7aabfc502:typescript/src/services/reservations/reservations-service.ts:526`;

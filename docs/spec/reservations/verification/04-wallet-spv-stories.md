@@ -12,6 +12,26 @@ Evidence pins and vocabulary: [user stories index](04-user-stories.md).
 - **Reverts (validator, while signing):** "Reservations are disabled" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:975`; "Wallet is not in Live or MovingFunds state" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1189`; "Acceptance action is not pending" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:998`; "Acceptance action has timed out" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1006`; "Deposit min age not achieved yet" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1022`; "Deposit not routed to the reservation vault" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1034`; "Anchor amount below the reservation minimum" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1054`; "Deposit refund safety margin is not preserved" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1071`; "Deposit controlled by different wallet" `tbtc-v2@b7aece4bf:solidity/contracts/bridge/WalletProposalValidator.sol:1076`.
 - **Test:** `keep-core:pkg/tbtcpg/reservation_acceptance_test.go:904` ("TestReservationAcceptanceTask_Run"), `:1384` ("BoundaryChecks"), `:1770` ("TestLocalChain_ValidateReservationAnchorProposal_StrictNonceGate"), `:1806`, `:1942` ("RejectsInsideTimeoutMargin"). Status `holds`.
 
+**Note: how many Bitcoin reads one acceptance run issues (part of US-20).**
+The task does not read every pending candidate's funding transaction up front.
+It walks the candidates through a bounded, in-order lookup pipeline: at most 8
+funding-transaction lookups run concurrently
+(`reservationAcceptanceFundingTxLookupWorkers = 8`,
+`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:123-134`) and each
+candidate's confirmation call carries a 30-second timeout
+(`reservationAcceptanceFundingTxLookupTimeout = 30 * time.Second`,
+`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:136-148`), so one
+unhealthy Bitcoin backend fails a candidate fast instead of consuming its whole
+retry budget in every slot. A candidate whose funding-transaction or
+confirmation read fails is logged and skipped, not treated as an error for the
+run (`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:915-931`). The
+early stop is best effort, not a bound: `Run` calls the pipeline's `stop` on
+return, lookups already dispatched still run to completion or to their timeout,
+and Go's `select` can still hand out a ready dispatch slot over the closed stop
+channel, so the saving past the first match is about `workers - 1` fetches and
+the total RPC count is not strictly bounded
+(`keep-core@96530a787:pkg/tbtcpg/reservation_acceptance.go:1043-1113`).
+
 #### US-21 - Acceptance task: vault unconfigured or no candidate
 - **Actor:** Wallet operator.
 - **Given/When/Then:** No reservation vault is configured (`self.reservationVault == 0`) or no pending acceptance event is in the look-back window. **Then** `Run` returns `(nil, false, nil)`. The two vault-fee gauges are reset to zero on every pass when the vault is unset.

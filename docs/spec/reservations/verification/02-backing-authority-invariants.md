@@ -105,7 +105,7 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
 | `notifyReservationActionTimeout` | permissionless | `ReservationRouter.sol:315-333` | `Bridge.ReservationStrandingLibrary.test.ts:1027` |
 | `notifyReservationAcceptanceTimedOut` | permissionless | `ReservationRouter.sol:334-365` | `Bridge.ReservationOccupancy.test.ts:68` |
 | `notifyStaleReservedDeposit` | permissionless | `ReservationRouter.sol:396-408` | `Bridge.ReservationStranding.test.ts:727` |
-| `forceStaleReservedDeposit` | governance only | `ReservationRouter.sol:410-423` | `none` |
+| `forceStaleReservedDeposit` | governance only | `tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationRouter.sol:470-474` | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts:853` (owner force-clears before the deadline), `:870` (non-owner refused, deposit left pending) |
 | `notifyReservationStranded` | permissionless | `ReservationRouter.sol:425-448` | `Bridge.ReservationStranding.test.ts:525` |
 | `updateReservationParameters` | governance only | `ReservationRouter.sol:367-389` | `Bridge.ReservationFeasibilityGuard.test.ts:207` |
 | `updateReservationCaps` | governance only (four arguments at `9d2086965`; five at `tbtc-v2@806b1106f`, adding `handoffReserveWallets`, which must be non-zero) | `ReservationRouter.sol:450-462` (at `9d2086965`); at `tbtc-v2@806b1106f`: router `tbtc-v2@806b1106f:solidity/contracts/bridge/ReservationRouter.sol:476` (`onlyGovernance`), library `tbtc-v2@806b1106f:solidity/contracts/bridge/Reservation.sol:1687-1745`, staging `tbtc-v2@806b1106f:solidity/contracts/bridge/BridgeGovernance.sol:1896` | `Bridge.ReservationCaps.test.ts:144` (at `9d2086965`); at `tbtc-v2@806b1106f`: `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationCaps.test.ts:163` (zero reserve reverts), `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.Governance.test.ts:4705` (five-argument begin) |
@@ -115,13 +115,21 @@ Evidence pins and vocabulary: [invariants index](02-invariants.md).
 | vault `receiveBalanceIncrease` | bank only | `ReservationVault.sol:onlyBank modifier :102-104; receiveBalanceIncrease :164` | `ReservationVault.test.ts:209` |
 | vault `sweepFees`/`updateFeeReserveTarget`/`updateInitiationFee` | owner only | `ReservationVault.sol:278, 302, 335` | `ReservationVault.test.ts:588` |
 | vault `repayInKindFeeDebt` | anyone | `ReservationVault.sol:241` | `ReservationVault.test.ts:500` |
-| `setVaultStatus` | governance only | `Bridge.sol:1288-1294` | `none` |
+| `setVaultStatus` | governance only | `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Bridge.sol:1288-1294` | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.Governance.test.ts:5420` (the "setVaultStatus" group: owner-only, the flag flip and its event) |
 
 - **Why.** Only a trusted SPV maintainer can settle (they hold the Bitcoin
   proofs); only governance can change caps/params; the depositor is the only
   one who may authorize acceptance of *their* deposit; re-anchor is the one
   intentionally permissionless state move (source in `MovingFunds`/`Closing`),
   gated by the third-party hold cap.
+- **Test.** The table above is the evidence list; the two rows that read `none`
+  were re-checked at the freeze head and both have a case. `forceStaleReservedDeposit`:
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts:853` ("force-clears the
+  reserved deposit when the owner calls, before its deadline") and `:870` ("refuses a non-owner and
+  leaves the deposit pending"). `setVaultStatus`:
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.Governance.test.ts:5420` (the "setVaultStatus"
+  group). Only `closeReservation` still reads `none`, and that is correct: M1 has no entry point to
+  call it, so there is no actor and no transition to test.
 - **Status.** holds. (The "revert when a non-empty member proof fails
   validation" is pinned by `Bridge.ReservationThirdPartyReanchorHolds.test.ts:235`;
   the third-party exemption by :151/:179/:204.)

@@ -253,7 +253,14 @@ taken on 2026-10-29 and the code does not change.
   decrements it
   (`tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1445`), and
   the vault-change gate sits at `:1550` (`pendingReservedDeposits == 0`).
-- **Test.** The gate itself: `none` at the pin. At `d20cf74ba`, `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` "lets governance re-point the reservation vault once the last pending reserved deposit is released" (`tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:434`) exercises the gate after a release; at the freeze head the same case is `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:443` ("lets governance re-point the reservation vault once the last pending reserved deposit is released"). The counter's own conservation is pinned (see INV-206).
+- **Test.** The gate is executed at the freeze head by
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:443`, which
+  asserts "Pending reserved deposits exist" while one pending reserved deposit remains and then
+  re-points the vault after releasing it (`:462-480`), and by
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1171-1200`, which
+  refuses the same change while an accepted reservation is open ("Active reservations exist", the
+  `reservationTotalAmount` half of the same gate). The counter's own conservation is pinned
+  (INV-206).
 - **Status.** `holds` (gate, at `d20cf74ba` via tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:434 and at the freeze head via the same case). The counter it reads is `holds` (INV-206).
 
 ### INV-110 Vault status is the only switch that routes a settlement credit to the vault vs. the depositor
@@ -266,9 +273,22 @@ taken on 2026-10-29 and the code does not change.
   authorized deposit's credit.
 - **Enforcing code.** `ReservationProofs.sol:599-631` (uses
   `self.deposits[reservationKey].vault`, gate at :621-624).
-- **Test.** `ReservationProofs.test.ts` "should credit the deposit's immutable
-  vault, not a reservationVault repointed mid-flight" (:1757).
-- **Status.** holds.
+- **Test.** The routing half is pinned by
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998`
+  ("should credit the deposit's immutable vault, not a reservationVault
+  repointed mid-flight"). That test does not exercise the revoked-trust branch
+  and is not evidence for it; the revoked-trust branch is exercised by
+  `tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:71-120`
+  ("test_acceptanceProof_creditsDepositorDirectlyWhenVaultUntrusted": governance
+  revokes the vault's trust after the acceptance request, the proof settles, the
+  Bank credits the depositor the full anchor amount directly, and TBTC supply,
+  the depositor's TBTC balance and the vault's Bank balance are all unchanged),
+  with its control at
+  `tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:127-175`
+  ("test_acceptanceProof_routesThroughVaultWhenTrusted") showing the default
+  branch is not what the first test observes.
+- **Status.** holds (routing by the first test, the trust gate by the second and
+  its control).
 
 ### INV-111 Release to pool (D26): the record is cleared and the deposit re-routed; refused after any acceptance request and for the reservation vault
 

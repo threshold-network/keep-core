@@ -12,7 +12,7 @@ No status in this matrix asserts that the named tests ran during this documentat
 
 | Chapter | Items | holds | holds-untested | design-only | unknown | violated | model | pointer |
 |---|---|---|---|---|---|---|---|---|
-| System model | 58 | 38 | 3 | 2 | 0 | 0 | 15 | 0 |
+| System model | 58 | 40 | 1 | 2 | 0 | 0 | 15 | 0 |
 | Invariants | 44 | 41 | 2 | 1 | 0 | 0 | 0 | 0 |
 | Parameters and governance | 36 | 36 | 0 | 0 | 0 | 0 | 0 | 0 |
 | User stories | 74 | 68 | 5 | 0 | 0 | 0 | 0 | 1 |
@@ -21,8 +21,8 @@ No status in this matrix asserts that the named tests ran during this documentat
 | Disaster recovery | 12 | 6 | 3 | 2 | 1 | 0 | 0 | 0 |
 | Threat model | 20 | 16 | 1 | 1 | 2 | 0 | 0 | 0 |
 | Cross-repo contract | 63 | 43 | 19 | 0 | 0 | 0 | 0 | 1 |
-| Accepted risks | 18 | 13 | 3 | 2 | 0 | 0 | 0 | 0 |
-| **Total** | 364 | 299 | 37 | 8 | 3 | 0 | 15 | 2 |
+| Accepted risks | 19 | 14 | 3 | 2 | 0 | 0 | 0 | 0 |
+| **Total** | 365 | 302 | 35 | 8 | 3 | 0 | 15 | 2 |
 
 ## Review queue rule
 
@@ -64,7 +64,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [SM-D1](01-system-model.md) | (not reserved) | holds | `Reservation.test.ts` guard 5 |
 | [SM-D2](01-system-model.md) | reserved/pending | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:2001` "12. Idempotency guard for consumeAcceptedDeposit" |
 | [SM-D3](01-system-model.md) | reserved/pending | holds | `Bridge.ReservationStranding.test.ts` "notifyStaleReservedDeposit" |
-| [SM-D4](01-system-model.md) | reserved/pending | holds-untested | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts:853` ... |
+| [SM-D4](01-system-model.md) | reserved/pending | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts:853` ... |
 | [SM-D5](01-system-model.md) | reserved/pending (never requested: `reservations[key].requestNonce == 0`) | holds | `tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` "happy path" and "releaseReservedDepositToPool guards" groups |
 | [SM-R1](01-system-model.md) | Unknown | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Reservation.test.ts` ("step 20: state mutations and event emission") |
 | [SM-R10](01-system-model.md) | Active / ActionPending | design-only | none in M1 |
@@ -85,7 +85,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [SM-V1](01-system-model.md) | `isVaultTrusted[vault]` | holds | `holds` (the on-time path is pinned in `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts` "11. Vault-routing regression test" ... |
 | [SM-W1](01-system-model.md) | Live | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts` "driven to Terminated by a real moving-funds-timeout call chain" |
 | [SM-W2](01-system-model.md) | Live | holds | `tbtc-v2:solidity/test/bridge/Bridge.Wallets.test.ts` "should change wallet's state to Closing" |
-| [SM-W3](01-system-model.md) | Closing | holds-untested | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation"). ... |
+| [SM-W3](01-system-model.md) | Closing | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationSettlement.test.ts:1204` ("refuses to close a wallet that still custodies an accepted reservation"). ... |
 | [SM-W4](01-system-model.md) | any | holds | `tbtc-v2:solidity/test/bridge/Bridge.ReservationStranding.test.ts` (terminates a real wallet mid-reservation) |
 | [SM-W5](01-system-model.md) | Active-reservation on a Closing/Closed/Terminated/Live wallet | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStranding.test.ts` "notifyReservationStranded" |
 | [SM-X1](01-system-model.md) | Unknown | holds | writes a fresh `ReservationAction` record keyed by `(key, ++requestNonce)`. `Reservation.sol:631`, `:915` |
@@ -108,8 +108,8 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [INV-106](02-invariants.md) | The Closed position state is never observable in M1 | design-only | `none` (dead path, no test). |
 | [INV-107](02-invariants.md) | An ActionPending position is always paired with a current Pending Reanchor generation | holds | `Bridge.ReservationStrandingLibrary.test.ts` "releases target wallet capacity on Reanchor timeout" (:947) pins the `ActionPending -> Active` + `TimedOut` ... |
 | [INV-108](02-invariants.md) | A Pending Acceptance generation is only observable while the position is Unknown and no other action is Pending | holds | `Reservation.test.ts` "should revert if acceptance is already pending" (:299). |
-| [INV-109](02-invariants.md) | Pending reserved deposit record: a reserved deposit that is neither accepted, stale nor released keeps `pendingReservedDeposits > 0`, which blocks a vault change | holds | The gate itself: `none` at the pin. At `d20cf74ba`, `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` ... |
-| [INV-110](02-invariants.md) | Vault status is the only switch that routes a settlement credit to the vault vs. the depositor | holds | `ReservationProofs.test.ts` "should credit the deposit's immutable vault, not a reservationVault repointed mid-flight" (:1757). |
+| [INV-109](02-invariants.md) | Pending reserved deposit record: a reserved deposit that is neither accepted, stale nor released keeps `pendingReservedDeposits > 0`, which blocks a vault change | holds | The gate is executed at the freeze head by `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:443` ... |
+| [INV-110](02-invariants.md) | Vault status is the only switch that routes a settlement credit to the vault vs. the depositor | holds | The routing half is pinned by `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998` ... |
 | [INV-111](02-invariants.md) | Release to pool (D26): the record is cleared and the deposit re-routed; refused after any acceptance request and for the reservation vault | holds-untested | the guard list keeps its structure and its line numbers are re-pinned at the freeze head: "reverts after a pending acceptance request" ... |
 | [INV-112](02-invariants.md) | Legal state relationships at transaction boundaries | holds | The individual transition tests are listed in INV-101 through INV-111. The Medusa accounting campaign (10 of 10 properties pass over 1,857,446 calls at ... |
 | [INV-113](02-invariants.md) | D31 acceptance reserve is a request-time count bound | holds | The describe block "hand-off reserve gate at acceptance" `tbtc-v2@806b1106f:solidity/test/bridge/Bridge.ReservationOccupancy.test.ts:276`: ... |
@@ -131,7 +131,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [INV-302](02-backing-authority-invariants.md) | The recorded reservation amount follows the current anchor | holds | `Bridge.ReservationSettlement.test.ts` ... |
 | [INV-303](02-backing-authority-invariants.md) | Fee bounds per hop and cumulative grind | holds | `ReservationProofs.test.ts` "should revert if miner fee exceeds snapshotted txMaxFee" (:734) ... |
 | [INV-304](02-backing-authority-invariants.md) | Single-input / single-output lineage | holds | `ReservationProofs.test.ts` "should revert if output vector does not have exactly 1 output (0 outputs)" (:699) ... |
-| [INV-401](02-backing-authority-invariants.md) | Who can move which state | holds | none recorded |
+| [INV-401](02-backing-authority-invariants.md) | Who can move which state | holds | The table above is the evidence list; the two rows that read `none` were re-checked at the freeze head and both have a case. `forceStaleReservedDeposit`: ... |
 | [INV-402](02-backing-authority-invariants.md) | Re-anchor source-wallet gating | holds | `Bridge.ReservationStrandingLibrary.test.ts` "rejects when source wallet is Live and call is not privileged" (:1640) ... |
 | [INV-501](02-generation-time-invariants.md) | `requestNonce` is monotonic; each generation is uniquely `(key, nonce)` | holds | `ReservationProofs.test.ts` "should revert if action state is Settled (2)" (:315), "should revert if action state is Superseded (5)" (:353) ... |
 | [INV-502](02-generation-time-invariants.md) | On-time settlement must name the current generation; late settlement names an older timed-out one | holds | `ReservationProofs.test.ts` "should unwind pending newer acceptance generation when settling older generation late" (:920) ... |
@@ -140,8 +140,8 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [INV-602](02-generation-time-invariants.md) | Re-anchor cooldown | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:1670` "rejects when reanchor cooldown is in effect" ... |
 | [INV-603](02-generation-time-invariants.md) | Term / dissolution-eligible / refund-deadline windows | holds | `Reservation.test.ts` "should succeed when timeoutAt + 24h == refundDeadline (close bound exact)" (:405) and ... |
 | [INV-701](02-generation-time-invariants.md) | The vault mints gross and retains the fee; debt is the only mechanism that can under-cover a miner fee | holds | `ReservationVault.test.ts` "should transfer the net amount (gross minus fee) to the depositor" (:201), "should retain the fee in the vault" (:205) ... |
-| [INV-702](02-generation-time-invariants.md) | Acceptance settlement uses the deposit's stored vault, subject to current trust | holds | `ReservationProofs.test.ts` "should credit the deposit's immutable vault, not a reservationVault repointed mid-flight" (:1757). |
-| [INV-703](02-generation-time-invariants.md) | `setVaultStatus(vault, true)` is only safe at/after the keep-core activation block B | holds | `TestReservationsActivationBlock_SanityCheck` (`keep-core@96530a787:pkg/tbtc/coordination_test.go:1667`) pins that `Mainnet` and `Unknown` have no entry and ... |
+| [INV-702](02-generation-time-invariants.md) | Acceptance settlement uses the deposit's stored vault, subject to current trust | holds | The routing half is pinned by `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998` ... |
+| [INV-703](02-generation-time-invariants.md) | `setVaultStatus(vault, true)` is only safe at/after the keep-core activation block B | holds | `TestReservationsActivationBlock_SanityCheck` (`keep-core@96530a787:pkg/tbtc/coordination_test.go:1593`) pins that `Mainnet` and `Unknown` have no entry and ... |
 | [INV-704](02-generation-time-invariants.md) | Units, gross mint, net transfer and fee reserve | holds | `keep-core@680300533:pkg/tbtcpg/reservation_satoshi_units_test.go:131` ("TestSatoshiToTbtcBaseUnits_Vector") and ... |
 | [INV-705](02-generation-time-invariants.md) | Miner-fee shortfall is an incremental backing difference, not the only possible system loss | holds | `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207 ... |
 
@@ -191,7 +191,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | ID and owning file | Item | Status | Test / rehearsal reference |
 |---|---|---|---|
 | [US-01](04-deposit-stories.md) | Reserved deposit reveal | holds | `test/bridge/Bridge.ReservationAcceptanceAuthorization.test.ts:419` (test helper that reveals via the production path) ... |
-| [US-02](04-deposit-stories.md) | Reserved reveal rejected: refund locktime beyond term + safety margin | holds | none recorded |
+| [US-02](04-deposit-stories.md) | Reserved reveal rejected: refund locktime beyond term + safety margin | holds | `tbtc-v2@b7aece4bf:solidity/test/audit-poc/ReservationTimeBounds.t.sol:64` ("test_reservedReveal_rejectsLocktimeOneSecondPastCap") asserts the exact string ... |
 | [US-03](04-deposit-stories.md) | Acceptance request: happy path | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Reservation.test.ts:2038` ("should request reservation acceptance successfully"). Status `holds` at `tbtc-v2@b7aece4bf` ... |
 | [US-04](04-deposit-stories.md) | Acceptance request: depositor and revealed-deposit gates (negative) | holds | none recorded |
 | [US-05](04-deposit-stories.md) | Acceptance request: capacity and amount-cap gates (negative) | holds | none recorded |
@@ -236,7 +236,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [US-51](04-wallet-spv-stories.md) | Watcher restart and metrics | holds | As above. Status `holds`. |
 | [US-60](04-governance-vault-stories.md) | begin/finalize staging for parameters | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.Governance.test.ts:4428` (`beginReservationParametersUpdate`), `:4505`, `:4536` ... |
 | [US-61](04-governance-vault-stories.md) | begin/finalize staging for caps | holds | `test/bridge/Bridge.Governance.test.ts:4705`, `:4785`, `:4862`, `:4875`; `test/bridge/Bridge.ReservationCaps.test.ts:153`, `:121`, `:132`, `:224`, `:252` ... |
-| [US-62](04-governance-vault-stories.md) | setVaultStatus (vault activation / deactivation, C-4 gate) | holds-untested | none recorded |
+| [US-62](04-governance-vault-stories.md) | setVaultStatus (vault activation / deactivation, C-4 gate) | holds-untested | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.Governance.test.ts:5420` ("setVaultStatus") ... |
 | [US-63](04-governance-vault-stories.md) | setReservationRouter (one-shot) | holds | `test/bridge/Bridge.Parameters.test.ts:2007` (`setReservationRouter` describe block), `:2052`, `:2073`, `:2095`, `:2108`. Status `holds`. |
 | [US-64](04-governance-vault-stories.md) | Revert when finalize runs before the delay elapses or the change is uninitialized | holds | `test/bridge/Bridge.Governance.test.ts` "context" blocks (e.g. `finalizeReservationCapsUpdate` "when the update process is not initialized" ... |
 | [US-65](04-governance-vault-stories.md) | forceStaleReservedDeposit (governance override) | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationStrandingLibrary.test.ts:957-1004` (`describe("forceStaleReservedDeposit guards")` ... |
@@ -252,11 +252,11 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [US-75](04-governance-vault-stories.md) | Hold release on timeout / supersede / on-time settlement | holds | `test/bridge/Bridge.ReservationThirdPartyReanchorHolds.test.ts:271` ("drops on action timeout") ... |
 | [US-76](04-governance-vault-stories.md) | Permissionless notify (acceptance timeout, action timeout, stale deposit, stranding) | pointer | see US-06, US-10, US-32, US-13. |
 | [US-80](04-governance-vault-stories.md) | Holder receives net of fee, fee retained (positive) | holds | none recorded |
-| [US-81](04-governance-vault-stories.md) | Sweep excess to treasury (positive) | holds | none recorded |
-| [US-82](04-governance-vault-stories.md) | Anyone repays in-kind fee debt (positive) | holds | none recorded |
+| [US-81](04-governance-vault-stories.md) | Sweep excess to treasury (positive) | holds | the sweep cases: `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts:756` ... |
+| [US-82](04-governance-vault-stories.md) | Anyone repays in-kind fee debt (positive) | holds | the repayment cases: `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts:608` ("should partially repay the debt and burn the exact TBTC amount") ... |
 | [US-83](04-governance-vault-stories.md) | balance approval always reverts (negative) | holds | `test/vault/ReservationVault.test.ts:830`. Status `holds`. |
 | [US-90](04-user-stories.md) | Release a reserved deposit back to the pool (depositor gets ordinary sweep / TBTC) | holds | none recorded |
-| [US-92](04-user-stories.md) | Release to pool guards (negative) | holds | none recorded |
+| [US-92](04-user-stories.md) | Release to pool guards (negative) | holds | the guard table below names one case per guard in `tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts` ... |
 | [US-93](04-sdk-stories.md) | Pre-funding go/no-go for a reserved deposit | holds | `reservations.test.ts` `checkReserveFeasibility` group - "should report go when all rules pass" ... |
 | [US-94](04-sdk-stories.md) | Refund locktime window and reveal-by deadline | holds | `reservations.test.ts` "should choose the 45-day locktime with the default 30-day reveal slack" ... |
 | [US-95](04-sdk-stories.md) | Deterministic wallet capacity selection | holds | `reservations.test.ts` `selectReservationWallet` group - "should return undefined when no registered wallet is eligible" ... |
@@ -288,7 +288,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [EC-17](05-lifecycle-chain-edge-cases.md) | Activation block equal to the current block | holds | `keep-core@680300533:pkg/tbtc/coordination_test.go:1540` ("TestCoordinationExecutor_GetActionsChecklist_ReservationsAtActivationBlock") and ... |
 | [EC-18](05-lifecycle-chain-edge-cases.md) | Last slot race on `maxActiveReservations` | holds | `test/bridge/Bridge.ReservationOccupancy.test.ts:30` (request increments), `:101` (timeout decrements) ... |
 | [EC-19](05-lifecycle-chain-edge-cases.md) | Concurrent acceptance and re-anchor on the same wallet | holds | `keep-core` `TestReservationReanchorTask_CapRevertLeadsToNextCandidate` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor_test.go:1006`) ... |
-| [EC-20](05-lifecycle-chain-edge-cases.md) | Vault deactivated mid-flight | holds | `test/bridge/ReservationProofs.test.ts:1757` ("should credit the deposit's immutable vault, not a reservationVault repointed mid-flight"). |
+| [EC-20](05-lifecycle-chain-edge-cases.md) | Vault deactivated mid-flight | holds | the routing half is `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998` ... |
 | [EC-21](05-lifecycle-chain-edge-cases.md) | `liveWalletsCount` falling to zero | holds | `test/bridge/Bridge.MovingFunds.test.ts:455` ("No target wallets available"), `:942` ("Live wallets count must be zero") ... |
 | [EC-22](05-lifecycle-chain-edge-cases.md) | Deployment progress files and chain identity | holds | `tbtc-v2@b7aece4bf:solidity/test/prepare-artifact-guard.test.ts` covers the malformed-artifact rejection, the chain preflight and the binding check ... |
 | [EC-23](05-lifecycle-chain-edge-cases.md) | D28 wallets registered before reservation activation | holds | `keep-core@9c4e1b221:pkg/maintainer/spv/reservation_keeper_wallet_discovery_test.go:12-73`. Both tests failed on the earlier client ... |
@@ -446,6 +446,7 @@ Read [finding adjudication](12-finding-adjudication.md) before treating a draft 
 | [AR-16](10-accepted-risks.md) | The `receiveBalanceIncrease` ordering gap is enforced by the deploy script, not on-chain | holds-untested | none recorded |
 | [AR-17](10-accepted-risks.md) | An anchor output above the action amount reverts with an arithmetic panic | holds | none recorded |
 | [AR-18](10-accepted-risks.md) | `feeReserveTarget` is a sweep threshold, not a floor | holds | none recorded |
+| [AR-19](10-accepted-risks.md) | G13: the vault re-point gate has negative tests and no formal proof | holds | `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationCaps.test.ts:299-308` ("rejects switching the vault while positions are open" ... |
 
 ## Maintenance
 

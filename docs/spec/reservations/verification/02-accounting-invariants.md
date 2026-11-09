@@ -392,8 +392,20 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   backing is that position's own anchor, not the pool, and neither is weakened
   by this entry. The equation also holds only while every non-reservation mint,
   unmint and backing change is balanced: Bitcoin in flight for an ordinary
-  redemption, an unminted deposit, and any loss outside the reservation path
-  break it until they settle, which is the same limit INV-705 records.
+  redemption and an unminted deposit break it until they settle, which is the
+  same limit INV-705 records. A reservation-path loss is inside this scope, not
+  an exception to it: when a stranded position's anchor Bitcoin is lost, M1
+  leaves the supply and the fee debt where they are, because `strandReservation`
+  only releases the wallet's and the global tracked capacity, the reverse anchor
+  index entry and the custody figure
+  (`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Reservation.sol:1217-1267`), and
+  touches neither the TBTC supply nor `inKindFeeDebtSat`. In that state the
+  relation reads `supplyInSats - backing == feeDebt + strandedLossSats`, where
+  `strandedLossSats` is the anchor amount of the stranded positions whose
+  Bitcoin is gone. `strandedLossSats` is recorded nowhere on-chain, so the
+  equality stated above is the relation for the no-loss state: every stranded
+  anchor is still under a wallet's custody. AR-05 accepts the difference
+  between the two forms.
 - **Enforcing code.** `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:231-250`
   (burn what the reserve covers, record the shortfall as debt),
   `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:392-407`
@@ -403,6 +415,6 @@ Let `C` be positions in Active or ActionPending (the proven-anchor set).
   `tbtc-v2@b7aece4bf:solidity/contracts/vault/ReservationVault.sol:318-340`
   (sweep: repay the debt first, then move the excess).
 - **Test.** `tbtc-v2@b7aece4bf:solidity/test/vault/ReservationVault.test.ts` shortfall, repayment and sweep cases cited in INV-207; the Medusa accounting campaign (10 of 10 properties pass over 1,857,446 calls at `c8350d109`) recomputes the relation over sequences, through `property_supplyStaysInLockstepWithRoutedSatoshi` and the fee-debt properties. `none` identified for an end-to-end check of the bitcoind-backed equality.
-- **Status.** `holds` for the at-rest equality as the campaign executes it: the sites above keep it by inspection, INV-705 covers the incremental form, and the campaign covers the whole-system form over sequences. The residual is that the Medusa harness has no Bitcoin side, so there is no bitcoind-backed end-to-end equality.
+- **Status.** `holds` for the at-rest equality as the campaign executes it: the sites above keep it by inspection, INV-705 covers the incremental form, and the campaign covers the whole-system form over sequences. The residual is that the Medusa harness has no Bitcoin side, so there is no bitcoind-backed end-to-end equality, and with no Bitcoin side the campaign cannot produce a stranded loss, so it exercises the equality in the no-loss state only: the form carrying `strandedLossSats` is stated here and not executed.
 
 ---

@@ -17,7 +17,7 @@ Evidence pins and vocabulary: [user stories index](04-user-stories.md).
 - **Given/When/Then:** Same as US-01 except `refundLocktime` is greater than `block.timestamp + reservationTermSeconds + 24h`. **Then** the reveal reverts.
 - **Functions:** `Deposit._revealDeposit` (`tbtc-v2:solidity/contracts/bridge/Deposit.sol:243-253`).
 - **Reverts:** "Refund locktime too far in the future for a reservation" `tbtc-v2:solidity/contracts/bridge/Deposit.sol:250`.
-- **Test** `tbtc-v2@b7aece4bf:solidity/test/audit-poc/ReservationTimeBounds.t.sol:64` ("test_reservedReveal_rejectsLocktimeOneSecondPastCap") asserts the exact string `Refund locktime too far in the future for a reservation` on a real `bridge.revealDeposit`, with `:83` ("test_reservedReveal_acceptsLocktimeAtCap") accepting exactly at the cap; that string appears in no Hardhat test. The archived `yarn test:audit-poc` run at the freeze head is green. Status `holds`.
+- **Test:** `tbtc-v2@b7aece4bf:solidity/test/audit-poc/ReservationTimeBounds.t.sol:64` ("test_reservedReveal_rejectsLocktimeOneSecondPastCap") asserts the exact string `Refund locktime too far in the future for a reservation` on a real `bridge.revealDeposit`, with `:83` ("test_reservedReveal_acceptsLocktimeAtCap") accepting exactly at the cap; that string appears in no Hardhat test. The archived `yarn test:audit-poc` run at the freeze head is green. Status `holds`.
 
 #### US-03 - Acceptance request: happy path
 - **Actor:** Depositor.

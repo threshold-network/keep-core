@@ -94,7 +94,8 @@ machinery the rest of the Bridge uses.
 
 ### 2.1 Router entry points
 
-`ReservationRouter.sol` declares exactly 22 external functions: 11 state-changing and 11 views.
+`tbtc-v2@b7aece4bf:solidity/contracts/bridge/ReservationRouter.sol` declares exactly 25 external
+functions: 12 state-changing and 13 views.
 There is no `submitReservationProof` entry point on the router — the identically-named function
 in `ReservationProofs` is an internal dispatcher, never called directly; the router instead
 exposes it as two typed entry points, `submitReservationAcceptanceProof` and
@@ -104,7 +105,7 @@ State-changing (grouped by who calls them):
 
 | Group | Entry points |
 |---|---|
-| Depositor-initiated | `requestReservationAcceptance` |
+| Depositor-initiated | `requestReservationAcceptance`, `releaseReservedDepositToPool` (D26: the deposit's own depositor, before any acceptance request) |
 | Permissionless (source-retiring) / governance (source Live) | `requestReservationReanchor` (privileged callers exempt from the per-target third-party re-anchor hold cap; see §4) |
 | `onlySpvMaintainer` | `submitReservationAcceptanceProof`, `submitReservationReanchorProof` |
 | Permissionless cleanup | `notifyReservationActionTimeout`, `notifyReservationAcceptanceTimedOut`, `notifyStaleReservedDeposit`, `notifyReservationStranded` |
@@ -306,22 +307,36 @@ considered overdue as soon as `now >= timeoutAt` (the watcher skips it only whil
  `recordReservationWatcherDeath` treats a typed-nil value as a disabled
  recorder), so a disabled client-info pipeline cannot panic the watcher
  goroutines.
-Restart recovery: the SPV proof loop and the stale-deposit watcher start
-their first scan at `tbtc.ReservationsActivationBlock(network)` with
-chunked event queries (a network without an activation entry, the
-`math.MaxUint64` sentinel, skips the startup scan and jumps the cursor to
-the head), instead of a fixed 30-day lookback; the action-timeout watcher's
-first pass keeps a bounded 30-day catch-up window clamped to the activation
-block when it falls within that window. The network is threaded through
-`Config.EthereumNetwork` in the maintainer and through the
+Restart recovery: the SPV proof loop, the stale-deposit watcher and the
+action-timeout watcher start their first scan at
+`tbtc.ReservationsActivationBlock(network)` with chunked event queries (a network
+without an activation entry, the `math.MaxUint64` sentinel, skips the startup
+scan and jumps the cursor to the head), instead of a fixed 30-day lookback. For
+the action-timeout watcher the first range runs from the activation block to the
+confirmed tip (`keep-core@96530a787:pkg/maintainer/spv/reservation_event_scan.go:44-74`,
+used by `scanActionRequests` at
+`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:362-395`),
+so its catch-up is bounded by activation, not by 30 days. The 30-day figure
+belongs to the stranding watcher's startup registration scan, which walks
+`reservationDefaultLookBackBlocks` (216,000 blocks, about 30 days) of
+registrations and warns when the bound truncates the window (AR-13). The network
+is threaded through `Config.EthereumNetwork` in the maintainer and through the
 `WireReservationWatchers` parameter in the client.
 
-None of the three watchers extends to a `Closing` wallet: the stranding watcher's only trigger is
-`OnWalletClosed` (plus the equivalent startup/recheck scans in `keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go` and
-`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go`), so it never observes a `Closing` wallet crossing
-`dissolutionEligibleAt`. The re-anchor side has the same shape: `ReservationReanchorTask` (§3.1)
-triggers only on `StateMovingFunds`, never `StateClosing`, even though `Reservation.sol` accepts a
-permissionless call for either source state (§6.3). Both gaps have a safe on-chain backstop —
+Both `Closing` paths exist in the client. The stranding watcher dispatches by wallet state, and its
+`StateClosing` case runs the closing form, which notifies once the reservation has reached
+`dissolutionEligibleAt` and the wallet's closing period has ended
+(`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-172`); that form is
+reached by the startup scan and by the action-timeout watcher's recheck queue, not by the
+`OnWalletClosed` subscription alone (`keep-core@96530a787:pkg/maintainer/spv/reservation_wiring.go:825-838`,
+`keep-core@96530a787:pkg/maintainer/spv/reservation_action_timeout_watch.go:1087-1105`).
+`ReservationReanchorTask` accepts `StateClosing` as well as `StateMovingFunds`
+(`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:175-179`), which matches the on-chain rule
+that admits a permissionless call for either source state (§6.3). What no client calls is the
+Closing to Closed finalization, `notifyWalletClosingPeriodElapsed`, so a wallet past its closing
+period stays in `Closing` until someone calls it (AR-09), and the `Live` stranding branch is reached
+only by those two scans, so a `Live` wallet neither of them sees still needs a permissionless caller
+(AR-11). Both gaps have a safe on-chain backstop —
 anyone may still call `notifyReservationStranded`/`requestReservationReanchor` directly — but the
 re-anchor backstop is bounded: pending re-anchor generations requested by a third party (a caller
 that is not the reservation owner, not an SPV maintainer, and not a proven member of the source
@@ -331,9 +346,10 @@ capacity for at most `reservationActionTimeout` seconds per hold, and no more ho
 until an earlier one is released. The privileged callers — the reservation owner, an SPV
 maintainer, or a caller presenting a non-empty source-wallet member proof that validates against
 `ecdsaWalletRegistry` (a failing proof reverts; it cannot silently fall back to a third-party
-request) — are exempt from the cap. Neither gap is launch-blocking, but neither is automated in M1
-(`m1-keep-core-readiness/01-gap-analysis.md`, "Stranding coverage gap for
-`Closing`-past-`dissolutionEligibleAt` wallets").
+request) — are exempt from the cap. Neither remaining gap is launch-blocking: the `Closing` stranding
+form exists, and what is missing is the Closing to Closed finalization (AR-09) and full coverage of
+the `Live` branch (AR-11), which is the gap `m1-keep-core-readiness/01-gap-analysis.md` records
+under "Stranding coverage gap for `Closing`-past-`dissolutionEligibleAt` wallets".
 
 ### 3.5 Config flags
 
@@ -555,9 +571,13 @@ the depositor's already-minted TBTC balance changes — stranding only removes t
 not the claim.
 
 keep-core's `reservationStrandingWatcher` (§3.4) drives the `Terminated`/`Closed` branch above
-automatically, through its `OnWalletClosed` subscription and startup catch-up scan; the
-`Closing`-past-deadline branch has no automated caller in M1, so a wallet stuck there relies on
-`notifyReservationStranded` being called manually as the permissionless backstop (§6.3).
+automatically, through its `OnWalletClosed` subscription and startup catch-up scan, and it also
+drives the `Closing`-past-deadline branch: its state dispatch sends a `Closing` wallet to the
+closing form, which notifies once `dissolutionEligibleAt` and the wallet's closing period have both
+passed (`keep-core@96530a787:pkg/maintainer/spv/reservation_stranding_watch.go:155-172`). That form
+is reached by the startup scan and the action-timeout recheck queue, so a `Closing` wallet that
+neither path has seen since its period ended still relies on `notifyReservationStranded` being
+called manually as the permissionless backstop (§6.3, AR-11).
 
 ### 5.5 Stale reserved deposits
 
@@ -667,23 +687,26 @@ marks it `Superseded` and releases whatever capacity it had reserved.
 
 | Wallet state | Acceptance (designated wallet) | Re-anchor source | Re-anchor target | Stranding | Wallet closing |
 |---|---|---|---|---|---|
-| `Live` | Required | Governance-only (`privileged`) | Required | Eligible once `now >= dissolutionEligibleAt`, and the client notifies it then (`reservationStrandingWatcher`'s `Live` form, §3.4); not eligible before | `moveFunds` begins closing immediately only if the reservation count is already zero (`Wallets.sol:607-639`) |
+| `Live` | Required | Governance-only (`privileged`) | Required | Eligible once `now >= dissolutionEligibleAt`, and the client notifies it then (`reservationStrandingWatcher`'s `Live` form, §3.4); not eligible before | `moveFunds` begins closing immediately only when the wallet has no main UTXO **and** custodies no proven reservation anchor (`walletAnchoredInfo[wallet].count == 0`, `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:623-636`); capacity reserved for a pending action does not count, because no Bitcoin proof backs it, and such an action still blocks the Closing to Closed step through the reservation count |
 | `MovingFunds` | Not eligible | Permissionless — but a third-party request counts against the target's `maxThirdPartyReanchorHoldsPerWallet` pending-hold cap (§5.2); the owner, an SPV maintainer, or a proven source-wallet member are exempt | Not eligible | Not eligible | Blocked until reservation count reaches zero; then a below-dust report (`notifyMovingFundsBelowDust`) lets closing proceed |
-| `Closing` | Not eligible | Permissionless on-chain, but no automated client trigger — `ReservationReanchorTask` fires only on `StateMovingFunds` (§3.1); a third-party request is likewise bounded by the target's `maxThirdPartyReanchorHoldsPerWallet` pending-hold cap | Not eligible | Eligible once `now >= dissolutionEligibleAt` and the wallet's closing period has ended, and the client notifies it once both hold — `reservationStrandingWatcher`'s `Closing` form, which is dispatched by wallet state (§3.4) | `notifyWalletClosingPeriodElapsed` requires `walletReservationInfo[wallet].count == 0` (`Wallets.sol:360-387`) |
+| `Closing` | Not eligible | Permissionless on-chain, and the client has a caller: `ReservationReanchorTask` accepts `StateClosing` as well as `StateMovingFunds` (`keep-core@96530a787:pkg/tbtcpg/reservation_reanchor.go:175-179`, §3.1); a third-party request is likewise bounded by the target's `maxThirdPartyReanchorHoldsPerWallet` pending-hold cap | Not eligible | Eligible once `now >= dissolutionEligibleAt` and the wallet's closing period has ended, and the client notifies it once both hold — `reservationStrandingWatcher`'s `Closing` form, which is dispatched by wallet state (§3.4) | `notifyWalletClosingPeriodElapsed` requires `walletReservationInfo[wallet].count == 0` (`Wallets.sol:360-387`) |
 | `Closed` | Not eligible | Not eligible | Not eligible | Eligible | Terminal |
 | `Terminated` | Not eligible | Not eligible | Not eligible | Eligible | Terminal |
 
-The zero-reservation-count gate is enforced at exactly two points — the `moveFunds` routing
-decision and `notifyWalletClosingPeriodElapsed` — and deliberately *not* inside
-`beginWalletClosing`/`finalizeWalletClosing` themselves, since those two also run right after a
-moving-funds Bitcoin transaction has already been proven on-chain, where blocking on a still-open
-reservation would strand the wallet's own `movingFundsTimeout` clock instead of protecting
-anything. A wallet whose main UTXO is already zero but which still custodies reservations
-therefore still enters `MovingFunds` (not straight to `Closing`) purely so `WalletMovingFunds`
-fires and triggers re-anchoring of its remaining anchors (`Wallets.sol:589-639`); keep-core's
-`ReservationReanchorTask` is exactly the executor that drains that count and then reports the
-below-dust condition (§3.1), closing what would otherwise be an unclaimed operational gap between
-the contract's design and an actual client duty.
+Two different counts gate wallet closing, and they are read at different points. The `moveFunds`
+routing decision reads the proven-anchor custody count (`walletAnchoredInfo[wallet].count`), not
+the reservation count: a wallet with no main UTXO and no proven anchors closes immediately, and a
+wallet with no main UTXO that still custodies anchors enters `MovingFunds` so `WalletMovingFunds`
+fires and its remaining anchors can be re-anchored
+(`tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:623-645`).
+`notifyWalletClosingPeriodElapsed` reads the reservation count
+(`walletReservationInfo[wallet].count == 0`, `tbtc-v2@b7aece4bf:solidity/contracts/bridge/Wallets.sol:360-387`).
+Neither check sits inside `beginWalletClosing`/`finalizeWalletClosing` themselves, since those two
+also run right after a moving-funds Bitcoin transaction has already been proven on-chain, where
+blocking on a still-open reservation would strand the wallet's own `movingFundsTimeout` clock
+instead of protecting anything. keep-core's `ReservationReanchorTask` drains the custody count and
+then reports the below-dust condition (§3.1), closing what would otherwise be an unclaimed
+operational gap between the contract's design and an actual client duty.
 
 ---
 

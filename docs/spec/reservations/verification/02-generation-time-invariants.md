@@ -188,8 +188,16 @@ taken on 2026-10-29 and the code does not change.
   `isVaultTrusted` gate at :621-624).
 - **Why.** Governance can re-point or disable the live vault between the
   authorization and the proof; the deposit's original vault must win.
-- **Test.** `ReservationProofs.test.ts` "should credit the deposit's
-  immutable vault, not a reservationVault repointed mid-flight" (:1757).
+- **Test.** The routing half is pinned by
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/ReservationProofs.test.ts:1918-1998`
+  ("should credit the deposit's immutable vault, not a reservationVault
+  repointed mid-flight"). That test covers the immutable routing, not the
+  revoked-trust branch; the revoked-trust branch is exercised by
+  `tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:71-120`,
+  whose assertions are the direct-credit fallback this entry describes (depositor
+  Bank balance rises by the anchor amount, no TBTC is minted, supply and vault
+  balance unchanged), with the trusted control at
+  `tbtc-v2@b7aece4bf:solidity/test/audit-poc/AcceptanceProofUntrustedVault.t.sol:127-175`.
 - **Status.** holds.
 
 ### INV-703 `setVaultStatus(vault, true)` is only safe at/after the keep-core activation block B
@@ -205,7 +213,7 @@ taken on 2026-10-29 and the code does not change.
   This is a deployment requirement, not an unconditional contract invariant.
 - **Why.** Prevents activation before clients can coordinate signed anchors.
   It does not replace vault-credit provenance validation or guarantee SPV availability.
-- **Test.** `TestReservationsActivationBlock_SanityCheck` (`keep-core@96530a787:pkg/tbtc/coordination_test.go:1667`) pins that `Mainnet` and `Unknown` have no entry and therefore never activate; lab scenario H-1 `resv-activation-order` PASS (7,191 s, run `20261029t204323z-piotrroslani-b12c`) gates the deploy-order half, reading the vault-trust event block against B and the head before it.
+- **Test.** `TestReservationsActivationBlock_SanityCheck` (`keep-core@96530a787:pkg/tbtc/coordination_test.go:1593`) pins that `Mainnet` and `Unknown` have no entry and therefore never activate; lab scenario H-1 `resv-activation-order` PASS (7,191 s, run `20261029t204323z-piotrroslani-b12c`) gates the deploy-order half, reading the vault-trust event block against B and the head before it.
 - **Status.** `holds` for the client lookup behavior and the deploy-order gate as the lab scenario exercises it. The residual is that the activation block B is still unchosen, so the ceremony gate ran with a lab-chosen B.
 - **Outstanding prerequisite (owner undecided, due before activation).** The
   activation block B is not yet chosen, `feeReserveTarget` is not yet seeded, and the

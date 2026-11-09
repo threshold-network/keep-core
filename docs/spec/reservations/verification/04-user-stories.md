@@ -60,6 +60,13 @@ Format note: where one negative behaviour is bounded by a single Solidity requir
 - **Actor:** Depositor (or anyone).
 - **Given/When/Then:** Any guard violated by a `releaseReservedDepositToPool` call reverts; the deposit stays reserved and unreleasable until the guard clears.
 - **Functions:** `tbtc-v2@d20cf74ba:solidity/contracts/bridge/Reservation.sol:1373-1453`.
+- **Test:** the guard table below names one case per guard in
+  `tbtc-v2@d20cf74ba:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts`, and the freeze
+  head carries the same group: the "releaseReservedDepositToPool guards" block at
+  `tbtc-v2@b7aece4bf:solidity/test/bridge/Bridge.ReservationReleaseToPool.test.ts:484-677`
+  (depositor `:485`, reserved mark `:496`, never revealed `:513`, pending request `:533`,
+  timed-out request `:553`, the reservation vault `:576`, an untrusted vault `:588`, stale `:601`,
+  refund margin `:616`, and the post-release cases `:637` and `:657`).
 - **Reverts:**
 
 | Guard | Revert string (cite @d20cf74ba) | Test (`Bridge.ReservationReleaseToPool.test.ts` @d20cf74ba) |
