@@ -23,7 +23,6 @@
 pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@keep-network/random-beacon/contracts/libraries/BytesLib.sol";
 import "@keep-network/sortition-pools/contracts/SortitionPool.sol";
 import "./libraries/EcdsaDkg.sol";
 
@@ -38,16 +37,15 @@ import "./libraries/EcdsaDkg.sol";
 ///         using a free contract call and challenge the result if the
 ///         validation fails.
 contract EcdsaDkgValidator {
-    using BytesLib for bytes;
     using ECDSA for bytes32;
 
     /// @dev Size of a group in DKG.
     uint256 public constant groupSize = 100;
 
-    /// @dev The minimum number of group members needed to interact according to
-    ///      the protocol to produce a signature. The adversary can not learn
-    ///      anything about the key as long as it does not break into
-    ///      groupThreshold+1 of members.
+    /// @dev The minimum number of signatures a result must carry: a count of
+    ///      signing positions, not distinct operators, because `selectGroup`
+    ///      samples with replacement. The adversary can not learn anything
+    ///      about the key with fewer than groupThreshold+1 positions.
     uint256 public constant groupThreshold = 51;
 
     /// @dev The minimum number of active and properly behaving group members
@@ -63,6 +61,10 @@ contract EcdsaDkgValidator {
     /// @dev Size in bytes of a single signature produced by operator supporting
     ///      DKG result.
     uint256 public constant signatureByteSize = 65;
+
+    // secp256k1 field prime modulus p = 2^256 - 2^32 - 977
+    uint256 internal constant P =
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F;
 
     SortitionPool public immutable sortitionPool;
 
@@ -116,15 +118,41 @@ contract EcdsaDkgValidator {
             return (false, "Malformed group public key");
         }
 
+        uint256 x = uint256(bytes32(result.groupPubKey[:32]));
+        uint256 y = uint256(bytes32(result.groupPubKey[32:]));
+        // Unreachable with this curve: 7 is a quadratic non-residue mod P, so
+        // y^2 == x^3 + 7 has no solution at x = 0. Defence in depth only.
+        if (
+            x == 0 ||
+            x >= P ||
+            y >= P ||
+            mulmod(y, y, P) != addmod(mulmod(mulmod(x, x, P), x, P), 7, P)
+        ) {
+            return (false, "Malformed group public key");
+        }
+
+        if (result.members.length != groupSize) {
+            return (false, "Unexpected members count");
+        }
+
         // The number of misbehaved members can not exceed the threshold.
         // Misbehaved member indices needs to be unique, between [1, groupSize],
         // and sorted in ascending order.
         uint8[] calldata misbehavedMembersIndices = result
             .misbehavedMembersIndices;
-        if (groupSize - misbehavedMembersIndices.length < activeThreshold) {
+        // `length > groupSize` is checked explicitly before the subtraction:
+        // the subtraction is unchecked-safe only up to `groupSize`, and
+        // `misbehavedMembersIndices` is not bounded by its (uint8) element type.
+        if (
+            misbehavedMembersIndices.length > groupSize ||
+            groupSize - misbehavedMembersIndices.length < activeThreshold
+        ) {
             return (false, "Too many members misbehaving during DKG");
         }
-        if (misbehavedMembersIndices.length > 1) {
+        // `length > 0` rather than `length > 1`: a one-element list is range
+        // checked too, so a lone out-of-range index is rejected here instead of
+        // underflowing on `indices[i] - 1` later.
+        if (misbehavedMembersIndices.length > 0) {
             if (
                 misbehavedMembersIndices[0] < 1 ||
                 misbehavedMembersIndices[misbehavedMembersIndices.length - 1] >
@@ -232,6 +260,11 @@ contract EcdsaDkgValidator {
             signingMembersIndices.length
         );
         for (uint256 i = 0; i < signingMembersIndices.length; i++) {
+            require(
+                signingMembersIndices[i] > 0 &&
+                    signingMembersIndices[i] <= result.members.length,
+                "Signing member index out of bounds"
+            );
             signingMemberIds[i] = result.members[signingMembersIndices[i] - 1];
         }
 
@@ -243,13 +276,23 @@ contract EcdsaDkgValidator {
 
         uint256 signaturesCount = result.signatures.length / signatureByteSize;
         for (uint256 i = 0; i < signaturesCount; i++) {
-            current = result.signatures.slice(
-                signatureByteSize * i,
-                signatureByteSize
-            );
-            address recoveredAddress = hash.recover(current);
+            // Slice the calldata directly. BytesLib.slice takes `bytes
+            // memory`, so calling it on calldata copied the whole signatures
+            // blob into memory on every iteration, a cost that grows with
+            // the square of the signature count.
+            current = result.signatures[signatureByteSize *
+                i:signatureByteSize * (i + 1)];
 
-            if (signingMemberAddresses[i] != recoveredAddress) {
+            // `tryRecover` rather than `recover`: malformed `s`/`v` values are
+            // reported instead of reverting, so a signed-but-invalid result
+            // fails validation rather than taking this call down.
+            (address recoveredAddress, ECDSA.RecoverError recoverError) = hash
+                .tryRecover(current);
+
+            if (
+                recoverError != ECDSA.RecoverError.NoError ||
+                signingMemberAddresses[i] != recoveredAddress
+            ) {
                 return false;
             }
         }
@@ -259,6 +302,11 @@ contract EcdsaDkgValidator {
 
     /// @notice Performs validation of hashed group members that actively took
     ///         part in DKG.
+    /// @dev The misbehaved member indices must be strictly ascending, unique,
+    ///      and within [1, result.members.length] for this single-pass loop to
+    ///      be correct; `validateFields` enforces all of that, plus
+    ///      `result.members.length == groupSize`, before `validateMembersHash`
+    ///      is reached through `validate`.
     /// @param result DKG result
     /// @return true if calculated result's group members hash matches with the
     /// one that is challenged.

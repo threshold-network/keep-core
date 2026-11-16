@@ -25,6 +25,21 @@ import type {
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
+// secp256k1 field prime, `2**256 - 2**32 - 977`.
+const SECP256K1_P = BigNumber.from(
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F"
+)
+
+// Encodes a fabricated group public key. Both coordinates are encoded as
+// 32-byte words, so the key passes the length check at submission time even
+// when a coordinate is not a canonical field element.
+function encodeGroupPublicKey(x: BigNumber, y: BigNumber): string {
+  return ethers.utils.hexConcat([
+    ethers.utils.zeroPad(x.toHexString(), 32),
+    ethers.utils.zeroPad(y.toHexString(), 32),
+  ])
+}
+
 describe("EcdsaDkgValidator", () => {
   const dkgSeed: BigNumber = BigNumber.from(
     "31415926535897932384626433832795028841971693993751058209749445923078164062862"
@@ -359,7 +374,115 @@ describe("EcdsaDkgValidator", () => {
           await expect(result.errorMsg).to.equal("Malformed group public key")
         })
       })
+
+      context("when x is not a canonical field element", () => {
+        it("should return validation error", async () => {
+          // `x = P + 1` reduces to 1 modulo P and `y` is chosen so that
+          // `y^2 = 1 + 7 = 8`, so the curve equation holds for the reduced
+          // coordinates. Only the `x >= P` bound rejects this key.
+          const key = encodeGroupPublicKey(
+            SECP256K1_P.add(1),
+            BigNumber.from(
+              "0x4218f20ae6c646b363db68605822fb14264ca8d2587fdd6fbc750d587e76a7ee"
+            )
+          )
+
+          const result = await testValidateFields(
+            selectedOperators,
+            key,
+            noMisbehaved
+          )
+
+          await expect(result.isValid).to.be.false
+          await expect(result.errorMsg).to.equal("Malformed group public key")
+        })
+      })
+
+      context("when y is not a canonical field element", () => {
+        it("should return validation error", async () => {
+          // `y = P + 1` reduces to 1 modulo P. `x` is a cube root of `-6`
+          // modulo P, so `x^3 + 7 = 1 = y^2` for the reduced coordinates.
+          // Only the `y >= P` bound rejects this key.
+          const key = encodeGroupPublicKey(
+            BigNumber.from(
+              "0x1fe1e5ef3fceb5c135ab7741333ce5a6e80d68167653f6b2b24bcbcfaaaff507"
+            ),
+            SECP256K1_P.add(1)
+          )
+
+          const result = await testValidateFields(
+            selectedOperators,
+            key,
+            noMisbehaved
+          )
+
+          await expect(result.isValid).to.be.false
+          await expect(result.errorMsg).to.equal("Malformed group public key")
+        })
+      })
+
+      // The curve equation is a single comparison, so the two sides of it need
+      // their own cases: `y^2 < x^3 + 7` is still unequal, and a `<` or `>`
+      // mutant of the equality test accepts one side each. Both coordinates
+      // below are canonical field elements and `x` is not zero, so only the
+      // equation decides.
+      context("when y^2 is below x^3 + 7", () => {
+        it("should return validation error", async () => {
+          // `x = 1`, `y = 2`: `y^2 = 4` and `x^3 + 7 = 8`.
+          const key = encodeGroupPublicKey(BigNumber.from(1), BigNumber.from(2))
+
+          const result = await testValidateFields(
+            selectedOperators,
+            key,
+            noMisbehaved
+          )
+
+          await expect(result.isValid).to.be.false
+          await expect(result.errorMsg).to.equal("Malformed group public key")
+        })
+      })
+
+      context("when y^2 is above x^3 + 7", () => {
+        it("should return validation error", async () => {
+          // `x = 1`, `y = 3`: `y^2 = 9` and `x^3 + 7 = 8`.
+          const key = encodeGroupPublicKey(BigNumber.from(1), BigNumber.from(3))
+
+          const result = await testValidateFields(
+            selectedOperators,
+            key,
+            noMisbehaved
+          )
+
+          await expect(result.isValid).to.be.false
+          await expect(result.errorMsg).to.equal("Malformed group public key")
+        })
+      })
     })
+
+    context(
+      "when misbehaved indices leave exactly the active threshold members",
+      () => {
+        it("should pass", async () => {
+          const activeThreshold = (await validator.activeThreshold()).toNumber()
+          // The rejecting case below uses 11 indices, leaving 89 active
+          // members. Ten indices leave exactly `activeThreshold` (90) active
+          // members, the accepting side of the `activeThreshold` guard.
+          const atThreshold = [2, 4, 15, 17, 50, 53, 64, 72, 84, 86]
+          await expect(atThreshold).to.have.lengthOf(
+            constants.groupSize - activeThreshold
+          )
+
+          const result = await testValidateFields(
+            selectedOperators,
+            groupPublicKey,
+            atThreshold
+          )
+
+          await expect(result.isValid).to.be.true
+          await expect(result.errorMsg).to.equal("")
+        })
+      }
+    )
 
     context("when misbehaved array is malformed", () => {
       context("when index is less than one", async () => {
@@ -698,6 +821,60 @@ describe("EcdsaDkgValidator", () => {
       })
     })
 
+    // The address comparison is a single `!=`, so a relational mutant of it
+    // rejects only one side of a mismatch: `>` accepts a recovered address
+    // above the signing member's and `<` accepts one below. Each side needs a
+    // signature from a key that sorts on that side, which the deterministic
+    // Hardhat accounts do not guarantee, so the key is searched at run time.
+    const testMismatchedSignature = async (side: "above" | "below") => {
+      const dkgResult = await prepareDkgResult(
+        selectedOperators,
+        selectedOperators,
+        groupPublicKey,
+        noMisbehaved,
+        dkgStartBlock
+      )
+      // The hash `validateSignatures` signs over, without the EIP-191 prefix
+      // `signMessage` adds on both sides.
+      const resultHash = ethers.utils.keccak256(
+        ethers.utils.defaultAbiCoder.encode(
+          ["uint256", "bytes", "uint8[]", "uint256"],
+          [hardhatNetworkId, groupPublicKey, noMisbehaved, dkgStartBlock]
+        )
+      )
+      const signature = await foreignSignature(
+        selectedOperators[0].signer.address,
+        resultHash,
+        side
+      )
+      // Only the first signature changes; every other member still signs the
+      // same valid result.
+      dkgResult.signatures = ethers.utils.hexConcat([
+        signature,
+        ethers.utils.hexDataSlice(dkgResult.signatures, 65),
+      ])
+
+      return validator.validateSignatures(dkgResult, dkgStartBlock)
+    }
+
+    context(
+      "when a signature recovers an address above the signing member's",
+      () => {
+        it("should fail the validation", async () => {
+          await expect(await testMismatchedSignature("above")).to.be.false
+        })
+      }
+    )
+
+    context(
+      "when a signature recovers an address below the signing member's",
+      () => {
+        it("should fail the validation", async () => {
+          await expect(await testMismatchedSignature("below")).to.be.false
+        })
+      }
+    )
+
     context("when signatures contain wrong result hash", () => {
       const signWithWrongResultHash = async (signingOperators: Operator[]) => {
         const wrongResultHash = ethers.utils.keccak256(
@@ -746,7 +923,7 @@ describe("EcdsaDkgValidator", () => {
     })
 
     context("when signatures consist of random bytes", () => {
-      it("should revert", async () => {
+      it("should answer false instead of reverting", async () => {
         const numberOfSignatures = constants.groupThreshold
         const signatureHexStrLength = 2 * 65
         const dkgResult = await prepareDkgResult(
@@ -762,13 +939,104 @@ describe("EcdsaDkgValidator", () => {
         )}`
         dkgResult.signatures = wrongSignatures
 
+        // 0xaaaa... has an out-of-range `s`, which ECDSA.recover rejects with
+        // a revert. A validator that reverts cannot be acted on, so
+        // validateSignatures answers false instead.
+        const isValid = await validator.validateSignatures(
+          dkgResult,
+          dkgStartBlock
+        )
+
+        await expect(isValid).to.be.false
+      })
+    })
+
+    context("when a signature recovery fails", () => {
+      it("should answer false instead of comparing zero addresses", async () => {
+        const dkgResult = await prepareDkgResult(
+          selectedOperators,
+          selectedOperators,
+          groupPublicKey,
+          noMisbehaved,
+          dkgStartBlock
+        )
+
+        // Member id 0 has no operator in the sortition pool, so
+        // `getIDOperators` answers address(0) for it. A signature with `v` 0
+        // fails recovery and answers address(0) as well, so the address
+        // comparison alone would pass; only the `recoverError` check rejects
+        // the result.
+        dkgResult.members = [0]
+        dkgResult.signingMembersIndices = [1]
+        dkgResult.signatures = ethers.utils.hexConcat([
+          ethers.utils.hexZeroPad("0x01", 32),
+          ethers.utils.hexZeroPad("0x01", 32),
+          "0x00",
+        ])
+
+        const isValid = await validator.validateSignatures(
+          dkgResult,
+          dkgStartBlock
+        )
+
+        await expect(isValid).to.be.false
+      })
+    })
+
+    context("when a signing member index is past the members array", () => {
+      it("should revert with 'Signing member index out of bounds'", async () => {
+        const dkgResult = await prepareDkgResult(
+          selectedOperators,
+          selectedOperators,
+          groupPublicKey,
+          noMisbehaved,
+          dkgStartBlock
+        )
+        // `validateFields` bounds the indices against `groupSize`, but
+        // `validateSignatures` is public and can be called on a result whose
+        // members array is shorter than the declared indices.
+        dkgResult.members = dkgResult.members.slice(0, 2)
+
         await expect(
           validator.validateSignatures(dkgResult, dkgStartBlock)
-        ).to.be.revertedWith("ECDSA: invalid signature 's' value")
+        ).to.be.revertedWith("Signing member index out of bounds")
+
+        // Reached through `validate`, the same shape is answered as an
+        // invalid result rather than reverting.
+        const [isValid, errorMsg] = await validator.validate(
+          dkgResult,
+          dkgSeed,
+          dkgStartBlock
+        )
+        await expect(isValid).to.be.false
+        expect(errorMsg).to.equal("Unexpected members count")
       })
     })
   })
 })
+
+// Signs `resultHash` with a key whose address is above or below `bound`. The
+// private keys are small integers, so the search is deterministic; 1000 of them
+// straddle any fixed address with overwhelming probability.
+async function foreignSignature(
+  bound: string,
+  resultHash: string,
+  side: "above" | "below"
+): Promise<string> {
+  const boundValue = BigNumber.from(bound.toLowerCase())
+  for (let k = 1; k < 1000; k++) {
+    const wallet = new ethers.Wallet(
+      ethers.utils.hexZeroPad(ethers.utils.hexlify(k), 32)
+    )
+    const value = BigNumber.from(wallet.address.toLowerCase())
+    const matches =
+      side === "above" ? value.gt(boundValue) : value.lt(boundValue)
+    if (matches) {
+      return wallet.signMessage(ethers.utils.arrayify(resultHash))
+    }
+  }
+  throw new Error(`no private key with an address ${side} ${bound}`)
+}
 
 function shuffle(operators: Operator[]): Operator[] {
   return operators

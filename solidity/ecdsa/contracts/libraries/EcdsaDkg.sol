@@ -314,13 +314,32 @@ library EcdsaDkg {
         complete(self);
     }
 
-    /// @notice Approves DKG result. Can be called when the challenge period for
-    ///         the submitted result is finished. Considers the submitted result
-    ///         as valid. For the first `submitterPrecedencePeriodLength`
-    ///         blocks after the end of the challenge period can be called only
-    ///         by the DKG result submitter. After that time, can be called by
-    ///         anyone.
-    /// @dev Can be called after a challenge period for the submitted result.
+    /// @notice Rejects a DKG result during approval when validator revalidation
+    ///         fails. Performs the same cleanup and submission-timeout rebase as
+    ///         a successful challenge, returning the DKG to `AWAITING_RESULT`.
+    /// @param reason Rejection reason string.
+    function rejectResultAtApproval(Data storage self, string memory reason)
+        private
+    {
+        emit DkgResultChallenged(self.submittedResultHash, msg.sender, reason);
+
+        // Adjust DKG result submission block start, so submission stage starts
+        // from the beginning, exactly as `challengeResult` does.
+        self.resultSubmissionStartBlockOffset = block.number - self.startBlock;
+
+        submittedResultCleanup(self);
+    }
+
+    /// @notice Approves DKG result once the challenge period has finished.
+    ///         For the first `submitterPrecedencePeriodLength` blocks only
+    ///         the submitter can approve a valid result; after that, anyone
+    ///         can. Any account can reject an invalid result inside that
+    ///         window, because the revalidation below runs first.
+    /// @dev Revalidates the result with `dkgValidator` before the submitter
+    ///      precedence check. If validation returns false or reverts the
+    ///      result is rejected: the DKG returns to `AWAITING_RESULT` and an
+    ///      empty `misbehavedMembers` array is returned, which the caller
+    ///      detects by the state change.
     /// @param result Result to approve. Must match the submitted result stored
     ///        during `submitResult`.
     /// @return misbehavedMembers Identifiers of members who misbehaved during DKG.
@@ -345,6 +364,16 @@ library EcdsaDkg {
             keccak256(abi.encode(result)) == self.submittedResultHash,
             "Result under approval is different than the submitted one"
         );
+
+        // Submission does not validate the result body, so this is the last
+        // point at which the group public key can be checked against the
+        // operators' signatures before it is installed as an active wallet.
+        // `isResultValid` answers a validator revert as an invalid result.
+        (bool isValid, string memory errorMsg) = isResultValid(self, result);
+        if (!isValid) {
+            rejectResultAtApproval(self, errorMsg);
+            return misbehavedMembers;
+        }
 
         // Extract submitter member address. Submitter member index is in
         // range [1, groupSize] so we need to -1 when fetching identifier from members
@@ -448,6 +477,9 @@ library EcdsaDkg {
     }
 
     /// @notice Checks if DKG result is valid for the current DKG.
+    /// @dev A validator revert is answered as an invalid result rather than
+    ///      propagated: callers use this view to decide whether to challenge,
+    ///      and a reverting read cannot be acted upon.
     /// @param result DKG result.
     /// @return True if the result is valid. If the result is invalid it returns
     ///         false and an error message.
@@ -458,7 +490,23 @@ library EcdsaDkg {
     {
         require(self.startBlock > 0, "DKG has not been started");
 
-        return self.dkgValidator.validate(result, self.seed, self.startBlock);
+        // Slither 0.8.3 parses the variables of a `try` returns clause as
+        // uninitialized function locals and reports the validated values as
+        // an ignored return and a use before declaration. These three
+        // findings are tool false positives on a well-formed try/catch.
+        // slither-disable-next-line unused-return
+        try
+            self.dkgValidator.validate(result, self.seed, self.startBlock)
+        returns (
+            // slither-disable-next-line uninitialized-local,variable-scope
+            bool isValid,
+            // slither-disable-next-line uninitialized-local,variable-scope
+            string memory errorMsg
+        ) {
+            return (isValid, errorMsg);
+        } catch {
+            return (false, "validation reverted");
+        }
     }
 
     /// @notice Set setSeedTimeout parameter.
