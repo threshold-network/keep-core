@@ -27,6 +27,7 @@ const validTestData = [
     publicKey: ecdsaData.group1.publicKey,
     expectedWalletID:
       "0xa6602e554b8cf7c23538fd040e4ff3520ec680e5e5ce9a075259e613a3e5aa79",
+    useDkg: true,
   },
   {
     context: "with leading zeros",
@@ -34,6 +35,9 @@ const validTestData = [
       "0x000000440cc47779235ccb76d669590c2cd20c7e431f97e17a1093faf03291c473e661a208a8a565ca1e384059bd2ff7ff6886df081ff1229250099d388c83df",
     expectedWalletID:
       "0xd13b4fe9e69dde1520091494b27aab6c48a0058967551a25c525c843be472589",
+    // Not a point on secp256k1: approval-time DKG result revalidation rejects
+    // it, so this case registers the wallet directly.
+    useDkg: false,
   },
   {
     context: "with trailing zeros",
@@ -41,6 +45,7 @@ const validTestData = [
       "0x9a0544440cc47779235ccb76d669590c2cd20c7e431f97e17a1093faf03291c473e661a208a8a565ca1e384059bd2ff7ff6886df081ff1229250099d00000000",
     expectedWalletID:
       "0x525e77a3052a07734c5736074a94b71dd9149650ef6a4c57dac696a3e287d03c",
+    useDkg: false,
   },
   {
     context: "with zeros in the middle",
@@ -48,6 +53,7 @@ const validTestData = [
       "0x9a0544440cc47779235ccb76d669590c2cd20c7e431f97e17a1093faf0320000000061a208a8a565ca1e384059bd2ff7ff6886df081ff1229250099d388c83df",
     expectedWalletID:
       "0xa8b7226c57b544536f7bf805ef75c7b831488398da117644839f650c5be6cbe0",
+    useDkg: false,
   },
 ]
 
@@ -56,6 +62,16 @@ describe("WalletRegistry - Wallets", async () => {
   let randomBeacon: Mock<IRandomBeacon>
   let walletOwner: Mock<IWalletOwner>
   let thirdParty: SignerWithAddress
+
+  // Fixed relay entry for the `isWalletMember` suite, which asserts on the
+  // operator at position 7 not being the one at position 6. The sortition pool
+  // can select the same operator at two positions for a random seed, so the
+  // assertion was flaky.
+  const fixedWalletSeed = ethers.BigNumber.from(
+    ethers.utils.keccak256(
+      ethers.utils.toUtf8Bytes("WalletRegistry.isWalletMember wallet seed")
+    )
+  )
 
   before("load test fixture", async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
@@ -68,16 +84,32 @@ describe("WalletRegistry - Wallets", async () => {
       context("with valid public key", async () => {
         validTestData.forEach((test) => {
           let walletID: string
-          let dkgResult: DkgResult
+          let membersIdsHash: string
 
           before("create a wallet", async () => {
             await createSnapshot()
-            ;({ walletID, dkgResult } = await createNewWallet(
-              walletRegistry,
-              walletOwner.wallet,
-              randomBeacon,
-              test.publicKey
-            ))
+
+            if (test.useDkg) {
+              let dkgResult: DkgResult
+              ;({ walletID, dkgResult } = await createNewWallet(
+                walletRegistry,
+                walletOwner.wallet,
+                randomBeacon,
+                test.publicKey
+              ))
+              membersIdsHash = hashUint32Array(dkgResult.members)
+            } else {
+              // A key that is not on the curve cannot reach the registry
+              // through the DKG any more, so register it directly to keep
+              // covering wallet ID derivation and the stored fields for keys
+              // with zero bytes.
+              membersIdsHash = hashUint32Array([1, 2, 3])
+              walletID = ethers.utils.keccak256(test.publicKey)
+              await walletRegistry.forceAddWallet(
+                test.publicKey,
+                membersIdsHash
+              )
+            }
           })
 
           after(async () => {
@@ -90,7 +122,7 @@ describe("WalletRegistry - Wallets", async () => {
             expect(
               wallet.membersIdsHash,
               "unexpected members ids hash"
-            ).to.be.equal(hashUint32Array(dkgResult.members))
+            ).to.be.equal(membersIdsHash)
 
             expect(wallet.publicKeyX, "unexpected public key X").to.be.equal(
               ethers.utils.hexDataSlice(test.publicKey, 0, 32)
@@ -261,12 +293,23 @@ describe("WalletRegistry - Wallets", async () => {
 
         before("create a wallet", async () => {
           await createSnapshot()
-          ;({ walletID } = await createNewWallet(
-            walletRegistry,
-            walletOwner.wallet,
-            randomBeacon,
-            walletPublicKey
-          ))
+
+          if (test.useDkg) {
+            // eslint-disable-next-line @typescript-eslint/no-extra-semi
+            ;({ walletID } = await createNewWallet(
+              walletRegistry,
+              walletOwner.wallet,
+              randomBeacon,
+              walletPublicKey
+            ))
+          } else {
+            // Off-curve key: see the note on `validTestData`.
+            walletID = ethers.utils.keccak256(walletPublicKey)
+            await walletRegistry.forceAddWallet(
+              walletPublicKey,
+              hashUint32Array([1, 2, 3])
+            )
+          }
         })
 
         after(async () => {
@@ -394,7 +437,9 @@ describe("WalletRegistry - Wallets", async () => {
       ;({ walletID, members } = await createNewWallet(
         walletRegistry,
         walletOwner.wallet,
-        randomBeacon
+        randomBeacon,
+        ecdsaData.group1.publicKey,
+        fixedWalletSeed
       ))
 
       walletMembersIDs = members.map((member) => member.id)

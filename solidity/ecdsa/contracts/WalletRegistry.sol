@@ -34,6 +34,7 @@ import "@threshold-network/solidity-contracts/contracts/staking/IApplication.sol
 import "@threshold-network/solidity-contracts/contracts/staking/IStaking.sol";
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/utils/StorageSlot.sol";
 
 contract WalletRegistry is
     IWalletRegistry,
@@ -55,9 +56,9 @@ contract WalletRegistry is
     /// @notice Slashing amount for submitting a malicious DKG result. Every
     ///         DKG result submitted can be challenged for the time of
     ///         `dkg.resultChallengePeriodLength`. If the DKG result submitted
-    ///         is challenged and proven to be malicious, the operator who
-    ///         submitted the malicious result is slashed for
-    ///         `_maliciousDkgResultSlashingAmount`.
+    ///         is challenged and proven to be malicious, this amount is
+    ///         requested from the staking contract for the submitting
+    ///         operator, which on mainnet today applies no penalty.
     uint96 internal _maliciousDkgResultSlashingAmount;
 
     /// @notice Percentage of the staking contract malicious behavior
@@ -269,10 +270,16 @@ contract WalletRegistry is
     /// @notice Raised when caller is not the authorized random beacon contract.
     error CallerNotRandomBeacon();
 
+    /// @notice Raised when caller is not the proxy's own admin (ProxyAdmin).
+    error CallerNotProxyAdmin();
+
     // Validation Errors
 
     /// @notice Raised when allowlist address provided is zero address.
     error AllowlistAddressZero();
+
+    /// @notice Raised when DKG validator address provided is zero address.
+    error DkgValidatorAddressZero();
 
     /// @notice Raised when querying an operator that has not been registered.
     error UnknownOperator();
@@ -447,6 +454,61 @@ contract WalletRegistry is
     function initializeV2(address _allowlist) external reinitializer(2) {
         if (_allowlist == address(0)) revert AllowlistAddressZero();
         allowlist = Allowlist(_allowlist);
+    }
+
+    /// @notice EIP-1967 storage slot holding the proxy's admin address (the
+    ///         ProxyAdmin contract), per https://eips.ethereum.org/EIPS/eip-1967:
+    ///         `bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1)`.
+    bytes32 private constant _ADMIN_SLOT =
+        0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+    /// @notice Binds the DKG validator used by approval-time revalidation, for
+    ///         WalletRegistry proxies upgraded from an earlier implementation.
+    ///         `EcdsaDkg.Data.dkgValidator` is written only by `EcdsaDkg.init`
+    ///         at deployment and has no other setter, so an upgrade needs this
+    ///         entry point to move the pointer.
+    /// @dev Adds no storage: `dkgValidator` is an existing `EcdsaDkg.Data`
+    ///      field. Uses `reinitializer(3)`: version 1 is `initialize`, version 2
+    ///      is `initializeV2`.
+    ///
+    ///      Restricted to the proxy's own admin, read live from the EIP-1967
+    ///      admin slot, rather than to governance. `TransparentUpgradeableProxy`
+    ///      only reaches implementation code with `msg.sender == admin` from
+    ///      inside `upgradeAndCall`'s bundled delegatecall; a direct call from
+    ///      the admin reverts at the proxy, so this can only ever run from a
+    ///      genuine atomic upgrade.
+    ///
+    ///      Install this implementation with `upgradeAndCall`, not with a bare
+    ///      `upgradeTo`. On an upgraded proxy slot 152 already holds the
+    ///      previous validator, so a bare `upgradeTo` leaves V2.1 approval
+    ///      running against the unhardened validator: `approveResult` then
+    ///      revalidates with it, which can revert on a malformed result or
+    ///      accept one the hardened validator rejects. The approval hardening
+    ///      therefore depends on this initializer having run. After execution,
+    ///      check that `Initialized(3)` was emitted and that slot 152 holds the
+    ///      new validator.
+    ///
+    ///      The DKG must be IDLE: no in-flight attempt may straddle the change
+    ///      of validation rules.
+    /// @param _dkgValidator Address of the hardened DKG validator contract.
+    // The version suffix is the upgrade convention that `upgradeAndCall`
+    // targets; `initializeV21` would read as a different version number.
+    // solhint-disable-next-line func-name-mixedcase
+    function initializeV2_1(DKGValidator _dkgValidator)
+        external
+        reinitializer(3)
+    {
+        if (msg.sender != StorageSlot.getAddressSlot(_ADMIN_SLOT).value) {
+            revert CallerNotProxyAdmin();
+        }
+        if (address(_dkgValidator) == address(0)) {
+            revert DkgValidatorAddressZero();
+        }
+        if (dkg.currentState() != DKG.State.IDLE) {
+            revert CurrentStateNotIdle();
+        }
+
+        dkg.dkgValidator = _dkgValidator;
     }
 
     /// @notice Withdraws application rewards for the given staking provider.
@@ -864,19 +926,36 @@ contract WalletRegistry is
         dkg.submitResult(dkgResult);
     }
 
-    /// @notice Approves DKG result. Can be called when the challenge period for
-    ///         the submitted result is finished. Considers the submitted result
-    ///         as valid, bans misbehaved group members from the sortition pool
-    ///         rewards, and completes the group creation by activating the
-    ///         candidate group. For the first `resultSubmissionTimeout` blocks
-    ///         after the end of the challenge period can be called only by the
-    ///         DKG result submitter. After that time, can be called by anyone.
-    ///         A new wallet based on the DKG result details.
+    /// @notice Approves DKG result once the challenge period has finished:
+    ///         bans misbehaved group members from the sortition pool rewards
+    ///         and activates the candidate group as a new wallet. For the first
+    ///         `submitterPrecedencePeriodLength` blocks after the challenge
+    ///         period only the submitter can approve a valid result; after
+    ///         that, anyone can. Any account can reject an invalid result
+    ///         inside that window, because revalidation runs first.
+    /// @dev The result is revalidated against `dkgValidator` at approval time,
+    ///      before the submitter precedence check. When the validator returns
+    ///      false or reverts, the result is rejected instead of approved: the
+    ///      DKG returns to `AWAITING_RESULT`, no wallet is created, and the
+    ///      rejection reaches the same seize path as a justified challenge,
+    ///      which on mainnet applies no penalty (see below).
     /// @param dkgResult Result to approve. Must match the submitted result
     ///        stored during `submitDkgResult`.
     function approveDkgResult(DKG.Result calldata dkgResult) external {
         uint256 gasStart = gasleft();
         uint32[] memory misbehavedMembers = dkg.approveResult(dkgResult);
+
+        if (dkg.currentState() == DKG.State.AWAITING_RESULT) {
+            // `approveResult` rejected the result, which returns the DKG to
+            // AWAITING_RESULT and leaves `submittedResultHash` cleared. The
+            // submitter index was in range when the result was submitted, so
+            // reading it here cannot panic.
+            _punishMaliciousDkgResultSubmitter(
+                keccak256(abi.encode(dkgResult)),
+                dkgResult.members[dkgResult.submitterMemberIndex - 1]
+            );
+            return;
+        }
 
         (bytes32 walletID, bytes32 publicKeyX, bytes32 publicKeyY) = wallets
             .addWallet(dkgResult.membersHash, dkgResult.groupPubKey);
@@ -959,6 +1038,23 @@ contract WalletRegistry is
             uint32 maliciousDkgResultSubmitterId
         ) = dkg.challengeResult(dkgResult);
 
+        _punishMaliciousDkgResultSubmitter(
+            maliciousDkgResultHash,
+            maliciousDkgResultSubmitterId
+        );
+    }
+
+    /// @notice Applies the consequences of a DKG result proven malicious, either
+    ///         by `challengeDkgResult` or by an approval-time rejection in
+    ///         `approveDkgResult`: attempts to slash the submitter and requires
+    ///         enough gas to be left for that attempt to have been possible.
+    /// @param maliciousDkgResultHash Hash of the malicious DKG result.
+    /// @param maliciousDkgResultSubmitterId Sortition pool identifier of the
+    ///        malicious submitter.
+    function _punishMaliciousDkgResultSubmitter(
+        bytes32 maliciousDkgResultHash,
+        uint32 maliciousDkgResultSubmitterId
+    ) private {
         address maliciousDkgResultSubmitterAddress = sortitionPool
             .getIDOperator(maliciousDkgResultSubmitterId);
 
@@ -967,35 +1063,22 @@ contract WalletRegistry is
             maliciousDkgResultSubmitterAddress
         );
 
-        // NOT MIGRATED: Slashing call remains on TokenStaking for pragmatic
-        // reasons, not functional requirements.
+        // The slash goes to `staking`, the immutable contract the registry was
+        // deployed with (TokenStaking), not to `allowlist`.
         //
-        // Critical Context - TokenStaking.seize() is a STUB (TIP-100):
-        // - Function ONLY emits NotificationReceived event
-        // - NO token operations, NO storage mutations, NO economic penalty
-        // - Both TokenStaking.seize() and Allowlist.seize() provide symbolic
-        //   slashing only (event emission for monitoring)
-        // - Actual enforcement mechanism: DAO governance via requestWeightDecrease()
-        //
-        // Migration Decision Rationale:
-        // - Bytecode cost: 100-200 bytes to route through Allowlist
-        // - Benefit: Zero (both contracts provide identical symbolic behavior)
-        // - Event preservation: TokenStaking event includes amount/rewardMultiplier
-        //   fields for monitoring continuity (though values are symbolic)
-        // - Risk: Zero implementation risk (no code changes = no bugs)
-        //
-        // Historical Note: The presence of staking.seize() may create a false
-        // impression of economic slashing. In reality, economic slashing was
-        // removed in TIP-100 implementation. This call exists for event telemetry
-        // and DAO governance coordination only.
-        //
-        // Stakeholder Decision: Pragmatic choice to save bytecode and avoid
-        // implementation risk for functionally equivalent routing options.
+        // On mainnet today this punishes nothing. The TokenStaking behind the
+        // deployed proxy has no `processSlashing`, its `notifiersTreasury()` is
+        // zero, and the live operators' legacy authorization for this
+        // application is zero after the migration to `Allowlist`, so `seize`
+        // queues no slashing event and pays the notifier no reward. The call
+        // succeeds without an economic effect; the call and the
+        // `DkgMaliciousResultSlashed` event below are monitoring data only.
+        // The configured amount and reward multiplier are recorded, not
+        // enforced: a challenged or rejected submitter keeps its stake and its
+        // authorization, and clearing the result costs only the caller's gas.
 
-        // Attempt to slash malicious submitter. Slashing may fail silently
-        // if the staking contract reverts, but challenge must complete
-        // regardless. Bytecode optimization: empty catch block reduces
-        // contract size by ~800 bytes (see commit 412a8e6d).
+        // Slashing may fail silently if the staking contract reverts, but the
+        // punishment must complete regardless.
         // slither-disable-next-line reentrancy-events
         try
             staking.seize(
@@ -1011,9 +1094,8 @@ contract WalletRegistry is
                 maliciousDkgResultSubmitterAddress
             );
         } catch {
-            // Should never happen but we want to ensure a non-critical path
-            // failure from an external contract does not stop the challenge
-            // to complete.
+            // The staking call is non-critical: its failure must not stop the
+            // cleanup from completing.
             emit DkgMaliciousResultSlashingFailed(
                 maliciousDkgResultHash,
                 _maliciousDkgResultSlashingAmount,
@@ -1023,14 +1105,19 @@ contract WalletRegistry is
 
         // Due to EIP-150, 1/64 of the gas is not forwarded to the call, and
         // will be kept to execute the remaining operations in the function
-        // after the call inside the try-catch.
+        // after the call inside the try-catch. This applies to the validator
+        // call made before this function by both callers: `challengeResult`
+        // and the approval-time revalidation in `approveResult`.
         //
         // To ensure there is no way for the caller to manipulate gas limit in
         // such a way that the call inside try-catch fails with out-of-gas and
         // the rest of the function is executed with the remaining 1/64 of gas,
         // we require an extra gas amount to be left at the end of the call to
-        // `challengeDkgResult`. This check enforces EIP-150 gas protection by
-        // ensuring sufficient gas remains for safe execution.
+        // `challengeDkgResult` and of an approval-time rejection in
+        // `approveDkgResult`. A validator revert counts as a justified
+        // challenge in `challengeResult` and as a rejection in `approveResult`,
+        // so without this check a caller could pick a gas limit that makes a
+        // valid result look invalid.
         if (gasleft() < dkg.parameters.resultChallengeExtraGas) {
             revert NotEnoughExtraGasLeft();
         }
@@ -1470,8 +1557,8 @@ contract WalletRegistry is
     ///         a malicious DKG result. Every DKG result submitted can be
     ///         challenged for the time of `dkg.resultChallengePeriodLength`.
     ///         If the DKG result submitted is challenged and proven to be
-    ///         malicious, the operator who submitted the malicious result is
-    ///         slashed for `_maliciousDkgResultSlashingAmount`.
+    ///         malicious, it is requested for the submitting operator and on
+    ///         mainnet today applies no penalty.
     function slashingParameters()
         external
         view

@@ -4,12 +4,13 @@ import { params } from "../fixtures"
 import ecdsaData from "../data/ecdsa"
 
 import { noMisbehaved, signAndSubmitCorrectDkgResult } from "./dkg"
+import { submitRelayEntry } from "./randomBeacon"
 
 import type { Mock } from "../helpers/mock"
 import type { DkgResult } from "./dkg"
 import type { IRandomBeacon, WalletRegistry } from "../../typechain"
 import type { Operator } from "./operators"
-import type { BytesLike, ContractTransaction, Signer } from "ethers"
+import type { BigNumber, BytesLike, ContractTransaction, Signer } from "ethers"
 
 const { mineBlocks } = helpers.time
 const { keccak256 } = ethers.utils
@@ -19,25 +20,37 @@ export async function createNewWallet(
   walletRegistry: WalletRegistry,
   walletOwner: Signer,
   randomBeacon: Mock<IRandomBeacon>,
-  publicKey: BytesLike = ecdsaData.group1.publicKey
+  publicKey: BytesLike = ecdsaData.group1.publicKey,
+  // Optional fixed relay entry. Callers that assert on positions within the
+  // selected group pass one, because a random seed can select the same
+  // operator at two positions.
+  relayEntry?: BigNumber
 ): Promise<{
   members: Operator[]
   dkgResult: DkgResult
   walletID: string
   tx: ContractTransaction
 }> {
-  const requestNewWalletTx = await walletRegistry
-    .connect(walletOwner)
-    .requestNewWallet()
+  await walletRegistry.connect(walletOwner).requestNewWallet()
 
-  const relayEntry = ethers.utils.randomBytes(32)
+  let startBlock: number
+  let dkgSeed: BigNumber
 
-  const dkgSeed = ethers.BigNumber.from(keccak256(relayEntry))
-
-  // eslint-disable-next-line no-underscore-dangle
-  await walletRegistry
-    .connect(randomBeacon.wallet)
-    .__beaconCallback(relayEntry, 0)
+  if (relayEntry) {
+    // eslint-disable-next-line no-underscore-dangle
+    const tx = await walletRegistry
+      .connect(randomBeacon.wallet)
+      .__beaconCallback(relayEntry, 0)
+    startBlock = tx.blockNumber
+    dkgSeed = relayEntry
+  } else {
+    // The seed the DKG is validated against is the relay entry itself, as
+    // passed to `__beaconCallback`; `submitRelayEntry` returns exactly that
+    // value.
+    const entry = await submitRelayEntry(walletRegistry, randomBeacon)
+    startBlock = entry.startBlock
+    dkgSeed = entry.dkgSeed
+  }
 
   const {
     dkgResult,
@@ -47,7 +60,7 @@ export async function createNewWallet(
     walletRegistry,
     publicKey,
     dkgSeed,
-    requestNewWalletTx.blockNumber,
+    startBlock,
     noMisbehaved
   )
 

@@ -55,6 +55,18 @@ describe("WalletRegistry - Inactivity", () => {
   const heartbeatFailed = true
   const noHeartbeatFailure = false
 
+  // Fixed relay entry for the `notifyOperatorInactivity` gas assertions. A
+  // random DKG seed selects a different group, and the gas the call measures
+  // moved by up to ~5 percent between otherwise identical runs, outside the
+  // assertion tolerance. A fixed seed keeps the gas assertions deterministic.
+  const fixedRelayEntry = ethers.BigNumber.from(
+    ethers.utils.keccak256(
+      ethers.utils.toUtf8Bytes(
+        "WalletRegistry.notifyOperatorInactivity gas seed"
+      )
+    )
+  )
+
   before(async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, sortitionPool, randomBeacon, walletOwner, thirdParty } =
@@ -63,7 +75,8 @@ describe("WalletRegistry - Inactivity", () => {
       walletRegistry,
       walletOwner.wallet,
       randomBeacon,
-      walletPublicKey
+      walletPublicKey,
+      fixedRelayEntry
     ))
 
     membersIDs = members.map((member) => member.id)
